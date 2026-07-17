@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import {
   createTelemetry,
@@ -41,6 +42,7 @@ export class DesktopAnalytics {
   private readonly createClient: typeof createTelemetry;
 
   constructor(private readonly options: AnalyticsOptions) {
+    mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     this.packaged = options.packaged ?? app.isPackaged;
     this.createClient = options.createClient ?? createTelemetry;
     this.client = this.createClient({
