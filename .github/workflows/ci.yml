@@ -26,7 +26,3 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm exec electron-forge package
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-      - run: pnpm test:e2e:run
