@@ -40,8 +40,10 @@ export class FluxmailRuntime {
   private fluxmail!: typeof import("fluxmail");
   private initialized = false;
   private cacheGeneration = 0;
+  private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
+  private readonly committedViewRefreshes = new Map<string, number>();
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -619,9 +621,12 @@ export class FluxmailRuntime {
     const accounts = this.accountsFor(input);
     const query = toEmailQuery(input);
     const currentViewKey = viewKey(input);
+    const refreshGeneration = mode === "refresh" ? (this.viewRefreshGeneration += 1) : undefined;
     const pageResults = await Promise.allSettled(
       accounts.map(async (account) => {
         const cacheGeneration = this.cacheGeneration;
+        const currentAccountViewKey = accountViewKey(account.id, currentViewKey);
+        const committedRefreshGeneration = this.committedViewRefreshes.get(currentAccountViewKey);
         const pageState = this.options.cache.getPageState(account.id, currentViewKey);
         if (mode === "loadMore" && pageState.initialized && !pageState.nextToken) return undefined;
         const token = mode === "loadMore" ? pageState.nextToken : undefined;
@@ -630,6 +635,12 @@ export class FluxmailRuntime {
           ...(token ? { pageToken: token } : {}),
         });
         if (cacheGeneration !== this.cacheGeneration) return undefined;
+        if (
+          refreshGeneration !== undefined
+            ? refreshGeneration < (this.committedViewRefreshes.get(currentAccountViewKey) ?? 0)
+            : committedRefreshGeneration !== this.committedViewRefreshes.get(currentAccountViewKey)
+        )
+          return undefined;
         this.options.cache.putMessages(account, page.items);
         this.options.cache.recordResultPage(
           account.id,
@@ -654,6 +665,8 @@ export class FluxmailRuntime {
           );
           if (newMessages.length) this.options.onNewMessages(newMessages, account);
         }
+        if (refreshGeneration !== undefined)
+          this.committedViewRefreshes.set(currentAccountViewKey, refreshGeneration);
         return page.items.length;
       }),
     );
@@ -823,6 +836,10 @@ function reconciledFolderRole(
 
 function viewKey(input: ThreadListInput): string {
   return `${input.view}:${input.label ?? ""}:${input.query ?? ""}`;
+}
+
+function accountViewKey(accountId: string, currentViewKey: string): string {
+  return JSON.stringify([accountId, currentViewKey]);
 }
 
 function backgroundRefreshKey(input: ThreadListInput): string {

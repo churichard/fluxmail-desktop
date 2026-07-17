@@ -702,7 +702,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await draftsNav.click();
     const launchDraft = page.locator(".thread-row").filter({ hasText: "Launch notes" });
     await expect(launchDraft).toBeVisible();
-    await launchDraft.click();
+    await launchDraft.locator(".thread-open").click();
     const resumedDraft = page.getByRole("dialog", { name: "New message" });
     await expect(resumedDraft.locator("header strong")).toHaveText("Launch notes");
     await expect(resumedDraft.locator(".recipient-summary")).toContainText("sam@example.test");

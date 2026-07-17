@@ -155,6 +155,41 @@ describe("FluxmailRuntime thread loading", () => {
     expect(listMessages).toHaveBeenCalledOnce();
   });
 
+  it("uses an earlier successful page when a newer refresh fails", async () => {
+    const sent = inboxMessage({
+      id: "sent-message",
+      threadId: "sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    let finishInitialLoad!: (page: { items: Message[] }) => void;
+    const pendingInitialLoad = new Promise<{ items: Message[] }>((resolve) => {
+      finishInitialLoad = resolve;
+    });
+    const listMessages = vi
+      .fn()
+      .mockReturnValueOnce(pendingInitialLoad)
+      .mockRejectedValueOnce(new Error("Provider unavailable"));
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged,
+    });
+
+    const initialLoad = runtime.listThreads({ view: "sent" });
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledOnce());
+    await expect(runtime.listThreads({ view: "sent", refresh: true })).rejects.toThrow(
+      "Provider unavailable",
+    );
+
+    finishInitialLoad({ items: [sent] });
+    const result = await initialLoad;
+
+    expect(result.items.map((item) => item.id)).toEqual(["sent-thread"]);
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
   it("returns an initialized mailbox from cache while refreshing it in the background", async () => {
     const cachedSent = inboxMessage({
       id: "cached-sent-message",
@@ -195,6 +230,51 @@ describe("FluxmailRuntime thread loading", () => {
     await vi.waitFor(() => expect(onCacheChanged).toHaveBeenCalledTimes(2));
     const refreshedResult = await runtime.listThreads({ view: "sent", pageSize: 100 });
     expect(refreshedResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
+  });
+
+  it("keeps a newer refresh when an older background request finishes last", async () => {
+    const cachedSent = inboxMessage({
+      id: "cached-sent-message",
+      threadId: "cached-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    const staleSent = inboxMessage({
+      id: "stale-sent-message",
+      threadId: "stale-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    const freshSent = inboxMessage({
+      id: "fresh-sent-message",
+      threadId: "fresh-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    let finishBackgroundRefresh!: (page: { items: Message[] }) => void;
+    const pendingBackgroundRefresh = new Promise<{ items: Message[] }>((resolve) => {
+      finishBackgroundRefresh = resolve;
+    });
+    const listMessages = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [cachedSent] })
+      .mockReturnValueOnce(pendingBackgroundRefresh)
+      .mockResolvedValueOnce({ items: [freshSent] });
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged,
+    });
+
+    await runtime.listThreads({ view: "sent" });
+    await runtime.listThreads({ view: "sent", backgroundRefresh: true });
+    const refreshedResult = await runtime.listThreads({ view: "sent", refresh: true });
+    expect(refreshedResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
+
+    finishBackgroundRefresh({ items: [staleSent] });
+    const settledResult = await runtime.listThreads({ view: "sent", cursor: "0" });
+
+    expect(settledResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
+    expect(listMessages).toHaveBeenCalledTimes(3);
+    expect(onCacheChanged).toHaveBeenCalledTimes(2);
   });
 
   it("does not reuse stale later pages after a non-inbox view refresh", async () => {

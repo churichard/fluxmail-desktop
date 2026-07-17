@@ -199,6 +199,42 @@ describe("App thread navigation", () => {
     expect(screen.getByRole("button", { name: "Start quick reply" })).toBeTruthy();
   });
 
+  it("does not let a completed mutation reload a mailbox left behind", async () => {
+    const inbox = thread("inbox-thread", "Inbox conversation", false);
+    const starred = {
+      ...thread("starred-thread", "Starred conversation", false),
+      starred: true,
+    };
+    let finishModify!: () => void;
+    const pendingModify = new Promise<void>((resolve) => {
+      finishModify = resolve;
+    });
+    installApi(
+      [inbox],
+      vi.fn(async ({ threadId }) => mailThread(threadId === inbox.id ? inbox : starred)),
+    );
+    vi.mocked(window.fluxmail.mail.listThreads).mockImplementation(async (input) => {
+      const items = input.view === "starred" ? [starred] : [inbox];
+      return { items, totalCount: items.length, syncing: false };
+    });
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingModify);
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: inbox.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: inbox.subject }));
+    fireEvent.keyDown(window, { key: "e" });
+    await screen.findByText("0 conversations");
+    fireEvent.click(screen.getByRole("button", { name: "Starred" }));
+    await screen.findByRole("button", { name: starred.subject });
+
+    await act(async () => finishModify());
+
+    await waitFor(() => expect(window.fluxmail.mail.modify).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: starred.subject })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: inbox.subject })).toBeNull();
+  });
+
   it("does not run mailbox shortcuts from compose controls", async () => {
     const current = thread("thread-1", "Current conversation", false);
     installApi(
