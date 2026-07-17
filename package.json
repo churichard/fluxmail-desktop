@@ -16,7 +16,6 @@
     "test": "ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run",
     "test:watch": "ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs",
     "test:e2e": "pnpm build:mcp && electron-forge package && playwright test",
-    "test:e2e:run": "playwright test",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
