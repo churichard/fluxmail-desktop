@@ -2,10 +2,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "@fluxmail/core";
+import type { StoreCompatibility } from "fluxmail";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAnalytics } from "../src/main/analytics";
 import { MailCache } from "../src/main/cache";
-import { FluxmailRuntime, shouldUseBundledGoogleConfig } from "../src/main/fluxmail-runtime";
+import {
+  FluxmailRuntime,
+  prepareFluxmailConfiguration,
+  shouldUseBundledGoogleConfig,
+} from "../src/main/fluxmail-runtime";
 import type { AccountInfo } from "../src/shared/contracts";
 
 const account = {
@@ -859,6 +864,48 @@ describe("FluxmailRuntime draft mutations", () => {
 });
 
 describe("FluxmailRuntime OAuth configuration", () => {
+  it("rejects an incompatible store before writing bundled configuration", () => {
+    const compatibility: StoreCompatibility = {
+      engineVersion: "0.3.0",
+      dataDir: "/tmp/fluxmail",
+      dbPath: "/tmp/fluxmail/fluxmail.db",
+      storeFormat: 2,
+      minimumSupportedFormat: 1,
+      maximumSupportedFormat: 1,
+      compatible: false,
+      requiresMigration: false,
+    };
+    const readStoredConfig = vi.fn(() => ({}));
+    const setStoredConfig = vi.fn();
+    class TestIncompatibleStoreError extends Error {
+      readonly code = "incompatible_store";
+
+      constructor(readonly compatibility: StoreCompatibility) {
+        super("Incompatible store");
+      }
+    }
+    const fluxmail = {
+      resolveStoreLocation: vi.fn(() => ({
+        dataDir: compatibility.dataDir,
+        dbPath: compatibility.dbPath,
+      })),
+      inspectStoreCompatibility: vi.fn(() => compatibility),
+      IncompatibleStoreError: TestIncompatibleStoreError,
+      readStoredConfig,
+      setStoredConfig,
+    };
+
+    expect(() =>
+      prepareFluxmailConfiguration(
+        fluxmail as Parameters<typeof prepareFluxmailConfiguration>[0],
+        "bundled-id",
+        "bundled-secret",
+      ),
+    ).toThrow(TestIncompatibleStoreError);
+    expect(readStoredConfig).not.toHaveBeenCalled();
+    expect(setStoredConfig).not.toHaveBeenCalled();
+  });
+
   it("uses the bundled pair when the existing configuration is incomplete", () => {
     expect(
       shouldUseBundledGoogleConfig("custom-id", undefined, "bundled-id", "bundled-secret"),
