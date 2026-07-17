@@ -103,6 +103,28 @@ afterEach(() => {
 });
 
 describe("App thread navigation", () => {
+  it("requests a background refresh when switching away from Inbox", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+
+    fireEvent.click(screen.getByRole("button", { name: "Starred" }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          view: "starred",
+          backgroundRefresh: true,
+          refresh: undefined,
+        }),
+      ),
+    );
+  });
+
   it("ignores a draft that finishes loading after another thread is selected", async () => {
     const draft = thread("draft-thread", "Draft in progress", true);
     const regular = thread("regular-thread", "Current conversation", false);
