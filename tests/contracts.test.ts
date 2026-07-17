@@ -85,6 +85,13 @@ describe("desktop contracts", () => {
     );
   });
 
+  it("accepts cache-first mailbox refresh requests", () => {
+    expect(threadListInputSchema.parse({ view: "sent", backgroundRefresh: true })).toMatchObject({
+      view: "sent",
+      backgroundRefresh: true,
+    });
+  });
+
   it("accepts only allowlisted renderer analytics fields", () => {
     const parsed = featureEventSchema.parse({
       feature: "search",
