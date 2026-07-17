@@ -673,7 +673,8 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".quick-reply .quoted-reply-content")).toBeVisible();
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
-    await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
+    await messageFrame.locator("#email-root").click();
+    await page.keyboard.press("e");
     await expect(page.locator(".thread-row.active")).toHaveCount(0, {
       timeout: 200,
     });

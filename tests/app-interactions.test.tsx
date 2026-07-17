@@ -196,6 +196,27 @@ describe("App thread navigation", () => {
     expect(window.fluxmail.mail.modify).not.toHaveBeenCalled();
   });
 
+  it("runs mailbox shortcuts forwarded from the email iframe", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+    fireEvent.keyDown(window, { key: "e" });
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.modify).toHaveBeenCalledWith({
+        targets: [{ accountId: current.accountId, threadId: current.id }],
+        action: { type: "archive" },
+      }),
+    );
+  });
+
   it("does not run mailbox shortcuts from Settings controls", async () => {
     const current = thread("thread-1", "Current conversation", false);
     installApi(
