@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Image as ImageIcon } from "lucide-react";
 import type { MailMessage } from "../../shared/contracts";
+import { parseExternalUrl } from "../../shared/external-url";
 
 export function EmailHtml({
   message,
@@ -197,7 +198,7 @@ export function buildEmailDocument(
   }
   for (const link of document.querySelectorAll("a")) {
     const href = link.getAttribute("href") || "";
-    if (!/^(https:|mailto:)/i.test(href)) link.removeAttribute("href");
+    if (!parseExternalUrl(href)) link.removeAttribute("href");
   }
   const imageSources = loadImages ? "data: blob: https:" : "data: blob:";
   const csp = `default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; img-src ${imageSources}; font-src data:; connect-src 'none'`;
