@@ -52,6 +52,7 @@ jobs:
       - run: pnpm build:mcp
       - name: Make signed DMG
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID: ${{ secrets.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID }}
           FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET: ${{ secrets.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}

@@ -23,6 +23,28 @@ const packagedPaths = [
 ];
 const runFile = promisify(execFile);
 
+export function shouldIgnorePackagedPath(file: string, appRoot = process.cwd()): boolean {
+  if (!file) return false;
+
+  const normalizedFile = file.replaceAll("\\", "/");
+  const normalizedRoot = path.resolve(appRoot).replaceAll("\\", "/");
+  if (normalizedFile === normalizedRoot) return false;
+
+  const rootPrefix = `${normalizedRoot}/`;
+  const packagedPath = normalizedFile.startsWith(rootPrefix)
+    ? `/${normalizedFile.slice(rootPrefix.length)}`
+    : normalizedFile.startsWith("/")
+      ? normalizedFile
+      : `/${normalizedFile}`;
+
+  return !packagedPaths.some(
+    (allowed) =>
+      packagedPath === allowed ||
+      packagedPath.startsWith(`${allowed}/`) ||
+      allowed.startsWith(`${packagedPath}/`),
+  );
+}
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: { unpack: "**/*.node" },
@@ -37,13 +59,7 @@ const config: ForgeConfig = {
     },
     extraResource: ["vendor/fluxmail-mcp/LICENSE.md"],
     prune: false,
-    ignore(file) {
-      if (!file) return false;
-      return !packagedPaths.some(
-        (allowed) =>
-          file === allowed || file.startsWith(`${allowed}/`) || allowed.startsWith(`${file}/`),
-      );
-    },
+    ignore: shouldIgnorePackagedPath,
     osxSign: shouldSign
       ? {
           identity: process.env.APPLE_SIGNING_IDENTITY,
