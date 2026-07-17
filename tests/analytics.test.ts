@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,6 +106,57 @@ describe("DesktopAnalytics", () => {
     });
     await analytics.shutdown();
     expect(environmentForcesOptOut({ FLUXMAIL_TELEMETRY: "0" })).toBe(true);
+  });
+
+  it("saves the preference before the old client finishes shutting down", async () => {
+    let finishShutdown: () => void = () => undefined;
+    const firstClient: Telemetry = {
+      capture: vi.fn(),
+      shutdown: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishShutdown = resolve;
+          }),
+      ),
+    };
+    const secondClient: Telemetry = {
+      capture: vi.fn(),
+      shutdown: vi.fn(async () => undefined),
+    };
+    const createClient = vi.fn().mockReturnValueOnce(firstClient).mockReturnValue(secondClient);
+    const analytics = new DesktopAnalytics({
+      dataDir: temporaryDirectory(),
+      packaged: true,
+      testClient: true,
+      createClient: createClient as typeof createTelemetry,
+    });
+
+    const update = analytics.setEnabled(false);
+
+    expect(analytics.status().enabled).toBe(false);
+    expect(createClient).toHaveBeenCalledTimes(2);
+    finishShutdown();
+    await expect(update).resolves.toMatchObject({ enabled: false });
+    await analytics.shutdown();
+  });
+
+  it("creates its data directory before saving a preference", async () => {
+    const dataDir = path.join(temporaryDirectory(), "telemetry");
+    const client: Telemetry = {
+      capture: vi.fn(),
+      shutdown: vi.fn(async () => undefined),
+    };
+    const analytics = new DesktopAnalytics({
+      dataDir,
+      packaged: true,
+      testClient: true,
+      createClient: (() => client) as typeof createTelemetry,
+    });
+
+    expect(existsSync(dataDir)).toBe(true);
+    await expect(analytics.setEnabled(false)).resolves.toMatchObject({ enabled: false });
+    expect(readFileSync(path.join(dataDir, "telemetry.disabled"), "utf8")).toBe("disabled\n");
+    await analytics.shutdown();
   });
 
   it("updates the saved preference in development without sending events", async () => {

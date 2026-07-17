@@ -41,6 +41,7 @@ export class FluxmailRuntime {
   private initialized = false;
   private cacheGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
+  private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -208,6 +209,8 @@ export class FluxmailRuntime {
     this.reconcileCachedAccounts(this.accounts());
     const currentViewKey = viewKey(input);
     return this.measure(forceProviderSearch ? "search" : "list_threads", async () => {
+      const refreshKey = backgroundRefreshKey(input);
+      if (input.cursor) await this.backgroundViewRefreshes.get(refreshKey);
       const offset = parseCursor(input.cursor);
       const accounts = this.accountsFor(input);
       const listInput = {
@@ -232,6 +235,8 @@ export class FluxmailRuntime {
         } catch (error) {
           if (!cacheHit) throw error;
         }
+      } else if (input.backgroundRefresh) {
+        this.refreshViewInBackground(input, refreshKey);
       }
 
       let totalCount = this.options.cache.countThreads(listInput);
@@ -679,6 +684,18 @@ export class FluxmailRuntime {
     );
   }
 
+  private refreshViewInBackground(input: ThreadListInput, refreshKey: string): void {
+    if (this.backgroundViewRefreshes.has(refreshKey)) return;
+    const refresh = this.syncView(input, "startup", "refresh")
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.backgroundViewRefreshes.get(refreshKey) === refresh)
+          this.backgroundViewRefreshes.delete(refreshKey);
+      });
+    this.backgroundViewRefreshes.set(refreshKey, refresh);
+  }
+
   private includeThreadInViews(accountId: string, threadId: string, views: MailboxView[]): void {
     for (const view of views)
       this.options.cache.recordResultPage(accountId, viewKey({ view }), [threadId], false);
@@ -806,6 +823,10 @@ function reconciledFolderRole(
 
 function viewKey(input: ThreadListInput): string {
   return `${input.view}:${input.label ?? ""}:${input.query ?? ""}`;
+}
+
+function backgroundRefreshKey(input: ThreadListInput): string {
+  return JSON.stringify([viewKey(input), [...(input.accountIds ?? [])].sort()]);
 }
 
 export function shouldUseBundledGoogleConfig(

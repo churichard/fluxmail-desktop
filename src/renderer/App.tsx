@@ -122,6 +122,7 @@ export function App() {
       forceSearch?: boolean;
       quiet?: boolean;
       refresh?: boolean;
+      backgroundRefresh?: boolean;
       preservePages?: boolean;
       preserveSelection?: boolean;
     }) => {
@@ -137,6 +138,7 @@ export function App() {
           label,
           query: submittedSearch || undefined,
           refresh: options?.refresh,
+          backgroundRefresh: options?.backgroundRefresh,
           cursor: append ? cursor : undefined,
           pageSize: DEFAULT_PAGE_SIZE,
         };
@@ -211,7 +213,7 @@ export function App() {
     setSelectedThread(undefined);
     void loadThreads({
       forceSearch: Boolean(submittedSearch),
-      refresh: !submittedSearch && view !== "inbox",
+      backgroundRefresh: !submittedSearch && view !== "inbox",
     });
   }, [accountId, bootstrap?.accounts.length, label, submittedSearch, view]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -50,6 +50,7 @@ import {
   type SyncState,
   type ThreadListInput,
 } from "../shared/contracts";
+import { parseExternalUrl } from "../shared/external-url";
 import { DesktopAnalytics } from "./analytics";
 import { MailCache } from "./cache";
 import { FluxmailRuntime } from "./fluxmail-runtime";
@@ -705,9 +706,8 @@ async function saveAttachment(input: {
 }
 
 async function openTrustedExternal(rawUrl: string): Promise<void> {
-  const url = new URL(rawUrl);
-  if (!["https:", "mailto:"].includes(url.protocol))
-    throw new Error("Fluxmail only opens HTTPS and email links.");
+  const url = parseExternalUrl(rawUrl);
+  if (!url) throw new Error("Fluxmail only opens web and email links.");
   await shell.openExternal(url.toString());
 }
 

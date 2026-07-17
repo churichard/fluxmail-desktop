@@ -108,6 +108,7 @@ export const threadListInputSchema = z.object({
   label: z.string().optional(),
   query: z.string().max(500).optional(),
   refresh: z.boolean().optional(),
+  backgroundRefresh: z.boolean().optional(),
   cursor: z.string().optional(),
   pageSize: z.number().int().min(1).max(200).default(100),
 });

@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import {
   createTelemetry,
@@ -40,6 +41,7 @@ export class DesktopAnalytics {
   private readonly createClient: typeof createTelemetry;
 
   constructor(private readonly options: AnalyticsOptions) {
+    mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     this.packaged = options.packaged ?? app.isPackaged;
     this.createClient = options.createClient ?? createTelemetry;
     this.client = this.createClient({
@@ -60,12 +62,13 @@ export class DesktopAnalytics {
 
   async setEnabled(enabled: boolean): Promise<TelemetryStatus> {
     if (environmentForcesOptOut(process.env)) return this.status();
-    await this.client.shutdown().catch(() => undefined);
+    const previousClient = this.client;
     setTelemetryEnabled(this.options.dataDir, enabled);
     this.client = this.createClient({
       dataDir: this.options.dataDir,
       env: this.effectiveEnvironment(),
     });
+    await previousClient.shutdown().catch(() => undefined);
     return this.status();
   }
 

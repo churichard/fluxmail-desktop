@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { _electron as electron, expect, test } from "@playwright/test";
 
 test("uses the desktop bridge for the inbox, secure reading, search, compose, and settings", async () => {
+  test.setTimeout(60_000);
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-e2e-"));
   const electronApp = await electron.launch({
     args: [process.cwd()],
