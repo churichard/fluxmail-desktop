@@ -43,7 +43,7 @@ export class FluxmailRuntime {
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
-  private readonly latestViewRefreshes = new Map<string, number>();
+  private readonly committedViewRefreshes = new Map<string, number>();
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -622,15 +622,11 @@ export class FluxmailRuntime {
     const query = toEmailQuery(input);
     const currentViewKey = viewKey(input);
     const refreshGeneration = mode === "refresh" ? (this.viewRefreshGeneration += 1) : undefined;
-    if (refreshGeneration !== undefined)
-      for (const account of accounts)
-        this.latestViewRefreshes.set(accountViewKey(account.id, currentViewKey), refreshGeneration);
     const pageResults = await Promise.allSettled(
       accounts.map(async (account) => {
         const cacheGeneration = this.cacheGeneration;
-        const accountRefreshGeneration = this.latestViewRefreshes.get(
-          accountViewKey(account.id, currentViewKey),
-        );
+        const currentAccountViewKey = accountViewKey(account.id, currentViewKey);
+        const committedRefreshGeneration = this.committedViewRefreshes.get(currentAccountViewKey);
         const pageState = this.options.cache.getPageState(account.id, currentViewKey);
         if (mode === "loadMore" && pageState.initialized && !pageState.nextToken) return undefined;
         const token = mode === "loadMore" ? pageState.nextToken : undefined;
@@ -640,8 +636,9 @@ export class FluxmailRuntime {
         });
         if (cacheGeneration !== this.cacheGeneration) return undefined;
         if (
-          accountRefreshGeneration !==
-          this.latestViewRefreshes.get(accountViewKey(account.id, currentViewKey))
+          refreshGeneration !== undefined
+            ? refreshGeneration < (this.committedViewRefreshes.get(currentAccountViewKey) ?? 0)
+            : committedRefreshGeneration !== this.committedViewRefreshes.get(currentAccountViewKey)
         )
           return undefined;
         this.options.cache.putMessages(account, page.items);
@@ -668,6 +665,8 @@ export class FluxmailRuntime {
           );
           if (newMessages.length) this.options.onNewMessages(newMessages, account);
         }
+        if (refreshGeneration !== undefined)
+          this.committedViewRefreshes.set(currentAccountViewKey, refreshGeneration);
         return page.items.length;
       }),
     );

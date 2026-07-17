@@ -155,6 +155,41 @@ describe("FluxmailRuntime thread loading", () => {
     expect(listMessages).toHaveBeenCalledOnce();
   });
 
+  it("uses an earlier successful page when a newer refresh fails", async () => {
+    const sent = inboxMessage({
+      id: "sent-message",
+      threadId: "sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    let finishInitialLoad!: (page: { items: Message[] }) => void;
+    const pendingInitialLoad = new Promise<{ items: Message[] }>((resolve) => {
+      finishInitialLoad = resolve;
+    });
+    const listMessages = vi
+      .fn()
+      .mockReturnValueOnce(pendingInitialLoad)
+      .mockRejectedValueOnce(new Error("Provider unavailable"));
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged,
+    });
+
+    const initialLoad = runtime.listThreads({ view: "sent" });
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledOnce());
+    await expect(runtime.listThreads({ view: "sent", refresh: true })).rejects.toThrow(
+      "Provider unavailable",
+    );
+
+    finishInitialLoad({ items: [sent] });
+    const result = await initialLoad;
+
+    expect(result.items.map((item) => item.id)).toEqual(["sent-thread"]);
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
   it("returns an initialized mailbox from cache while refreshing it in the background", async () => {
     const cachedSent = inboxMessage({
       id: "cached-sent-message",
