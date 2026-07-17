@@ -496,8 +496,10 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (composeSeed || settingsOpen) return;
-      const target = event.target as HTMLElement | null;
-      const editing = Boolean(target?.closest('input, textarea, [contenteditable="true"]'));
+      const target = event.target;
+      const editing =
+        target instanceof Element &&
+        Boolean(target.closest('input, textarea, [contenteditable="true"]'));
       if (event.metaKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchRef.current?.focus();
