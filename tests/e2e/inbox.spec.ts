@@ -789,6 +789,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Accounts",
       "Appearance",
       "Privacy",
+      "About",
     ]);
     const dockBadgeCheckbox = settings.getByRole("checkbox", {
       name: "Dock badge",
