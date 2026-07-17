@@ -3,6 +3,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -60,6 +61,11 @@ export function App() {
   const openThreadRequest = useRef(0);
   const quickReplyDirty = useRef(false);
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
+  const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
+  const mailboxContextRef = useRef(mailboxContext);
+  useLayoutEffect(() => {
+    mailboxContextRef.current = mailboxContext;
+  }, [mailboxContext]);
 
   const accountIds = useMemo(() => (accountId ? [accountId] : undefined), [accountId]);
   const handleQuickReplyDirtyChange = useCallback((dirty: boolean) => {
@@ -126,6 +132,7 @@ export function App() {
       preservePages?: boolean;
       preserveSelection?: boolean;
     }) => {
+      if (mailboxContext !== mailboxContextRef.current) return;
       const append = options?.append ?? false;
       const quiet = options?.quiet ?? false;
       const request = ++listRequest.current;
@@ -154,7 +161,7 @@ export function App() {
             }),
           );
         }
-        if (request !== listRequest.current) return;
+        if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
         startTransition(() => {
           setThreads((current) => {
             const next = append ? mergeThreads(current, page.items) : page.items;
@@ -171,16 +178,16 @@ export function App() {
           setCursor(page.nextCursor);
         });
       } catch (caught) {
-        if (request !== listRequest.current) return;
+        if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
         setError(errorMessage(caught));
       } finally {
-        if (request === listRequest.current) {
+        if (request === listRequest.current && mailboxContext === mailboxContextRef.current) {
           setLoading(false);
           setLoadingMore(false);
         }
       }
     },
-    [accountIds, cursor, label, submittedSearch, view],
+    [accountIds, cursor, label, mailboxContext, submittedSearch, view],
   );
 
   useEffect(() => {
