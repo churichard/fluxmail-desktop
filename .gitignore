@@ -1,0 +1,12 @@
+node_modules/
+.vite/
+out/
+build/icon.icns
+coverage/
+playwright-report/
+test-results/
+*.log
+.env
+.env.local
+.DS_Store
+src/main/generated-release-config.ts

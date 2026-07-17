@@ -1,0 +1,863 @@
+import { chmodSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
+import type { Folder, FolderRole, Message, Thread } from "@fluxmail/core";
+import type {
+  AccountInfo,
+  MailThread,
+  MailboxView,
+  ModifyActionInput,
+  ThreadSummary,
+} from "../shared/contracts";
+
+interface BodyCipher {
+  encrypt(value: string): Buffer;
+  decrypt(value: Buffer): string;
+}
+
+interface CachedThreadRow {
+  account_id: string;
+  thread_id: string;
+  account_email: string;
+  subject: string;
+  sender_name: string;
+  sender_email: string;
+  snippet: string;
+  date: string;
+  unread: number;
+  starred: number;
+  draft: number;
+  has_attachments: number;
+  message_count: number;
+  labels_json: string;
+  folder_roles_json: string;
+}
+
+const CACHE_SCHEMA_VERSION = 3;
+
+export class MailCache {
+  readonly hasCachedMail: boolean;
+  private readonly db: Database.Database;
+
+  constructor(
+    dataDir: string,
+    private readonly cipher: BodyCipher,
+  ) {
+    mkdirSync(dataDir, { recursive: true });
+    const dbPath = path.join(dataDir, "mail-cache.db");
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("foreign_keys = ON");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS messages (
+        account_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        date TEXT NOT NULL,
+        PRIMARY KEY (account_id, message_id)
+      );
+      CREATE INDEX IF NOT EXISTS messages_thread ON messages(account_id, thread_id);
+      CREATE TABLE IF NOT EXISTS threads (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        account_email TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_email TEXT NOT NULL,
+        snippet TEXT NOT NULL,
+        date TEXT NOT NULL,
+        unread INTEGER NOT NULL,
+        starred INTEGER NOT NULL,
+        draft INTEGER NOT NULL,
+        has_attachments INTEGER NOT NULL,
+        message_count INTEGER NOT NULL,
+        labels_json TEXT NOT NULL,
+        folder_roles_json TEXT NOT NULL,
+        PRIMARY KEY (account_id, thread_id)
+      );
+      CREATE INDEX IF NOT EXISTS threads_date ON threads(date DESC);
+      CREATE VIRTUAL TABLE IF NOT EXISTS thread_search USING fts5(
+        key UNINDEXED, subject, sender_name, sender_email, snippet
+      );
+      CREATE TABLE IF NOT EXISTS thread_bodies (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        encrypted_payload BLOB NOT NULL,
+        hydrated_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, thread_id)
+      );
+      CREATE TABLE IF NOT EXISTS folders (
+        account_id TEXT NOT NULL,
+        folder_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (account_id, folder_id)
+      );
+      CREATE TABLE IF NOT EXISTS page_tokens (
+        account_id TEXT NOT NULL,
+        view_key TEXT NOT NULL,
+        page_token TEXT,
+        PRIMARY KEY (account_id, view_key)
+      );
+      CREATE TABLE IF NOT EXISTS view_results (
+        account_id TEXT NOT NULL,
+        view_key TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        PRIMARY KEY (account_id, view_key, thread_id)
+      );
+      CREATE TABLE IF NOT EXISTS notification_seen (
+        account_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        seen_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, message_id)
+      );
+      CREATE TABLE IF NOT EXISTS notification_state (
+        account_id TEXT PRIMARY KEY,
+        initialized_at INTEGER NOT NULL
+      );
+    `);
+    const storedVersion = Number(
+      (
+        this.db.prepare("SELECT value FROM cache_meta WHERE key = 'schema_version'").get() as
+          | { value: string }
+          | undefined
+      )?.value ?? 0,
+    );
+    if (storedVersion < 3) {
+      this.db.transaction(() => {
+        this.db.prepare("DELETE FROM page_tokens").run();
+        this.db.prepare("DELETE FROM view_results").run();
+        this.db.prepare("DROP TABLE IF EXISTS search_results").run();
+      })();
+    }
+    this.db
+      .prepare("INSERT OR REPLACE INTO cache_meta(key, value) VALUES ('schema_version', ?)")
+      .run(String(CACHE_SCHEMA_VERSION));
+    this.hasCachedMail = Boolean(this.db.prepare("SELECT 1 FROM threads LIMIT 1").get());
+    try {
+      chmodSync(dbPath, 0o600);
+    } catch {
+      // macOS applies the user directory permissions even if chmod is unavailable.
+    }
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  hasAnyThreads(): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM threads LIMIT 1").get());
+  }
+
+  accountIds(): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT account_id FROM messages
+           UNION SELECT account_id FROM threads
+           UNION SELECT account_id FROM folders
+           UNION SELECT account_id FROM page_tokens
+           UNION SELECT account_id FROM view_results
+           UNION SELECT account_id FROM notification_seen
+           UNION SELECT account_id FROM notification_state`,
+        )
+        .all() as Array<{ account_id: string }>
+    ).map((row) => row.account_id);
+  }
+
+  putFolders(accountId: string, folders: Folder[]): void {
+    const put = this.db.prepare(
+      "INSERT OR REPLACE INTO folders(account_id, folder_id, payload_json) VALUES (?, ?, ?)",
+    );
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM folders WHERE account_id = ?").run(accountId);
+      for (const folder of folders) put.run(accountId, folder.id, JSON.stringify(folder));
+    })();
+  }
+
+  recordResultPage(accountId: string, viewKey: string, threadIds: string[], reset: boolean): void {
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO view_results(account_id, view_key, thread_id) VALUES (?, ?, ?)",
+    );
+    this.db.transaction(() => {
+      if (reset)
+        this.db
+          .prepare("DELETE FROM view_results WHERE account_id = ? AND view_key = ?")
+          .run(accountId, viewKey);
+      for (const threadId of new Set(threadIds)) insert.run(accountId, viewKey, threadId);
+    })();
+  }
+
+  listFolders(): Array<Folder & { accountId: string }> {
+    return (
+      this.db
+        .prepare("SELECT account_id, payload_json FROM folders ORDER BY account_id, payload_json")
+        .all() as Array<{
+        account_id: string;
+        payload_json: string;
+      }>
+    ).map((row) => ({
+      ...(JSON.parse(row.payload_json) as Folder),
+      accountId: row.account_id,
+    }));
+  }
+
+  unreadCount(accountIds?: string[]): number {
+    const accountFilter = accountIds?.length
+      ? ` AND account_id IN (${accountIds.map(() => "?").join(", ")})`
+      : "";
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM threads
+         WHERE unread = 1 AND folder_roles_json LIKE ?${accountFilter}`,
+      )
+      .get('%"inbox"%', ...(accountIds ?? [])) as { count: number };
+    return row.count;
+  }
+
+  draftCount(accountIds?: string[]): number {
+    return this.countThreads({
+      view: "drafts",
+      ...(accountIds?.length ? { accountIds } : {}),
+    });
+  }
+
+  putMessages(
+    account: AccountInfo,
+    messages: Message[],
+    options: { invalidateBodies?: boolean } = {},
+  ): void {
+    const put = this.db.prepare(`
+      INSERT INTO messages(account_id, message_id, thread_id, payload_json, date)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, message_id) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        payload_json = excluded.payload_json,
+        date = excluded.date
+    `);
+    const existingMessage = this.db.prepare(
+      "SELECT thread_id, payload_json, date FROM messages WHERE account_id = ? AND message_id = ?",
+    );
+    const previousDraftMessages = this.db.prepare(
+      `SELECT message_id, thread_id
+       FROM messages
+       WHERE account_id = ?
+         AND json_extract(payload_json, '$.draftId') = ?
+         AND message_id != ?`,
+    );
+    const removeMessage = this.db.prepare(
+      "DELETE FROM messages WHERE account_id = ? AND message_id = ?",
+    );
+    const threadIds = new Set<string>();
+    this.db.transaction(() => {
+      for (const message of messages) {
+        if (message.draftId) {
+          const previous = previousDraftMessages.all(
+            account.id,
+            message.draftId,
+            message.id,
+          ) as Array<{ message_id: string; thread_id: string }>;
+          for (const cached of previous) {
+            removeMessage.run(account.id, cached.message_id);
+            threadIds.add(cached.thread_id);
+          }
+        }
+        const { body: _body, ...metadata } = message;
+        const payload = JSON.stringify(metadata);
+        const existing = existingMessage.get(account.id, message.id) as
+          | { thread_id: string; payload_json: string; date: string }
+          | undefined;
+        put.run(account.id, message.id, message.threadId, payload, message.date);
+        if (
+          options.invalidateBodies ||
+          !existing ||
+          existing.thread_id !== message.threadId ||
+          existing.payload_json !== payload ||
+          existing.date !== message.date
+        ) {
+          if (existing) threadIds.add(existing.thread_id);
+          threadIds.add(message.threadId);
+        }
+      }
+      for (const threadId of threadIds) {
+        this.invalidateThreadBody(account.id, threadId);
+        this.rebuildThread(account, threadId);
+      }
+    })();
+  }
+
+  putThread(account: AccountInfo, thread: Thread): MailThread {
+    const cachedMessageIds = this.messageIds(account.id, thread.id);
+    const currentMessageIds = new Set(thread.messages.map((message) => message.id));
+    const removeMessage = this.db.prepare(
+      "DELETE FROM messages WHERE account_id = ? AND message_id = ?",
+    );
+    this.db.transaction(() => {
+      for (const messageId of cachedMessageIds)
+        if (!currentMessageIds.has(messageId)) removeMessage.run(account.id, messageId);
+      this.putMessages(account, thread.messages);
+      this.rebuildThread(account, thread.id);
+    })();
+    const normalized = this.toMailThread(account, thread);
+    const encrypted = this.cipher.encrypt(JSON.stringify(normalized));
+    this.db
+      .prepare(
+        `
+        INSERT OR REPLACE INTO thread_bodies(account_id, thread_id, encrypted_payload, hydrated_at)
+        VALUES (?, ?, ?, ?)
+      `,
+      )
+      .run(account.id, thread.id, encrypted, Date.now());
+    return normalized;
+  }
+
+  getThread(accountId: string, threadId: string): MailThread | undefined {
+    const row = this.db
+      .prepare("SELECT encrypted_payload FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+      .get(accountId, threadId) as { encrypted_payload: Buffer } | undefined;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(this.cipher.decrypt(row.encrypted_payload)) as MailThread;
+    } catch {
+      this.db
+        .prepare("DELETE FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+        .run(accountId, threadId);
+      return undefined;
+    }
+  }
+
+  hasThreadBody(accountId: string, threadId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare("SELECT 1 FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+        .get(accountId, threadId),
+    );
+  }
+
+  listThreads(input: {
+    view: MailboxView;
+    accountIds?: string[];
+    label?: string;
+    query?: string;
+    resultSetKey?: string;
+    offset: number;
+    limit: number;
+  }): ThreadSummary[] {
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
+    if (input.accountIds?.length) {
+      conditions.push(`account_id IN (${input.accountIds.map(() => "?").join(", ")})`);
+      params.push(...input.accountIds);
+    }
+    const role = viewFolderRole(input.view);
+    if (role) {
+      conditions.push("folder_roles_json LIKE ?");
+      params.push(`%"${role}"%`);
+    }
+    if (input.view === "all") {
+      conditions.push(`(
+        json_array_length(folder_roles_json) = 0 OR EXISTS (
+          SELECT 1
+          FROM json_each(threads.folder_roles_json) AS folder_role
+          WHERE folder_role.value NOT IN ('spam', 'trash')
+        )
+      )`);
+    }
+    if (input.view === "starred") conditions.push("starred = 1");
+    if (input.view === "drafts") conditions.push("draft = 1");
+    if (input.view === "label" && input.label) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM json_each(threads.labels_json) AS label WHERE label.value = ?)",
+      );
+      params.push(input.label);
+    }
+    if (input.resultSetKey) {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM view_results
+        WHERE view_results.account_id = threads.account_id
+          AND view_results.thread_id = threads.thread_id
+          AND view_results.view_key = ?
+      )`);
+      params.push(input.resultSetKey);
+    } else if (input.query?.trim()) {
+      const keys = this.searchKeys(input.query, input.limit * 3);
+      if (!keys.length) return [];
+      conditions.push(`(account_id || ':' || thread_id) IN (${keys.map(() => "?").join(", ")})`);
+      params.push(...keys);
+    }
+    params.push(input.limit, input.offset);
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT * FROM threads ${where} ORDER BY date DESC LIMIT ? OFFSET ?`)
+      .all(...params) as CachedThreadRow[];
+    return rows.map(toSummary);
+  }
+
+  countThreads(input: {
+    view: MailboxView;
+    accountIds?: string[];
+    label?: string;
+    query?: string;
+    resultSetKey?: string;
+  }): number {
+    if (input.query?.trim() && !input.resultSetKey)
+      return this.listThreads({ ...input, offset: 0, limit: 1_000_000 }).length;
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (input.accountIds?.length) {
+      conditions.push(`account_id IN (${input.accountIds.map(() => "?").join(", ")})`);
+      params.push(...input.accountIds);
+    }
+    const role = viewFolderRole(input.view);
+    if (role) {
+      conditions.push("folder_roles_json LIKE ?");
+      params.push(`%"${role}"%`);
+    }
+    if (input.view === "all") {
+      conditions.push(`(
+        json_array_length(folder_roles_json) = 0 OR EXISTS (
+          SELECT 1
+          FROM json_each(threads.folder_roles_json) AS folder_role
+          WHERE folder_role.value NOT IN ('spam', 'trash')
+        )
+      )`);
+    }
+    if (input.view === "starred") conditions.push("starred = 1");
+    if (input.view === "drafts") conditions.push("draft = 1");
+    if (input.view === "label" && input.label) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM json_each(threads.labels_json) AS label WHERE label.value = ?)",
+      );
+      params.push(input.label);
+    }
+    if (input.resultSetKey) {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM view_results
+        WHERE view_results.account_id = threads.account_id
+          AND view_results.thread_id = threads.thread_id
+          AND view_results.view_key = ?
+      )`);
+      params.push(input.resultSetKey);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM threads ${where}`)
+      .get(...params) as {
+      count: number;
+    };
+    return row.count;
+  }
+
+  messageIds(accountId: string, threadId: string): string[] {
+    return (
+      this.db
+        .prepare("SELECT message_id FROM messages WHERE account_id = ? AND thread_id = ?")
+        .all(accountId, threadId) as Array<{
+        message_id: string;
+      }>
+    ).map((row) => row.message_id);
+  }
+
+  snapshotThread(accountId: string, threadId: string): CachedThreadRow | undefined {
+    return this.db
+      .prepare("SELECT * FROM threads WHERE account_id = ? AND thread_id = ?")
+      .get(accountId, threadId) as CachedThreadRow | undefined;
+  }
+
+  restoreThread(row: CachedThreadRow): void {
+    this.writeThread(row);
+  }
+
+  applyAction(accountId: string, threadId: string, action: ModifyActionInput): void {
+    if (action.type === "markRead")
+      this.db
+        .prepare("UPDATE threads SET unread = 0 WHERE account_id = ? AND thread_id = ?")
+        .run(accountId, threadId);
+    if (action.type === "markUnread")
+      this.db
+        .prepare("UPDATE threads SET unread = 1 WHERE account_id = ? AND thread_id = ?")
+        .run(accountId, threadId);
+    if (action.type === "star")
+      this.db
+        .prepare("UPDATE threads SET starred = 1 WHERE account_id = ? AND thread_id = ?")
+        .run(accountId, threadId);
+    if (action.type === "unstar")
+      this.db
+        .prepare("UPDATE threads SET starred = 0 WHERE account_id = ? AND thread_id = ?")
+        .run(accountId, threadId);
+    if (action.type === "archive") this.removeRole(accountId, threadId, "inbox");
+    if (action.type === "trash") this.replaceRoles(accountId, threadId, ["trash"]);
+    if (action.type === "untrash") this.replaceRoles(accountId, threadId, ["inbox"]);
+    if (action.type === "move") this.replaceRoles(accountId, threadId, [action.folder]);
+    if (action.type === "addLabels") this.updateLabels(accountId, threadId, action.labels, []);
+    if (action.type === "removeLabels") this.updateLabels(accountId, threadId, [], action.labels);
+    if (action.type === "delete") this.hideThread(accountId, threadId);
+  }
+
+  finalizeDelete(accountId: string, threadId: string): void {
+    this.deleteThread(accountId, threadId);
+  }
+
+  deleteDraft(account: AccountInfo, draftId: string): void {
+    const rows = this.db
+      .prepare(
+        `SELECT message_id, thread_id
+         FROM messages
+         WHERE account_id = ? AND json_extract(payload_json, '$.draftId') = ?`,
+      )
+      .all(account.id, draftId) as Array<{
+      message_id: string;
+      thread_id: string;
+    }>;
+    if (!rows.length) return;
+    const remove = this.db.prepare("DELETE FROM messages WHERE account_id = ? AND message_id = ?");
+    const threadIds = new Set(rows.map((row) => row.thread_id));
+    this.db.transaction(() => {
+      for (const row of rows) remove.run(account.id, row.message_id);
+      for (const threadId of threadIds) {
+        this.invalidateThreadBody(account.id, threadId);
+        this.rebuildThread(account, threadId);
+      }
+    })();
+  }
+
+  reconcileFolderPage(
+    account: AccountInfo,
+    role: FolderRole,
+    messages: Message[],
+    complete: boolean,
+  ): number {
+    const returnedIds = new Set(messages.map((message) => message.id));
+    const oldestDate = messages.reduce<string | undefined>(
+      (oldest, message) => (!oldest || message.date < oldest ? message.date : oldest),
+      undefined,
+    );
+    if (!complete && !oldestDate) return 0;
+    const rows = this.db
+      .prepare(
+        `SELECT message_id, thread_id, payload_json
+         FROM messages
+         WHERE account_id = ?
+           AND json_extract(payload_json, '$.folder.role') = ?
+           ${complete ? "" : "AND date >= ?"}`,
+      )
+      .all(...(complete ? [account.id, role] : [account.id, role, oldestDate])) as Array<{
+      message_id: string;
+      thread_id: string;
+      payload_json: string;
+    }>;
+    const stale = rows.filter((row) => !returnedIds.has(row.message_id));
+    if (!stale.length) return 0;
+    const update = this.db.prepare(
+      "UPDATE messages SET payload_json = ? WHERE account_id = ? AND message_id = ?",
+    );
+    const threadIds = new Set<string>();
+    this.db.transaction(() => {
+      for (const row of stale) {
+        const message = JSON.parse(row.payload_json) as Message;
+        delete message.folder;
+        update.run(JSON.stringify(message), account.id, row.message_id);
+        threadIds.add(row.thread_id);
+      }
+      for (const threadId of threadIds) {
+        this.invalidateThreadBody(account.id, threadId);
+        this.rebuildThread(account, threadId);
+      }
+    })();
+    return stale.length;
+  }
+
+  reconcileCompleteView(account: AccountInfo, viewKey: string, role: FolderRole): number {
+    const rows = this.db
+      .prepare(
+        `SELECT message_id, thread_id, payload_json
+         FROM messages
+         WHERE account_id = ?
+           AND json_extract(payload_json, '$.folder.role') = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM view_results
+             WHERE view_results.account_id = messages.account_id
+               AND view_results.view_key = ?
+               AND view_results.thread_id = messages.thread_id
+           )`,
+      )
+      .all(account.id, role, viewKey) as Array<{
+      message_id: string;
+      thread_id: string;
+      payload_json: string;
+    }>;
+    if (!rows.length) return 0;
+    const update = this.db.prepare(
+      "UPDATE messages SET payload_json = ? WHERE account_id = ? AND message_id = ?",
+    );
+    const threadIds = new Set<string>();
+    this.db.transaction(() => {
+      for (const row of rows) {
+        const message = JSON.parse(row.payload_json) as Message;
+        delete message.folder;
+        update.run(JSON.stringify(message), account.id, row.message_id);
+        threadIds.add(row.thread_id);
+      }
+      for (const threadId of threadIds) {
+        this.invalidateThreadBody(account.id, threadId);
+        this.rebuildThread(account, threadId);
+      }
+    })();
+    return rows.length;
+  }
+
+  deleteAccount(accountId: string): void {
+    this.db.transaction(() => {
+      for (const table of [
+        "messages",
+        "threads",
+        "thread_bodies",
+        "folders",
+        "page_tokens",
+        "view_results",
+        "notification_seen",
+        "notification_state",
+      ]) {
+        this.db.prepare(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
+      }
+      this.db.prepare("DELETE FROM thread_search WHERE key LIKE ?").run(`${accountId}:%`);
+    })();
+  }
+
+  getPageState(accountId: string, viewKey: string): { initialized: boolean; nextToken?: string } {
+    const row = this.db
+      .prepare("SELECT page_token FROM page_tokens WHERE account_id = ? AND view_key = ?")
+      .get(accountId, viewKey) as { page_token: string | null } | undefined;
+    if (!row) return { initialized: false };
+    return {
+      initialized: true,
+      ...(row.page_token ? { nextToken: row.page_token } : {}),
+    };
+  }
+
+  setPageToken(accountId: string, viewKey: string, token?: string): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO page_tokens(account_id, view_key, page_token) VALUES (?, ?, ?)",
+      )
+      .run(accountId, viewKey, token ?? null);
+  }
+
+  invalidateThread(accountId: string, threadId: string): void {
+    this.invalidateThreadBody(accountId, threadId);
+  }
+
+  recordInboxPage(
+    accountId: string,
+    messages: Message[],
+  ): { initialized: boolean; newMessages: Message[] } {
+    const initialized = Boolean(
+      this.db.prepare("SELECT 1 FROM notification_state WHERE account_id = ?").get(accountId),
+    );
+    const incoming = messages.filter(
+      (message) => message.folder?.role === "inbox" && !message.flags.draft,
+    );
+    const unseen = initialized
+      ? incoming.filter(
+          (message) =>
+            !this.db
+              .prepare("SELECT 1 FROM notification_seen WHERE account_id = ? AND message_id = ?")
+              .get(accountId, message.id),
+        )
+      : [];
+    const insert = this.db.prepare(
+      `INSERT INTO notification_seen(account_id, message_id, seen_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(account_id, message_id) DO UPDATE SET seen_at = excluded.seen_at`,
+    );
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO notification_state(account_id, initialized_at) VALUES (?, ?)",
+        )
+        .run(accountId, Date.now());
+      for (const message of incoming) insert.run(accountId, message.id, Date.now());
+      this.db
+        .prepare("DELETE FROM notification_seen WHERE account_id = ? AND seen_at < ?")
+        .run(accountId, Date.now() - 30 * 24 * 60 * 60 * 1000);
+    })();
+    return { initialized, newMessages: unseen };
+  }
+
+  private searchKeys(query: string, limit: number): string[] {
+    const cleaned = query
+      .trim()
+      .split(/\s+/)
+      .map((term) => `"${term.replaceAll('"', '""')}"*`)
+      .join(" ");
+    if (!cleaned) return [];
+    try {
+      return (
+        this.db
+          .prepare("SELECT key FROM thread_search WHERE thread_search MATCH ? LIMIT ?")
+          .all(cleaned, limit) as Array<{
+          key: string;
+        }>
+      ).map((row) => row.key);
+    } catch {
+      return [];
+    }
+  }
+
+  private rebuildThread(account: AccountInfo, threadId: string): void {
+    const messages = (
+      this.db
+        .prepare(
+          "SELECT payload_json FROM messages WHERE account_id = ? AND thread_id = ? ORDER BY date ASC",
+        )
+        .all(account.id, threadId) as Array<{ payload_json: string }>
+    ).map((row) => JSON.parse(row.payload_json) as Message);
+    if (!messages.length) {
+      this.hideThread(account.id, threadId);
+      this.invalidateThreadBody(account.id, threadId);
+      return;
+    }
+    const latest = messages.at(-1)!;
+    const labels = [...new Set(messages.flatMap((message) => message.labels ?? []))];
+    const roles = [
+      ...new Set(
+        messages
+          .map((message) => message.folder?.role)
+          .filter((role): role is FolderRole => Boolean(role)),
+      ),
+    ];
+    const row: CachedThreadRow = {
+      account_id: account.id,
+      thread_id: threadId,
+      account_email: account.email,
+      subject: latest.subject || "(no subject)",
+      sender_name: latest.from?.name || latest.from?.email || "Unknown sender",
+      sender_email: latest.from?.email || "",
+      snippet: latest.snippet || "",
+      date: latest.date,
+      unread: messages.some((message) => !message.flags.read) ? 1 : 0,
+      starred: messages.some((message) => message.flags.starred) ? 1 : 0,
+      draft: messages.some((message) => message.flags.draft) ? 1 : 0,
+      has_attachments: messages.some((message) => Boolean(message.attachments?.length)) ? 1 : 0,
+      message_count: messages.length,
+      labels_json: JSON.stringify(labels),
+      folder_roles_json: JSON.stringify(roles),
+    };
+    this.writeThread(row);
+  }
+
+  private writeThread(row: CachedThreadRow): void {
+    this.db
+      .prepare(
+        `
+        INSERT OR REPLACE INTO threads(
+          account_id, thread_id, account_email, subject, sender_name, sender_email, snippet, date,
+          unread, starred, draft, has_attachments, message_count, labels_json, folder_roles_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(...Object.values(row));
+    const key = `${row.account_id}:${row.thread_id}`;
+    this.db.prepare("DELETE FROM thread_search WHERE key = ?").run(key);
+    this.db
+      .prepare(
+        "INSERT INTO thread_search(key, subject, sender_name, sender_email, snippet) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(key, row.subject, row.sender_name, row.sender_email, row.snippet);
+  }
+
+  private deleteThread(accountId: string, threadId: string): void {
+    this.hideThread(accountId, threadId);
+    this.db
+      .prepare("DELETE FROM messages WHERE account_id = ? AND thread_id = ?")
+      .run(accountId, threadId);
+    this.db
+      .prepare("DELETE FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+      .run(accountId, threadId);
+  }
+
+  private invalidateThreadBody(accountId: string, threadId: string): void {
+    this.db
+      .prepare("DELETE FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+      .run(accountId, threadId);
+  }
+
+  private hideThread(accountId: string, threadId: string): void {
+    this.db
+      .prepare("DELETE FROM threads WHERE account_id = ? AND thread_id = ?")
+      .run(accountId, threadId);
+    this.db.prepare("DELETE FROM thread_search WHERE key = ?").run(`${accountId}:${threadId}`);
+  }
+
+  private removeRole(accountId: string, threadId: string, role: string): void {
+    const row = this.snapshotThread(accountId, threadId);
+    if (!row) return;
+    row.folder_roles_json = JSON.stringify(
+      (JSON.parse(row.folder_roles_json) as string[]).filter((item) => item !== role),
+    );
+    this.writeThread(row);
+  }
+
+  private replaceRoles(accountId: string, threadId: string, roles: string[]): void {
+    const row = this.snapshotThread(accountId, threadId);
+    if (!row) return;
+    row.folder_roles_json = JSON.stringify(roles);
+    this.writeThread(row);
+  }
+
+  private updateLabels(
+    accountId: string,
+    threadId: string,
+    added: string[],
+    removed: string[],
+  ): void {
+    const row = this.snapshotThread(accountId, threadId);
+    if (!row) return;
+    const labels = new Set(JSON.parse(row.labels_json) as string[]);
+    for (const label of added) labels.add(label);
+    for (const label of removed) labels.delete(label);
+    row.labels_json = JSON.stringify([...labels]);
+    this.writeThread(row);
+  }
+
+  private toMailThread(account: AccountInfo, thread: Thread): MailThread {
+    return {
+      id: thread.id,
+      accountId: account.id,
+      accountEmail: account.email,
+      subject: thread.subject,
+      messages: thread.messages.map((message) => ({
+        ...message,
+        folderRole: message.folder?.role,
+      })),
+    };
+  }
+}
+
+function toSummary(row: CachedThreadRow): ThreadSummary {
+  return {
+    id: row.thread_id,
+    accountId: row.account_id,
+    accountEmail: row.account_email,
+    subject: row.subject,
+    senderName: row.sender_name,
+    senderEmail: row.sender_email,
+    snippet: row.snippet,
+    date: row.date,
+    unread: Boolean(row.unread),
+    starred: Boolean(row.starred),
+    draft: Boolean(row.draft),
+    hasAttachments: Boolean(row.has_attachments),
+    messageCount: row.message_count,
+    labels: JSON.parse(row.labels_json) as string[],
+    folderRoles: JSON.parse(row.folder_roles_json) as string[],
+  };
+}
+
+function viewFolderRole(view: MailboxView): string | undefined {
+  if (view === "all" || view === "starred" || view === "label" || view === "search")
+    return undefined;
+  return view;
+}
