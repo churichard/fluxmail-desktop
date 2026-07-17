@@ -2,7 +2,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { AttachmentInput, Message, ModifyAction } from "@fluxmail/core";
 import { isEmailError } from "@fluxmail/core";
-import { buildForwardBody, type AppContext, type SendInput } from "fluxmail";
+import {
+  buildForwardBody,
+  type AppContext,
+  type SendInput,
+  type StoreCompatibility,
+} from "fluxmail";
 import type {
   AccountInfo,
   Address,
@@ -82,11 +87,8 @@ export class FluxmailRuntime {
   }
 
   async bootstrap(sync: BootstrapState["sync"]): Promise<Omit<BootstrapState, "preferences">> {
+    const store = this.assertStoreCompatible();
     const accounts = this.accounts();
-    const store = this.fluxmail.inspectStoreCompatibility(
-      this.context.config.dbPath,
-      this.context.config.dataDir,
-    );
     this.reconcileCachedAccounts(accounts);
     const [folders, license] = await Promise.all([
       this.folders().catch(() => this.options.cache.listFolders()),
@@ -121,6 +123,7 @@ export class FluxmailRuntime {
   async folders(force = false): Promise<FolderInfo[]> {
     const cached = this.options.cache.listFolders();
     if (cached.length && !force) return cached;
+    this.assertStoreCompatible();
     const accounts = this.accounts();
     const cacheGeneration = this.cacheGeneration;
     const results = await Promise.allSettled(
@@ -151,6 +154,7 @@ export class FluxmailRuntime {
   }
 
   async connectGmail(accountId?: string): Promise<AccountInfo> {
+    this.assertStoreCompatible();
     const config = this.context.config.google;
     if (!config) {
       throw new Error(
@@ -174,6 +178,7 @@ export class FluxmailRuntime {
     if (existing && existing.email.toLowerCase() !== identity.email.toLowerCase()) {
       throw new Error(`Choose ${existing.email} in Google to reconnect this account.`);
     }
+    this.assertStoreCompatible();
     const members = this.fluxmail.listMembers(this.context.db);
     const owner =
       members[0] ??
@@ -192,6 +197,7 @@ export class FluxmailRuntime {
   }
 
   removeAccount(accountId: string): void {
+    this.assertStoreCompatible();
     this.context.registry.removeAccount(accountId);
     this.options.cache.deleteAccount(accountId);
     this.options.onCacheChanged();
@@ -541,6 +547,7 @@ export class FluxmailRuntime {
   ): Promise<number> {
     const started = performance.now();
     try {
+      this.assertStoreCompatible();
       this.reconcileCachedAccounts(this.accounts());
       await this.folders(true);
       const inboxInput: ThreadListInput = { view: "inbox", pageSize: 100 };
@@ -710,6 +717,7 @@ export class FluxmailRuntime {
   ): Promise<T> {
     const started = performance.now();
     try {
+      this.assertStoreCompatible();
       const result = await work();
       this.options.analytics.captureOperation({
         operation,
@@ -727,6 +735,17 @@ export class FluxmailRuntime {
       });
       throw error;
     }
+  }
+
+  private assertStoreCompatible(): StoreCompatibility {
+    const compatibility = this.fluxmail.inspectStoreCompatibility(
+      this.context.config.dbPath,
+      this.context.config.dataDir,
+    );
+    if (compatibility.compatible) return compatibility;
+    this.context.scheduler.stop();
+    this.context.licenseController.stop();
+    throw new this.fluxmail.IncompatibleStoreError(compatibility);
   }
 }
 
