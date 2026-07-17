@@ -673,8 +673,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".quick-reply .quoted-reply-content")).toBeVisible();
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
-    await messageFrame.locator("#email-root").click();
-    await page.keyboard.press("e");
+    await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
     await expect(page.locator(".thread-row.active")).toHaveCount(0, {
       timeout: 200,
     });
@@ -700,8 +699,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.getByText("Receipt for Tuesday", { exact: true })).toHaveCount(0);
 
     await draftsNav.click();
-    await expect(page.getByText("Launch notes", { exact: true }).first()).toBeVisible();
-    await page.getByText("Launch notes", { exact: true }).first().click();
+    const launchDraft = page.locator(".thread-row").filter({ hasText: "Launch notes" });
+    await expect(launchDraft).toBeVisible();
+    await launchDraft.click();
     const resumedDraft = page.getByRole("dialog", { name: "New message" });
     await expect(resumedDraft.locator("header strong")).toHaveText("Launch notes");
     await expect(resumedDraft.locator(".recipient-summary")).toContainText("sam@example.test");
@@ -847,6 +847,38 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       accountActionAlignment.identityRight,
     );
     expect(accountActionAlignment.rowRight - accountActionAlignment.actionsRight).toBeLessThan(14);
+  } finally {
+    await electronApp.close();
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("archives when the email iframe has focus", async () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
+  const electronApp = await electron.launch({
+    args: [process.cwd()],
+    env: {
+      ...process.env,
+      FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
+      FLUXMAIL_DESKTOP_E2E_HEADLESS: "1",
+      FLUXMAIL_DESKTOP_TEST_DATA_DIR: dataDirectory,
+      FLUXMAIL_DATA_DIR: path.join(dataDirectory, ".fluxmail"),
+      FLUXMAIL_TELEMETRY: "0",
+    },
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    const welcomeThread = page.locator(".thread-row").filter({ hasText: "Welcome to Fluxmail" });
+    await welcomeThread.click();
+
+    const messageFrame = page.frameLocator('iframe[title="Email message"]');
+    await messageFrame.locator("#email-root").click();
+    await page.keyboard.press("e");
+
+    await expect(page.locator(".reading-placeholder")).toBeVisible();
+    await expect(welcomeThread).toHaveCount(0);
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });
