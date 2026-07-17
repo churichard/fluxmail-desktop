@@ -77,7 +77,10 @@ const config: ForgeConfig = {
         }
       : undefined,
   },
-  rebuildConfig: { force: true },
+  // postinstall rebuilds the root copy for Electron. Ignoring it here keeps
+  // Forge from following the Fluxmail workspace symlink into a standalone
+  // submodule install and rebuilding a second, incompatible copy.
+  rebuildConfig: { force: true, ignoreModules: ["better-sqlite3"] },
   hooks: {
     async generateAssets() {
       await runFile("bash", ["scripts/generate-icon.sh"], { cwd: process.cwd() });

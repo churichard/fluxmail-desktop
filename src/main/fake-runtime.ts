@@ -1,4 +1,10 @@
 import type { Message } from "@fluxmail/core";
+import {
+  CURRENT_STORE_FORMAT,
+  MAX_SUPPORTED_STORE_FORMAT,
+  MIN_SUPPORTED_STORE_FORMAT,
+  VERSION,
+} from "fluxmail";
 import type {
   AccountInfo,
   BootstrapState,
@@ -122,6 +128,12 @@ export class FakeFluxmailRuntime {
 
   async bootstrap(sync: BootstrapState["sync"]): Promise<Omit<BootstrapState, "preferences">> {
     return {
+      engine: {
+        version: VERSION,
+        storeFormat: CURRENT_STORE_FORMAT,
+        minimumSupportedFormat: MIN_SUPPORTED_STORE_FORMAT,
+        maximumSupportedFormat: MAX_SUPPORTED_STORE_FORMAT,
+      },
       accounts: this.accounts(),
       folders: await this.folders(),
       unreadCount: this.messages.filter(

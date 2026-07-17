@@ -130,6 +130,7 @@ function normalizeIpcError(error: unknown): Error {
         name: "FluxmailError",
         code: details.code,
         retryable: details.retryable,
+        details: details.details,
       });
     } catch {
       // Fall through to a generic bridge error if the serialized error was malformed.

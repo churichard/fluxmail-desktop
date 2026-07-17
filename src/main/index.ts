@@ -91,6 +91,7 @@ let quitAfterWindowClose = false;
 let shutdownStarted = false;
 let inboxPerformanceCaptured = false;
 let attachmentGeneration = 0;
+let startupError: unknown;
 const pendingAttachments = new Map<
   string,
   {
@@ -128,12 +129,24 @@ if (!app.requestSingleInstanceLock()) {
       nativeTheme.themeSource = await preferences.load();
       nativeTheme.on("updated", updateWindowBackground);
       registerAppProtocol();
-      await createServices();
-      updateDockBadge();
+      try {
+        await createServices();
+        updateDockBadge();
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== "incompatible_store") throw error;
+        startupError = error;
+        await analytics?.shutdown().catch(() => undefined);
+        cache?.close();
+        runtime = null;
+        analytics = null;
+        cache = null;
+      }
       registerIpc();
       createWindow();
-      void refresh("startup");
-      powerMonitor.on("resume", () => void refresh("resume"));
+      if (!startupError) {
+        void refresh("startup");
+        powerMonitor.on("resume", () => void refresh("resume"));
+      }
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
       });
@@ -290,13 +303,16 @@ function registerAppProtocol(): void {
 }
 
 function registerIpc(): void {
-  handle(IPC.bootstrap, z.undefined(), bootstrapSchema, async () => ({
-    ...(await requireRuntime().bootstrap(syncState)),
-    preferences: {
-      appearance: requirePreferences().appearance(),
-      dockBadge: requirePreferences().dockBadge(),
-    },
-  }));
+  handle(IPC.bootstrap, z.undefined(), bootstrapSchema, async () => {
+    if (startupError) throw startupError;
+    return {
+      ...(await requireRuntime().bootstrap(syncState)),
+      preferences: {
+        appearance: requirePreferences().appearance(),
+        dockBadge: requirePreferences().dockBadge(),
+      },
+    };
+  });
   handle(IPC.accountsList, z.undefined(), z.array(accountSchema), async () =>
     requireRuntime().accounts(),
   );
@@ -729,7 +745,11 @@ function publicError(error: unknown): Error {
 
 function publicErrorPayload(error: unknown): z.infer<typeof appErrorSchema> {
   const providerMessage = isEmailError(error) ? emailErrorMessage(error.code) : undefined;
+  const compatibility = (error as { compatibility?: Record<string, unknown> } | null)
+    ?.compatibility;
+  const incompatibleMessage = compatibilityMessage(compatibility);
   const rawMessage =
+    incompatibleMessage ??
     providerMessage ??
     (error instanceof Error ? error.message : "Fluxmail could not complete that request.");
   const message = rawMessage
@@ -747,9 +767,36 @@ function publicErrorPayload(error: unknown): z.infer<typeof appErrorSchema> {
     "entitlement_exceeded",
     "permission_denied",
     "unsupported_capability",
+    "incompatible_store",
   ].includes(code);
-  const payload = appErrorSchema.parse({ code, message, retryable });
+  const details = compatibility
+    ? Object.fromEntries(
+        Object.entries(compatibility).filter(
+          (entry): entry is [string, string | number | boolean] =>
+            ["string", "number", "boolean"].includes(typeof entry[1]),
+        ),
+      )
+    : undefined;
+  const payload = appErrorSchema.parse({
+    code,
+    message,
+    retryable,
+    ...(details ? { details } : {}),
+  });
   return payload;
+}
+
+function compatibilityMessage(compatibility?: Record<string, unknown>): string | undefined {
+  if (!compatibility) return undefined;
+  const storeFormat = compatibility.storeFormat;
+  const maximum = compatibility.maximumSupportedFormat;
+  const minimum = compatibility.minimumSupportedFormat;
+  if (typeof storeFormat !== "number" || typeof maximum !== "number" || typeof minimum !== "number")
+    return undefined;
+  if (storeFormat > maximum) {
+    return `Your Fluxmail data uses format ${storeFormat}, but this version of Fluxmail Desktop supports up to format ${maximum}. Update Fluxmail Desktop to continue. Your data was not changed.`;
+  }
+  return `Your Fluxmail data uses format ${storeFormat}, but this version of Fluxmail Desktop supports formats ${minimum} through ${maximum}. Use a compatible Fluxmail version to update the shared data, then reopen Desktop. Your data was not changed.`;
 }
 
 function showFatalError(error: unknown): void {

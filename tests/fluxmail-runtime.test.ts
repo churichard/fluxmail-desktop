@@ -2,10 +2,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "@fluxmail/core";
+import { IncompatibleStoreError, type StoreCompatibility } from "fluxmail";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAnalytics } from "../src/main/analytics";
 import { MailCache } from "../src/main/cache";
-import { FluxmailRuntime, shouldUseBundledGoogleConfig } from "../src/main/fluxmail-runtime";
+import {
+  FluxmailRuntime,
+  prepareFluxmailConfiguration,
+  shouldUseBundledGoogleConfig,
+} from "../src/main/fluxmail-runtime";
 import type { AccountInfo } from "../src/shared/contracts";
 
 const account = {
@@ -924,6 +929,48 @@ describe("FluxmailRuntime draft mutations", () => {
 });
 
 describe("FluxmailRuntime OAuth configuration", () => {
+  it("rejects an incompatible store before writing bundled configuration", () => {
+    const compatibility: StoreCompatibility = {
+      engineVersion: "0.3.0",
+      dataDir: "/tmp/fluxmail",
+      dbPath: "/tmp/fluxmail/fluxmail.db",
+      storeFormat: 2,
+      minimumSupportedFormat: 1,
+      maximumSupportedFormat: 1,
+      compatible: false,
+      requiresMigration: false,
+    };
+    const readStoredConfig = vi.fn(() => ({}));
+    const setStoredConfig = vi.fn();
+    class TestIncompatibleStoreError extends Error {
+      readonly code = "incompatible_store";
+
+      constructor(readonly compatibility: StoreCompatibility) {
+        super("Incompatible store");
+      }
+    }
+    const fluxmail = {
+      resolveStoreLocation: vi.fn(() => ({
+        dataDir: compatibility.dataDir,
+        dbPath: compatibility.dbPath,
+      })),
+      inspectStoreCompatibility: vi.fn(() => compatibility),
+      IncompatibleStoreError: TestIncompatibleStoreError,
+      readStoredConfig,
+      setStoredConfig,
+    };
+
+    expect(() =>
+      prepareFluxmailConfiguration(
+        fluxmail as Parameters<typeof prepareFluxmailConfiguration>[0],
+        "bundled-id",
+        "bundled-secret",
+      ),
+    ).toThrow(TestIncompatibleStoreError);
+    expect(readStoredConfig).not.toHaveBeenCalled();
+    expect(setStoredConfig).not.toHaveBeenCalled();
+  });
+
   it("uses the bundled pair when the existing configuration is incomplete", () => {
     expect(
       shouldUseBundledGoogleConfig("custom-id", undefined, "bundled-id", "bundled-secret"),
@@ -938,6 +985,48 @@ describe("FluxmailRuntime OAuth configuration", () => {
       shouldUseBundledGoogleConfig("custom-id", "custom-secret", "bundled-id", "bundled-secret"),
     ).toBe(false);
     expect(shouldUseBundledGoogleConfig(undefined, undefined, "bundled-id", "")).toBe(false);
+  });
+});
+
+describe("FluxmailRuntime store compatibility", () => {
+  it("blocks bootstrap and mutations if another process upgrades the store", async () => {
+    const createDraft = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: { createDraft },
+      onCacheChanged: vi.fn(),
+    });
+    const internals = runtime as unknown as {
+      fluxmail: {
+        inspectStoreCompatibility: ReturnType<typeof vi.fn>;
+      };
+      context: {
+        scheduler: { stop: ReturnType<typeof vi.fn> };
+        licenseController: { stop: ReturnType<typeof vi.fn> };
+      };
+    };
+    internals.fluxmail.inspectStoreCompatibility.mockReturnValue({
+      ...compatibleStore(),
+      storeFormat: 2,
+      compatible: false,
+      requiresMigration: false,
+    });
+
+    await expect(runtime.bootstrap({ status: "idle" })).rejects.toMatchObject({
+      code: "incompatible_store",
+    });
+    await expect(
+      runtime.saveDraft({
+        accountId: account.id,
+        to: [{ email: "friend@example.com" }],
+        subject: "Draft subject",
+        text: "Draft body",
+      }),
+    ).rejects.toMatchObject({ code: "incompatible_store" });
+
+    expect(createDraft).not.toHaveBeenCalled();
+    expect(internals.context.scheduler.stop).toHaveBeenCalled();
+    expect(internals.context.licenseController.stop).toHaveBeenCalled();
   });
 });
 
@@ -967,10 +1056,17 @@ function createRuntime(input: {
     onCacheChanged: input.onCacheChanged,
   });
   Object.assign(runtime, {
+    fluxmail: runtimeFluxmailModule(),
     context: {
-      config: { maxAttachmentBytes: 25 * 1024 * 1024 },
+      config: {
+        dataDir: "/tmp/fluxmail",
+        dbPath: "/tmp/fluxmail/fluxmail.db",
+        maxAttachmentBytes: 25 * 1024 * 1024,
+      },
       registry: { listAccounts: () => [account] },
       service: input.service,
+      scheduler: { stop: vi.fn() },
+      licenseController: { stop: vi.fn() },
     },
   });
   return runtime;
@@ -999,10 +1095,17 @@ function createRuntimeWithCache(input: {
     onCacheChanged: input.onCacheChanged,
   });
   Object.assign(runtime, {
+    fluxmail: runtimeFluxmailModule(),
     context: {
-      config: { maxAttachmentBytes: 25 * 1024 * 1024 },
+      config: {
+        dataDir: "/tmp/fluxmail",
+        dbPath: "/tmp/fluxmail/fluxmail.db",
+        maxAttachmentBytes: 25 * 1024 * 1024,
+      },
       registry: { listAccounts: () => input.accounts ?? [account] },
       service: input.service,
+      scheduler: { stop: vi.fn() },
+      licenseController: { stop: vi.fn() },
     },
   });
   return runtime;
@@ -1015,6 +1118,26 @@ function createCache(): MailCache {
     encrypt: (value) => Buffer.from(value),
     decrypt: (value) => value.toString("utf8"),
   });
+}
+
+function compatibleStore(): StoreCompatibility {
+  return {
+    engineVersion: "0.3.0",
+    dataDir: "/tmp/fluxmail",
+    dbPath: "/tmp/fluxmail/fluxmail.db",
+    storeFormat: 1,
+    minimumSupportedFormat: 1,
+    maximumSupportedFormat: 1,
+    compatible: true,
+    requiresMigration: false,
+  };
+}
+
+function runtimeFluxmailModule() {
+  return {
+    inspectStoreCompatibility: vi.fn(() => compatibleStore()),
+    IncompatibleStoreError,
+  };
 }
 
 function inboxMessage(overrides: Partial<Message> = {}): Message {

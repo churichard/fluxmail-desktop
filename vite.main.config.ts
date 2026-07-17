@@ -1,4 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 export function loadDesktopOAuthConfig(mode: string, root = process.cwd()) {
   const environment = loadEnv(mode, root, "");
@@ -8,8 +10,18 @@ export function loadDesktopOAuthConfig(mode: string, root = process.cwd()) {
   };
 }
 
+export function loadFluxmailEngineVersion(root = process.cwd()): string {
+  const manifestPath = path.join(root, "vendor/fluxmail-mcp/packages/server/package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw new Error(`Fluxmail engine package at ${manifestPath} has no version.`);
+  }
+  return manifest.version;
+}
+
 export default defineConfig(({ mode }) => {
   const oauth = loadDesktopOAuthConfig(mode);
+  const engineVersion = loadFluxmailEngineVersion();
   return {
     plugins: [
       {
@@ -17,7 +29,7 @@ export default defineConfig(({ mode }) => {
         enforce: "pre",
         transform(_source, id) {
           if (id.endsWith("/fluxmail-mcp/packages/server/dist/version.js")) {
-            return `export const VERSION = '0.3.0';`;
+            return `export const VERSION = ${JSON.stringify(engineVersion)};`;
           }
         },
       },

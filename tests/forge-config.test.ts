@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { shouldIgnorePackagedPath } from "../forge.config";
+import forgeConfig, { shouldIgnorePackagedPath } from "../forge.config";
 
 describe("Forge package filtering", () => {
   const appRoot = path.join(path.sep, "workspace", "fluxmail-desktop");
@@ -22,5 +22,9 @@ describe("Forge package filtering", () => {
   it("keeps allowlisted parent directories and ignores unrelated files", () => {
     expect(shouldIgnorePackagedPath(path.join(appRoot, "node_modules"), appRoot)).toBe(false);
     expect(shouldIgnorePackagedPath(path.join(appRoot, "src", "main.ts"), appRoot)).toBe(true);
+  });
+
+  it("uses the Electron binary prepared by postinstall instead of rebuilding workspace copies", () => {
+    expect(forgeConfig.rebuildConfig?.ignoreModules).toContain("better-sqlite3");
   });
 });
