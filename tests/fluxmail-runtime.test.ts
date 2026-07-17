@@ -197,6 +197,51 @@ describe("FluxmailRuntime thread loading", () => {
     expect(refreshedResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
   });
 
+  it("keeps a newer refresh when an older background request finishes last", async () => {
+    const cachedSent = inboxMessage({
+      id: "cached-sent-message",
+      threadId: "cached-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    const staleSent = inboxMessage({
+      id: "stale-sent-message",
+      threadId: "stale-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    const freshSent = inboxMessage({
+      id: "fresh-sent-message",
+      threadId: "fresh-sent-thread",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    let finishBackgroundRefresh!: (page: { items: Message[] }) => void;
+    const pendingBackgroundRefresh = new Promise<{ items: Message[] }>((resolve) => {
+      finishBackgroundRefresh = resolve;
+    });
+    const listMessages = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [cachedSent] })
+      .mockReturnValueOnce(pendingBackgroundRefresh)
+      .mockResolvedValueOnce({ items: [freshSent] });
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged,
+    });
+
+    await runtime.listThreads({ view: "sent" });
+    await runtime.listThreads({ view: "sent", backgroundRefresh: true });
+    const refreshedResult = await runtime.listThreads({ view: "sent", refresh: true });
+    expect(refreshedResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
+
+    finishBackgroundRefresh({ items: [staleSent] });
+    const settledResult = await runtime.listThreads({ view: "sent", cursor: "0" });
+
+    expect(settledResult.items.map((item) => item.id)).toEqual(["fresh-sent-thread"]);
+    expect(listMessages).toHaveBeenCalledTimes(3);
+    expect(onCacheChanged).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse stale later pages after a non-inbox view refresh", async () => {
     const oldFirst = inboxMessage({
       id: "old-first-message",
