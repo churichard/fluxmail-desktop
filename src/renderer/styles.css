@@ -2113,6 +2113,36 @@ textarea:focus-visible,
   font-size: 10px;
 }
 
+.settings-about {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.settings-about span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 12px;
+  padding: 13px;
+  background: color-mix(in srgb, var(--panel) 54%, var(--paper));
+}
+
+.settings-about strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-about small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 /* Onboarding and transient states */
 
 .onboarding,

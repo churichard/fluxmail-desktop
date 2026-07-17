@@ -250,6 +250,12 @@ export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
 export const bootstrapSchema = z.object({
+  engine: z.object({
+    version: z.string(),
+    storeFormat: z.number().int().nonnegative(),
+    minimumSupportedFormat: z.number().int().nonnegative(),
+    maximumSupportedFormat: z.number().int().nonnegative(),
+  }),
   accounts: z.array(accountSchema),
   folders: z.array(folderSchema),
   unreadCount: z.number().int().nonnegative(),
@@ -279,6 +285,7 @@ export const appErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
   retryable: z.boolean(),
+  details: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 export type AppError = z.infer<typeof appErrorSchema>;
 

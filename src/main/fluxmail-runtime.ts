@@ -99,12 +99,22 @@ export class FluxmailRuntime {
 
   async bootstrap(sync: BootstrapState["sync"]): Promise<Omit<BootstrapState, "preferences">> {
     const accounts = this.accounts();
+    const store = this.fluxmail.inspectStoreCompatibility(
+      this.context.config.dbPath,
+      this.context.config.dataDir,
+    );
     this.reconcileCachedAccounts(accounts);
     const [folders, license] = await Promise.all([
       this.folders().catch(() => this.options.cache.listFolders()),
       Promise.resolve(this.license()),
     ]);
     return {
+      engine: {
+        version: this.fluxmail.VERSION,
+        storeFormat: store.storeFormat,
+        minimumSupportedFormat: store.minimumSupportedFormat,
+        maximumSupportedFormat: store.maximumSupportedFormat,
+      },
       accounts,
       folders,
       unreadCount: this.unreadCount(),

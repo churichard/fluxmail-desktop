@@ -3,6 +3,7 @@ import {
   createTelemetry,
   isTelemetryEnabled,
   setTelemetryEnabled,
+  VERSION,
   type Telemetry,
   type TelemetryProperties,
 } from "fluxmail";
@@ -32,8 +33,6 @@ interface AnalyticsOptions {
   createClient?: typeof createTelemetry;
   testClient?: boolean;
 }
-
-const MCP_VERSION = "0.3.0";
 
 export class DesktopAnalytics {
   private client: Telemetry;
@@ -137,7 +136,7 @@ export class DesktopAnalytics {
         client_platform: "desktop",
         deployment_environment: "production",
         desktop_app_version: app.getVersion(),
-        mcp_version: MCP_VERSION,
+        mcp_version: VERSION,
         electron_version: process.versions.electron,
         operating_system: process.platform,
         architecture: process.arch,

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadDesktopOAuthConfig } from "../vite.main.config";
+import { VERSION as reportedFluxmailEngineVersion } from "../vendor/fluxmail-mcp/packages/server/src/version";
+import { loadDesktopOAuthConfig, loadFluxmailEngineVersion } from "../vite.main.config";
 
 const directories: string[] = [];
 
@@ -12,6 +13,10 @@ afterEach(() => {
 });
 
 describe("main Vite configuration", () => {
+  it("reads the engine version from the pinned Fluxmail package", () => {
+    expect(loadFluxmailEngineVersion()).toBe(reportedFluxmailEngineVersion);
+  });
+
   it("loads desktop OAuth credentials from .env", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "fluxmail-vite-env-"));
     directories.push(directory);

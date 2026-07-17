@@ -32,7 +32,11 @@ Start the app with:
 pnpm dev
 ```
 
-Fluxmail uses `~/.fluxmail` for shared accounts, encrypted credentials, licensing, configuration, analytics preference, and the anonymous installation ID. Desktop message metadata lives in the app's macOS Application Support directory. Opened message bodies are encrypted with Electron `safeStorage` before they enter the desktop cache.
+Fluxmail uses `~/.fluxmail` for accounts, encrypted credentials, licensing, configuration, the analytics preference, and the anonymous installation ID. A separately installed `fluxmail` npm CLI uses the same directory by default, so it sees the same accounts and settings. Desktop and CLI versions may differ when both support the stored data format. An incompatible version stops before changing the shared data and asks the user to update it.
+
+`FLUXMAIL_DATA_DIR` changes the whole shared data directory, while `FLUXMAIL_DB_PATH` changes only the SQLite database path. Shell variables and `.env.local` or `.env` files in the CLI working directory take priority over settings saved in `~/.fluxmail/config.env`. These overrides can intentionally give the CLI a separate installation.
+
+Desktop message metadata and interface preferences live in the app's macOS Application Support directory. Opened message bodies are encrypted with Electron `safeStorage` before they enter the desktop cache.
 
 ## Useful commands
 

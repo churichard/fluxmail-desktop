@@ -232,6 +232,12 @@ function installApi(
   options: { threadsAfterModify?: ThreadSummary[] } = {},
 ): void {
   const state: BootstrapState = {
+    engine: {
+      version: "0.3.0",
+      storeFormat: 1,
+      minimumSupportedFormat: 1,
+      maximumSupportedFormat: 1,
+    },
     accounts: [
       {
         id: "account-1",

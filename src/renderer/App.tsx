@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type {
+  AppError,
   AppEvent,
   BootstrapState,
   MailboxView,
@@ -48,6 +49,7 @@ export function App() {
   const [quickReplyDiscardVersion, setQuickReplyDiscardVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [startupError, setStartupError] = useState<AppError>();
   const [sidebarWidth, setSidebarWidth] = useState(228);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [listWidth, setListWidth] = useState(410);
@@ -96,7 +98,7 @@ export function App() {
       setBootstrap(state);
       setAccountId((current) => reconcileAccountSelection(current, state.accounts));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setStartupError(errorDetails(caught));
     }
   }, []);
 
@@ -564,7 +566,7 @@ export function App() {
     threads,
   ]);
 
-  if (!bootstrap) return <Splash error={error} />;
+  if (!bootstrap) return <Splash error={startupError} />;
   if (!bootstrap.accounts.length) {
     return (
       <Onboarding
@@ -894,21 +896,24 @@ function formatAddresses(addresses?: Array<{ name?: string; email: string }>): s
     .join(", ");
 }
 
-export function Splash({ error }: { error?: string }) {
+export function Splash({ error }: { error?: AppError }) {
+  const incompatible = error?.code === "incompatible_store";
   return (
     <div className="splash">
       <div className="brand-mark">
         <FluxmailLogoMark />
       </div>
-      <h1>{error ? "An error occurred" : "Fluxmail"}</h1>
-      <p>{error || "Opening your mail..."}</p>
+      <h1>
+        {error ? (incompatible ? "Update Fluxmail to continue" : "An error occurred") : "Fluxmail"}
+      </h1>
+      <p>{error?.message || "Opening your mail..."}</p>
       {error ? (
         <button
           type="button"
           className="secondary-button splash-restart"
           onClick={() => void window.fluxmail.system.restart()}
         >
-          Restart Fluxmail
+          {incompatible ? "Try again" : "Restart Fluxmail"}
         </button>
       ) : null}
     </div>
@@ -917,4 +922,27 @@ export function Splash({ error }: { error?: string }) {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Fluxmail could not complete that request.";
+}
+
+export function errorDetails(error: unknown): AppError {
+  if (error instanceof Error) {
+    const candidate = error as Error & {
+      code?: unknown;
+      retryable?: unknown;
+      details?: unknown;
+    };
+    return {
+      code: typeof candidate.code === "string" ? candidate.code : "desktop_error",
+      message: candidate.message,
+      retryable: typeof candidate.retryable === "boolean" ? candidate.retryable : true,
+      ...(candidate.details && typeof candidate.details === "object"
+        ? { details: candidate.details as Record<string, string | number | boolean> }
+        : {}),
+    };
+  }
+  return {
+    code: "desktop_error",
+    message: "Fluxmail could not start.",
+    retryable: true,
+  };
 }
