@@ -1,0 +1,436 @@
+import { z } from "zod";
+
+export const mailboxViewSchema = z.enum([
+  "inbox",
+  "starred",
+  "sent",
+  "drafts",
+  "all",
+  "spam",
+  "trash",
+  "label",
+  "search",
+]);
+export type MailboxView = z.infer<typeof mailboxViewSchema>;
+
+export const accountSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string().optional(),
+  provider: z.enum(["gmail", "outlook", "imap"]),
+  status: z.enum(["active", "auth_error", "disabled"]),
+});
+export type AccountInfo = z.infer<typeof accountSchema>;
+
+export const folderSchema = z.object({
+  accountId: z.string(),
+  id: z.string(),
+  name: z.string(),
+  role: z
+    .enum(["inbox", "sent", "drafts", "trash", "spam", "archive", "starred", "all"])
+    .optional(),
+  unreadCount: z.number().int().nonnegative().optional(),
+});
+export type FolderInfo = z.infer<typeof folderSchema>;
+
+export const attachmentSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  contentId: z.string().optional(),
+  disposition: z.enum(["inline", "attachment"]).optional(),
+});
+export type AttachmentInfo = z.infer<typeof attachmentSchema>;
+
+export const addressSchema = z.object({
+  name: z.string().optional(),
+  email: z.string().email(),
+});
+export type Address = z.infer<typeof addressSchema>;
+
+export const messageSchema = z.object({
+  id: z.string(),
+  threadId: z.string(),
+  accountId: z.string(),
+  draftId: z.string().optional(),
+  from: addressSchema.optional(),
+  replyTo: z.array(addressSchema).optional(),
+  to: z.array(addressSchema),
+  cc: z.array(addressSchema).optional(),
+  bcc: z.array(addressSchema).optional(),
+  subject: z.string(),
+  date: z.string(),
+  snippet: z.string().optional(),
+  body: z.object({ text: z.string().optional(), html: z.string().optional() }).optional(),
+  attachments: z.array(attachmentSchema).optional(),
+  flags: z.object({
+    read: z.boolean(),
+    starred: z.boolean(),
+    draft: z.boolean(),
+  }),
+  labels: z.array(z.string()).optional(),
+  folderRole: z.string().optional(),
+});
+export type MailMessage = z.infer<typeof messageSchema>;
+
+export const threadSummarySchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  accountEmail: z.string(),
+  subject: z.string(),
+  senderName: z.string(),
+  senderEmail: z.string(),
+  snippet: z.string(),
+  date: z.string(),
+  unread: z.boolean(),
+  starred: z.boolean(),
+  draft: z.boolean(),
+  hasAttachments: z.boolean(),
+  messageCount: z.number().int().positive(),
+  labels: z.array(z.string()),
+  folderRoles: z.array(z.string()),
+});
+export type ThreadSummary = z.infer<typeof threadSummarySchema>;
+
+export const threadSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  accountEmail: z.string(),
+  subject: z.string(),
+  messages: z.array(messageSchema),
+});
+export type MailThread = z.infer<typeof threadSchema>;
+
+export const threadListInputSchema = z.object({
+  view: mailboxViewSchema,
+  accountIds: z.array(z.string()).optional(),
+  label: z.string().optional(),
+  query: z.string().max(500).optional(),
+  refresh: z.boolean().optional(),
+  cursor: z.string().optional(),
+  pageSize: z.number().int().min(1).max(200).default(100),
+});
+export type ThreadListInput = z.input<typeof threadListInputSchema>;
+
+export const threadPageSchema = z.object({
+  items: z.array(threadSummarySchema),
+  nextCursor: z.string().optional(),
+  totalCount: z.number().int().nonnegative(),
+  syncing: z.boolean(),
+});
+export type ThreadPage = z.infer<typeof threadPageSchema>;
+
+export const threadTargetSchema = z.object({
+  accountId: z.string(),
+  threadId: z.string(),
+});
+export const modifyActionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.enum([
+      "markRead",
+      "markUnread",
+      "star",
+      "unstar",
+      "archive",
+      "trash",
+      "untrash",
+      "delete",
+      "discardDraft",
+    ]),
+  }),
+  z.object({ type: z.literal("move"), folder: z.string() }),
+  z.object({
+    type: z.literal("addLabels"),
+    labels: z.array(z.string()).min(1),
+  }),
+  z.object({
+    type: z.literal("removeLabels"),
+    labels: z.array(z.string()).min(1),
+  }),
+]);
+export type ModifyActionInput = z.infer<typeof modifyActionSchema>;
+
+export const mailModifyInputSchema = z.object({
+  targets: z.array(threadTargetSchema).min(1),
+  action: modifyActionSchema,
+});
+
+export const composeAttachmentSchema = z.object({
+  token: z.string(),
+  filename: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  contentId: z.string().optional(),
+  disposition: z.enum(["inline", "attachment"]).optional(),
+});
+export type ComposeAttachment = z.infer<typeof composeAttachmentSchema>;
+
+export const composeInputSchema = z.object({
+  accountId: z.string(),
+  draftId: z.string().optional(),
+  to: z.array(addressSchema),
+  cc: z.array(addressSchema).optional(),
+  bcc: z.array(addressSchema).optional(),
+  subject: z.string().max(998),
+  text: z.string().optional(),
+  html: z.string().optional(),
+  replyToMessageId: z.string().optional(),
+  replyAll: z.boolean().optional(),
+  attachments: z.array(composeAttachmentSchema).max(20).optional(),
+});
+export const sendInputSchema = composeInputSchema.refine((value) => Boolean(value.text?.trim()), {
+  message: "Write a message before sending.",
+});
+export type ComposeInput = z.infer<typeof composeInputSchema>;
+
+export const mailForwardInputSchema = z
+  .object({
+    target: threadTargetSchema,
+    messageId: z.string(),
+    to: z.array(addressSchema),
+    cc: z.array(addressSchema).optional(),
+    bcc: z.array(addressSchema).optional(),
+    subject: z.string().max(998),
+    comment: z.string().optional(),
+    text: z.string().optional(),
+    html: z.string().optional(),
+    attachments: z.array(composeAttachmentSchema).max(20).optional(),
+    includeAttachments: z.boolean().optional(),
+  })
+  .refine((value) => Boolean(value.to.length || value.cc?.length || value.bcc?.length), {
+    message: "Add at least one recipient before forwarding.",
+    path: ["to"],
+  });
+
+export const draftResultSchema = z.object({
+  draftId: z.string(),
+  messageId: z.string(),
+});
+export const sendResultSchema = z.object({
+  id: z.string(),
+  threadId: z.string(),
+});
+export const draftDeleteInputSchema = z.object({
+  accountId: z.string(),
+  draftId: z.string(),
+});
+export const attachmentSaveInputSchema = z.object({
+  accountId: z.string(),
+  messageId: z.string(),
+  attachment: attachmentSchema,
+});
+export const attachmentInlineInputSchema = z.object({
+  accountId: z.string(),
+  messageId: z.string(),
+  attachmentId: z.string(),
+  mimeType: z.string(),
+});
+export const attachmentPrepareInputSchema = z.object({
+  accountId: z.string(),
+  messageId: z.string(),
+  attachments: z.array(attachmentSchema).max(20),
+});
+export const attachmentReleaseInputSchema = z.array(z.string()).max(20);
+
+export const syncStateSchema = z.object({
+  status: z.enum(["idle", "syncing", "offline", "error"]),
+  lastSyncedAt: z.string().optional(),
+  error: z.string().optional(),
+});
+export type SyncState = z.infer<typeof syncStateSchema>;
+
+export const telemetryStatusSchema = z.object({
+  enabled: z.boolean(),
+  lockedByEnvironment: z.boolean(),
+});
+export type TelemetryStatus = z.infer<typeof telemetryStatusSchema>;
+
+export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
+export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
+
+export const bootstrapSchema = z.object({
+  accounts: z.array(accountSchema),
+  folders: z.array(folderSchema),
+  unreadCount: z.number().int().nonnegative(),
+  draftCount: z.number().int().nonnegative(),
+  countsByAccount: z.record(
+    z.object({
+      unreadCount: z.number().int().nonnegative(),
+      draftCount: z.number().int().nonnegative(),
+    }),
+  ),
+  sync: syncStateSchema,
+  telemetry: telemetryStatusSchema,
+  preferences: z.object({
+    appearance: appearancePreferenceSchema,
+    dockBadge: z.boolean(),
+  }),
+  license: z.object({
+    plan: z.string(),
+    maxMembers: z.number().int().positive(),
+    maxAccounts: z.number().int().positive(),
+    warning: z.string().optional(),
+  }),
+});
+export type BootstrapState = z.infer<typeof bootstrapSchema>;
+
+export const appErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  retryable: z.boolean(),
+});
+export type AppError = z.infer<typeof appErrorSchema>;
+
+export const featureSchema = z.enum([
+  "navigation",
+  "search",
+  "thread",
+  "compose",
+  "drafts",
+  "attachments",
+  "bulk_actions",
+  "accounts",
+  "notifications",
+  "settings",
+]);
+export const featureActionSchema = z.enum([
+  "viewed",
+  "opened",
+  "submitted",
+  "completed",
+  "failed",
+  "created",
+  "updated",
+  "deleted",
+  "enabled",
+  "disabled",
+  "loaded_more",
+]);
+export const featureSourceSchema = z.enum([
+  "sidebar",
+  "toolbar",
+  "thread_list",
+  "thread_detail",
+  "compose",
+  "onboarding",
+  "settings",
+  "shortcut",
+]);
+export const featureEventSchema = z.object({
+  feature: featureSchema,
+  action: featureActionSchema,
+  source: featureSourceSchema,
+});
+export type FeatureEvent = z.infer<typeof featureEventSchema>;
+
+export const appEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("sync-status"), state: syncStateSchema }),
+  z.object({ type: z.literal("cache-changed") }),
+  z.object({ type: z.literal("accounts-changed") }),
+  z.object({ type: z.literal("new-mail"), count: z.number().int().positive() }),
+  z.object({ type: z.literal("window-close-requested") }),
+]);
+export type AppEvent = z.infer<typeof appEventSchema>;
+
+export interface FluxmailDesktopApi {
+  bootstrap(): Promise<BootstrapState>;
+  accounts: {
+    list(): Promise<AccountInfo[]>;
+    connectGmail(): Promise<AccountInfo>;
+    reconnect(accountId: string): Promise<AccountInfo>;
+    remove(accountId: string): Promise<void>;
+  };
+  mail: {
+    listThreads(input: ThreadListInput): Promise<ThreadPage>;
+    search(input: ThreadListInput): Promise<ThreadPage>;
+    getThread(target: z.infer<typeof threadTargetSchema>): Promise<MailThread>;
+    modify(input: {
+      targets: Array<z.infer<typeof threadTargetSchema>>;
+      action: ModifyActionInput;
+    }): Promise<void>;
+    forward(input: {
+      target: z.infer<typeof threadTargetSchema>;
+      messageId: string;
+      to: Address[];
+      cc?: Address[];
+      bcc?: Address[];
+      subject: string;
+      comment?: string;
+      text?: string;
+      html?: string;
+      attachments?: ComposeAttachment[];
+      includeAttachments?: boolean;
+    }): Promise<void>;
+  };
+  drafts: {
+    save(input: ComposeInput): Promise<{ draftId: string; messageId: string }>;
+    delete(input: { accountId: string; draftId: string }): Promise<void>;
+    send(input: ComposeInput): Promise<{ id: string; threadId: string }>;
+  };
+  attachments: {
+    pick(): Promise<ComposeAttachment[]>;
+    prepare(input: z.infer<typeof attachmentPrepareInputSchema>): Promise<ComposeAttachment[]>;
+    release(tokens: string[]): Promise<void>;
+    save(input: {
+      accountId: string;
+      messageId: string;
+      attachment: AttachmentInfo;
+    }): Promise<boolean>;
+    inlineData(input: {
+      accountId: string;
+      messageId: string;
+      attachmentId: string;
+      mimeType: string;
+    }): Promise<string>;
+  };
+  sync: { refresh(input?: ThreadListInput): Promise<void> };
+  telemetry: {
+    getStatus(): Promise<TelemetryStatus>;
+    setEnabled(enabled: boolean): Promise<TelemetryStatus>;
+  };
+  preferences: {
+    setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
+    setDockBadge(enabled: boolean): Promise<boolean>;
+  };
+  analytics: { trackFeature(event: FeatureEvent): Promise<void> };
+  system: {
+    openExternal(url: string): Promise<void>;
+    cancelWindowClose(): Promise<void>;
+    confirmWindowClose(): Promise<void>;
+    restart(): Promise<void>;
+  };
+  onEvent(callback: (event: AppEvent) => void): () => void;
+}
+
+export const IPC = {
+  bootstrap: "fluxmail:bootstrap",
+  accountsList: "fluxmail:accounts:list",
+  accountsConnect: "fluxmail:accounts:connect",
+  accountsReconnect: "fluxmail:accounts:reconnect",
+  accountsRemove: "fluxmail:accounts:remove",
+  mailList: "fluxmail:mail:list",
+  mailSearch: "fluxmail:mail:search",
+  mailThread: "fluxmail:mail:thread",
+  mailModify: "fluxmail:mail:modify",
+  mailForward: "fluxmail:mail:forward",
+  draftSave: "fluxmail:draft:save",
+  draftDelete: "fluxmail:draft:delete",
+  draftSend: "fluxmail:draft:send",
+  attachmentPick: "fluxmail:attachment:pick",
+  attachmentPrepare: "fluxmail:attachment:prepare",
+  attachmentRelease: "fluxmail:attachment:release",
+  attachmentSave: "fluxmail:attachment:save",
+  attachmentInline: "fluxmail:attachment:inline",
+  syncRefresh: "fluxmail:sync:refresh",
+  telemetryStatus: "fluxmail:telemetry:status",
+  telemetrySet: "fluxmail:telemetry:set",
+  preferencesAppearanceSet: "fluxmail:preferences:appearance:set",
+  preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
+  analyticsFeature: "fluxmail:analytics:feature",
+  systemOpenExternal: "fluxmail:system:open-external",
+  systemWindowCloseCancel: "fluxmail:system:window-close-cancel",
+  systemWindowCloseConfirm: "fluxmail:system:window-close-confirm",
+  systemRestart: "fluxmail:system:restart",
+  event: "fluxmail:event",
+} as const;
