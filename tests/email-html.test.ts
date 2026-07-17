@@ -49,6 +49,14 @@ describe("email HTML security", () => {
     expect(document).toMatch(/a\{color:[^;]+;cursor:pointer;/);
   });
 
+  it("keeps HTTP links from email newsletters clickable", () => {
+    const href =
+      "http://r.email-newsletters.timeout.com/mk/cl/f/sh/WCPzyXJTZ7fg2XUId0vTYhksBEGnwkHR/UEiRvfTGR4mW";
+    const document = buildEmailDocument(`<a href="${href}">Summer Streets</a>`, {}, false);
+
+    expect(document).toContain(`href="${href}"`);
+  });
+
   it("resolves CID images locally and permits HTTPS images only after consent", () => {
     const document = buildEmailDocument(
       '<img src="cid:logo"><img src="https://images.example/photo.jpg">',
