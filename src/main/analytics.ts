@@ -61,12 +61,13 @@ export class DesktopAnalytics {
 
   async setEnabled(enabled: boolean): Promise<TelemetryStatus> {
     if (environmentForcesOptOut(process.env)) return this.status();
-    await this.client.shutdown().catch(() => undefined);
+    const previousClient = this.client;
     setTelemetryEnabled(this.options.dataDir, enabled);
     this.client = this.createClient({
       dataDir: this.options.dataDir,
       env: this.effectiveEnvironment(),
     });
+    await previousClient.shutdown().catch(() => undefined);
     return this.status();
   }
 

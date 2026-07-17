@@ -108,6 +108,38 @@ describe("DesktopAnalytics", () => {
     expect(environmentForcesOptOut({ FLUXMAIL_TELEMETRY: "0" })).toBe(true);
   });
 
+  it("saves the preference before the old client finishes shutting down", async () => {
+    let finishShutdown: () => void = () => undefined;
+    const firstClient: Telemetry = {
+      capture: vi.fn(),
+      shutdown: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishShutdown = resolve;
+          }),
+      ),
+    };
+    const secondClient: Telemetry = {
+      capture: vi.fn(),
+      shutdown: vi.fn(async () => undefined),
+    };
+    const createClient = vi.fn().mockReturnValueOnce(firstClient).mockReturnValue(secondClient);
+    const analytics = new DesktopAnalytics({
+      dataDir: temporaryDirectory(),
+      packaged: true,
+      testClient: true,
+      createClient: createClient as typeof createTelemetry,
+    });
+
+    const update = analytics.setEnabled(false);
+
+    expect(analytics.status().enabled).toBe(false);
+    expect(createClient).toHaveBeenCalledTimes(2);
+    finishShutdown();
+    await expect(update).resolves.toMatchObject({ enabled: false });
+    await analytics.shutdown();
+  });
+
   it("updates the saved preference in development without sending events", async () => {
     const captures: Array<{
       event: string;
