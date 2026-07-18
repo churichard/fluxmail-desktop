@@ -1326,6 +1326,7 @@ textarea:focus-visible,
   border: 0;
   padding: 12px 11px;
   background: var(--mail-surface);
+  cursor: default;
   text-align: left;
   transition: background-color 100ms ease;
 }

@@ -571,6 +571,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".message-from strong")).toHaveText("Fluxmail Team");
     await expect(page.locator(".message-from-email")).toHaveText("<team@fluxmail.test>");
     await expect(page.locator(".sender-avatar")).toHaveCSS("border-radius", "50%");
+    await expect(page.locator(".message-header")).toHaveCSS("cursor", "default");
     const senderFontSize = await page
       .locator(".message-from strong")
       .evaluate((node) => getComputedStyle(node).fontSize);
