@@ -4,15 +4,18 @@ import { Image as ImageIcon } from "lucide-react";
 import type { MailMessage } from "../../shared/contracts";
 import { parseExternalUrl } from "../../shared/external-url";
 import { convertEmailToDarkMode, removeSenderDarkModeCSS } from "../email/convert-to-dark-mode";
+import { blockTrackingPixels, type TrackingPixelDetail } from "../email/tracking-pixels";
 
 export function EmailHtml({
   message,
   blockRemoteImages = true,
   onError,
+  onTrackingPixelsChange,
 }: {
   message: MailMessage;
   blockRemoteImages?: boolean;
   onError?(message: string): void;
+  onTrackingPixelsChange?(trackingPixels: TrackingPixelDetail[]): void;
 }) {
   const [loadImages, setLoadImages] = useState(!blockRemoteImages);
   const [cidUrls, setCidUrls] = useState<Record<string, string>>({});
@@ -62,15 +65,20 @@ export function EmailHtml({
     };
   }, [message.accountId, message.attachments, message.id]);
 
-  const source = useMemo(
+  const rendered = useMemo(
     () =>
-      buildEmailDocument(
+      buildEmailContent(
         message.body?.html || textToHtml(message.body?.text || ""),
         cidUrls,
         loadImages,
         darkMode,
       ),
     [cidUrls, darkMode, loadImages, message.body?.html, message.body?.text],
+  );
+
+  useEffect(
+    () => onTrackingPixelsChange?.(rendered.trackingPixels),
+    [onTrackingPixelsChange, rendered.trackingPixels],
   );
 
   return (
@@ -86,7 +94,7 @@ export function EmailHtml({
         title="Email message"
         className="email-frame"
         sandbox="allow-same-origin"
-        srcDoc={source}
+        srcDoc={rendered.source}
         style={{ height }}
         onLoad={() => {
           resizeObserverRef.current?.disconnect();
@@ -160,23 +168,16 @@ export function buildEmailDocument(
   loadImages: boolean,
   darkMode = false,
 ): string {
-  const clean = DOMPurify.sanitize(rawHtml, {
-    USE_PROFILES: { html: true },
-    FORBID_TAGS: [
-      "script",
-      "iframe",
-      "object",
-      "embed",
-      "form",
-      "input",
-      "button",
-      "video",
-      "audio",
-    ],
-    FORBID_ATTR: ["srcdoc"],
-    ALLOWED_URI_REGEXP:
-      /^(?:(?:https?|mailto|tel|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
-  });
+  return buildEmailContent(rawHtml, cidUrls, loadImages, darkMode).source;
+}
+
+function buildEmailContent(
+  rawHtml: string,
+  cidUrls: Record<string, string>,
+  loadImages: boolean,
+  darkMode = false,
+): { source: string; trackingPixels: TrackingPixelDetail[] } {
+  const clean = sanitizeEmailHtml(rawHtml);
   const themedHtml = darkMode
     ? convertEmailToDarkMode(clean, {
         preserveBrands: true,
@@ -188,20 +189,13 @@ export function buildEmailDocument(
     : removeSenderDarkModeCSS(clean);
   const document = new DOMParser().parseFromString(themedHtml, "text/html");
   normalizeNonWrappingText(document);
+  const trackingReport = blockTrackingPixels(document);
   for (const image of document.querySelectorAll("img")) {
     const source = image.getAttribute("src") || "";
     if (source.startsWith("cid:")) {
       const cid = source.slice(4).replace(/^<|>$/g, "");
       if (cidUrls[cid]) image.setAttribute("src", cidUrls[cid]);
       else image.removeAttribute("src");
-      continue;
-    }
-    const width = Number(image.getAttribute("width") || image.style.width.replace("px", "") || 0);
-    const height = Number(
-      image.getAttribute("height") || image.style.height.replace("px", "") || 0,
-    );
-    if ((width > 0 && width <= 2) || (height > 0 && height <= 2)) {
-      image.remove();
       continue;
     }
     if (/^https?:/i.test(source) && !loadImages) {
@@ -231,7 +225,30 @@ export function buildEmailDocument(
         muted: "#666666",
         link: "#315ecc",
       };
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`;
+  return {
+    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
+    trackingPixels: trackingReport.trackingPixels,
+  };
+}
+
+function sanitizeEmailHtml(rawHtml: string): string {
+  return DOMPurify.sanitize(rawHtml, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: [
+      "script",
+      "iframe",
+      "object",
+      "embed",
+      "form",
+      "input",
+      "button",
+      "video",
+      "audio",
+    ],
+    FORBID_ATTR: ["srcdoc"],
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:https?|mailto|tel|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+  });
 }
 
 function useResolvedDarkTheme(): boolean {
@@ -280,10 +297,57 @@ function textToHtml(value: string): string {
 }
 
 export function hasRemoteImages(value: string): boolean {
-  const document = new DOMParser().parseFromString(value, "text/html");
-  return [...document.querySelectorAll("img, source")].some((element) =>
-    [element.getAttribute("src"), element.getAttribute("srcset")].some(
-      (source) => source && /(?:^|[\s,])https?:\/\//i.test(source),
+  const document = new DOMParser().parseFromString(sanitizeEmailHtml(value), "text/html");
+  blockTrackingPixels(document);
+  const imageAttributes = [...document.querySelectorAll("img, source, svg image, [background]")]
+    .flatMap((element) => [
+      element.getAttribute("src"),
+      element.getAttribute("srcset"),
+      element.getAttribute("href"),
+      element.getAttribute("xlink:href"),
+      element.getAttribute("background"),
+    ])
+    .filter((source): source is string => Boolean(source));
+  const css = [
+    ...[...document.querySelectorAll<HTMLElement>("[style]")].map(
+      (element) => element.style.cssText,
     ),
+    ...[...document.querySelectorAll("style")].map((style) => style.textContent || ""),
+  ];
+  return imageAttributes.some((source) => /https?:\/\//i.test(source)) || hasRemoteCssImage(css);
+}
+
+const CSS_IMAGE_DECLARATION =
+  /(?:^|[;{])\s*(?:background(?:-image)?|border-image(?:-source)?|content|cursor|list-style(?:-image)?|mask(?:-image)?|-webkit-mask(?:-image)?|shape-outside)\s*:\s*([^;}]+)/gi;
+const CSS_CUSTOM_PROPERTY = /(?:^|[;{])\s*(--[-\w]+)\s*:\s*([^;}]+)/gi;
+const REMOTE_CSS_URL = /url\(\s*(?:(?:["'])?\s*https?:\/\/)/i;
+const REMOTE_IMAGE_SET_STRING = /(?:-webkit-)?image-set\([^)]*["']\s*https?:\/\//i;
+
+function hasRemoteCssImage(values: string[]): boolean {
+  const css = values.join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+  const customProperties = new Map<string, string[]>();
+  for (const match of css.matchAll(CSS_CUSTOM_PROPERTY)) {
+    const definitions = customProperties.get(match[1]) ?? [];
+    definitions.push(match[2]);
+    customProperties.set(match[1], definitions);
+  }
+  return [...css.matchAll(CSS_IMAGE_DECLARATION)].some((match) =>
+    cssValueHasRemoteImage(match[1], customProperties, new Set()),
   );
+}
+
+function cssValueHasRemoteImage(
+  value: string,
+  customProperties: Map<string, string[]>,
+  visited: Set<string>,
+): boolean {
+  if (REMOTE_CSS_URL.test(value) || REMOTE_IMAGE_SET_STRING.test(value)) return true;
+  return [...value.matchAll(/var\(\s*(--[-\w]+)/gi)].some((match) => {
+    const property = match[1];
+    if (visited.has(property)) return false;
+    const nextVisited = new Set(visited).add(property);
+    return (customProperties.get(property) ?? []).some((definition) =>
+      cssValueHasRemoteImage(definition, customProperties, nextVisited),
+    );
+  });
 }

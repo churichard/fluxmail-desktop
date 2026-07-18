@@ -108,6 +108,55 @@ export function IconButton({
   );
 }
 
+export function TooltipLabel({
+  label,
+  children,
+  className = "",
+  tooltipContent,
+  tooltipClassName,
+  tooltipSide = "top",
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+  tooltipContent?: ReactNode;
+  tooltipClassName?: string;
+  tooltipSide?: TooltipSide;
+}) {
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const tooltipId = useId();
+  const tooltip = useTooltipVisibility();
+  return (
+    <span
+      className="tooltip-control"
+      onPointerEnter={tooltip.showLater}
+      onPointerLeave={tooltip.hide}
+      onFocusCapture={tooltip.showLater}
+      onBlurCapture={tooltip.hide}
+    >
+      <span
+        ref={anchorRef}
+        tabIndex={0}
+        className={className}
+        aria-label={label}
+        aria-describedby={tooltip.visible ? tooltipId : undefined}
+      >
+        {children}
+      </span>
+      {tooltip.visible ? (
+        <TooltipBubble
+          id={tooltipId}
+          anchorRef={anchorRef}
+          label={label}
+          content={tooltipContent}
+          className={tooltipClassName}
+          side={tooltipSide}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 export function MenuButton({
   label,
   children,
@@ -263,16 +312,20 @@ function TooltipBubble({
   id,
   anchorRef,
   label,
+  content,
+  className = "",
   shortcut,
   side,
 }: {
   id: string;
   anchorRef: RefObject<HTMLElement | null>;
   label: string;
+  content?: ReactNode;
+  className?: string;
   shortcut?: KeyboardShortcutHint;
   side: TooltipSide;
 }) {
-  const bubbleRef = useRef<HTMLSpanElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
   const place = useCallback(() => {
     const anchor = anchorRef.current;
@@ -303,20 +356,20 @@ function TooltipBubble({
   }, [anchorRef, place]);
 
   return createPortal(
-    <span
+    <div
       ref={bubbleRef}
       id={id}
-      className={`tooltip-bubble ${position.ready ? "" : "measuring"}`}
+      className={`tooltip-bubble ${className} ${position.ready ? "" : "measuring"}`}
       role="tooltip"
       style={{ left: position.left, top: position.top }}
     >
-      <span>{label}</span>
+      {content ?? <span>{label}</span>}
       {shortcut ? (
         <kbd className="tooltip-shortcut" aria-hidden="true">
           {shortcut.display}
         </kbd>
       ) : null}
-    </span>,
+    </div>,
     document.body,
   );
 }

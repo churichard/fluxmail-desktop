@@ -26,6 +26,7 @@ import type {
 import type { ComposeSeed } from "./ComposeDialog";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { EmailHtml } from "./EmailHtml";
+import { TrackingPixelIndicator } from "./TrackingPixelIndicator";
 import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEditor";
 import { IconButton, MenuButton } from "./Controls";
 import { OverlayScrollbar } from "./OverlayScrollbar";
@@ -35,6 +36,7 @@ import {
   mailboxMoveAction,
   mailboxMoveLabel,
 } from "../mail-actions";
+import type { TrackingPixelDetail } from "../email/tracking-pixels";
 
 interface Props {
   view: MailboxView;
@@ -287,20 +289,35 @@ function MessageCard({
   onError(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [trackingPixels, setTrackingPixels] = useState<TrackingPixelDetail[]>([]);
   const senderName = message.from?.name || message.from?.email || "Unknown sender";
   const senderEmail =
     message.from?.email && message.from.email !== senderName ? message.from.email : undefined;
   return (
     <article className="message-card">
-      <button className="message-header" onClick={() => setExpanded((value) => !value)}>
+      <div className="message-header">
+        <button
+          type="button"
+          className="message-header-toggle"
+          aria-label={expanded ? "Collapse message" : "Expand message"}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        />
         <span className="sender-avatar">{senderName.slice(0, 1).toUpperCase()}</span>
         <span className="message-sender">
-          <span
-            className="message-from"
-            title={senderEmail ? `${senderName} <${senderEmail}>` : senderName}
-          >
-            <strong>{senderName}</strong>
-            {senderEmail ? <span className="message-from-email">&lt;{senderEmail}&gt;</span> : null}
+          <span className="message-from">
+            <span
+              className="message-from-identity"
+              title={senderEmail ? `${senderName} <${senderEmail}>` : senderName}
+            >
+              <strong>{senderName}</strong>
+              {senderEmail ? (
+                <span className="message-from-email">&lt;{senderEmail}&gt;</span>
+              ) : null}
+            </span>
+            {trackingPixels.length ? (
+              <TrackingPixelIndicator trackingPixels={trackingPixels} />
+            ) : null}
           </span>
           <small>to {formatRecipients(message.to)}</small>
         </span>
@@ -310,10 +327,15 @@ function MessageCard({
             timeStyle: "short",
           }).format(new Date(message.date))}
         </time>
-      </button>
+      </div>
       {expanded ? (
         <div className="message-body">
-          <EmailHtml message={message} blockRemoteImages={blockRemoteImages} onError={onError} />
+          <EmailHtml
+            message={message}
+            blockRemoteImages={blockRemoteImages}
+            onError={onError}
+            onTrackingPixelsChange={setTrackingPixels}
+          />
           {message.attachments?.length ? (
             <div className="attachment-list">
               {message.attachments
