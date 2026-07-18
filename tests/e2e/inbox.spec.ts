@@ -32,6 +32,20 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".sidebar .brand")).toHaveCount(0);
     await expect(page.locator(".reading-placeholder .brand-mark")).toHaveCount(0);
     await expect(page.locator(".reading-placeholder")).toHaveCSS("user-select", "none");
+    expect(
+      await page.evaluate(() => {
+        const emptyReading = document.querySelector<HTMLElement>(".empty-reading")!;
+        const emptyReadingTitlebar = getComputedStyle(emptyReading, "::before");
+        const sidebarTitlebar = getComputedStyle(
+          document.querySelector<HTMLElement>(".sidebar-titlebar")!,
+        );
+        return {
+          appRegion: emptyReadingTitlebar.getPropertyValue("-webkit-app-region"),
+          emptyReadingHeight: emptyReadingTitlebar.height,
+          sidebarHeight: sidebarTitlebar.height,
+        };
+      }),
+    ).toEqual({ appRegion: "drag", emptyReadingHeight: "46px", sidebarHeight: "46px" });
     await expect(page.locator(".account-picker-icon")).toHaveCount(0);
     await expect(page.getByText(/connected$/)).toHaveCount(0);
     await expect(page.locator(".sidebar").getByRole("button", { name: "Receipts" })).toHaveCount(0);
@@ -944,6 +958,52 @@ test("archives from a row and the email iframe without transferring focus", asyn
 
     await expect(page.locator(".reading-placeholder")).toBeVisible();
     await expect(nextThread).toHaveCount(0);
+  } finally {
+    await electronApp.close();
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("opens DevTools at the bottom without changing window drag regions", async () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-devtools-e2e-"));
+  const electronApp = await electron.launch({
+    args: [process.cwd()],
+    env: {
+      ...process.env,
+      FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
+      FLUXMAIL_DESKTOP_E2E_HEADLESS: "1",
+      FLUXMAIL_DESKTOP_TEST_DATA_DIR: dataDirectory,
+      FLUXMAIL_DATA_DIR: path.join(dataDirectory, ".fluxmail"),
+      FLUXMAIL_TELEMETRY: "0",
+    },
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    const threadHeader = page.locator(".thread-header");
+    const sidebarTitlebar = page.locator(".sidebar-titlebar");
+    await page.locator(".thread-row").first().locator(".thread-open").click();
+    const readingToolbar = page.locator(".reading-toolbar");
+    await expect(threadHeader).toHaveCSS("-webkit-app-region", "drag");
+    await expect(sidebarTitlebar).toHaveCSS("-webkit-app-region", "drag");
+    await expect(readingToolbar).toHaveCSS("-webkit-app-region", "drag");
+
+    const initialViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await electronApp.evaluate(({ BrowserWindow, Menu }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const toggleDevTools = Menu.getApplicationMenu()?.getMenuItemById("toggle-devtools-bottom");
+      if (!window || !toggleDevTools) throw new Error("DevTools menu item is unavailable.");
+      Reflect.apply(toggleDevTools.click, toggleDevTools, [toggleDevTools, window, {}]);
+    });
+    await expect
+      .poll(async () => {
+        const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+        return viewport.width === initialViewport.width && viewport.height < initialViewport.height;
+      })
+      .toBe(true);
+    await expect(threadHeader).toHaveCSS("-webkit-app-region", "drag");
+    await expect(sidebarTitlebar).toHaveCSS("-webkit-app-region", "drag");
+    await expect(readingToolbar).toHaveCSS("-webkit-app-region", "drag");
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

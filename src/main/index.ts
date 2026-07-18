@@ -8,6 +8,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   net,
   nativeTheme,
   Notification,
@@ -16,6 +17,8 @@ import {
   safeStorage,
   shell,
   type IpcMainInvokeEvent,
+  type MenuItem,
+  type MenuItemConstructorOptions,
 } from "electron";
 import { z } from "zod";
 import { isEmailError, type AttachmentInput } from "@fluxmail/core";
@@ -143,6 +146,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       registerIpc();
       createWindow();
+      configureDefaultDevToolsDock();
       if (!startupError) {
         void refresh("startup");
         powerMonitor.on("resume", () => void refresh("resume"));
@@ -282,6 +286,40 @@ function createWindow(): void {
   } else {
     void mainWindow.loadURL("app://fluxmail/index.html").catch(showFatalError);
   }
+}
+
+function configureDefaultDevToolsDock(): void {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menu.items.map(devToolsMenuItemTemplate)));
+}
+
+function devToolsMenuItemTemplate(item: MenuItem): MenuItemConstructorOptions {
+  if (item.role?.toLowerCase() === "toggledevtools") {
+    return {
+      id: "toggle-devtools-bottom",
+      label: item.label,
+      accelerator: item.accelerator ?? undefined,
+      click: (_menuItem, targetWindow) => {
+        const window =
+          targetWindow instanceof BrowserWindow ? targetWindow : BrowserWindow.getFocusedWindow();
+        if (!window) return;
+        if (window.webContents.isDevToolsOpened()) window.webContents.closeDevTools();
+        else window.webContents.openDevTools({ mode: "bottom" });
+      },
+    };
+  }
+  if (item.type === "separator") return { type: "separator" };
+  if (item.role?.toLowerCase() !== "viewmenu" && item.role) return { role: item.role };
+  return {
+    id: item.id || undefined,
+    label: item.label,
+    submenu: item.submenu?.items.map(devToolsMenuItemTemplate),
+    accelerator: item.accelerator ?? undefined,
+    click: item.submenu ? undefined : (item.click as MenuItemConstructorOptions["click"]),
+    enabled: item.enabled,
+    visible: item.visible,
+  };
 }
 
 function registerAppProtocol(): void {

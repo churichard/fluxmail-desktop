@@ -465,6 +465,10 @@ textarea:focus-visible,
   -webkit-app-region: drag;
 }
 
+.reading-pane.empty-reading::before {
+  height: 46px;
+}
+
 .thread-header {
   flex: 0 0 auto;
   padding: 8px 11px;
