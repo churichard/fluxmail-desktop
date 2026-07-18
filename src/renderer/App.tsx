@@ -371,19 +371,19 @@ export function App() {
           })),
           action,
         });
-        if (mailboxContext === mailboxContextRef.current) {
-          if (!optimisticRemoval) setSelection(new Set());
-          setSelectedThread((current) => {
-            if (!current || !targetKeys.has(threadKey(current))) return current;
-            if (shouldClearSelectedThread(submittedSearch ? "search" : view, action))
-              return undefined;
-            if (action.type === "markRead" || action.type === "markUnread")
-              return { ...current, unread: action.type === "markUnread" };
-            if (action.type === "star" || action.type === "unstar")
-              return { ...current, starred: action.type === "star" };
-            return current;
-          });
-        }
+        if (!optimisticRemoval && mailboxContext === mailboxContextRef.current)
+          setSelection(new Set());
+        setSelectedThread((current) => {
+          if (!current || !targetKeys.has(threadKey(current))) return current;
+          if (action.type === "markRead" || action.type === "markUnread")
+            return { ...current, unread: action.type === "markUnread" };
+          if (action.type === "star" || action.type === "unstar")
+            return { ...current, starred: action.type === "star" };
+          if (mailboxContext !== mailboxContextRef.current) return current;
+          if (shouldClearSelectedThread(submittedSearch ? "search" : view, action))
+            return undefined;
+          return current;
+        });
         await loadThreads({
           quiet: optimisticRemoval,
           forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),

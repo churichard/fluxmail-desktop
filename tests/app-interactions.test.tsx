@@ -34,7 +34,7 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   }: {
     threads: ThreadSummary[];
     onSelect(thread: ThreadSummary): void;
-    onModify(action: { type: "archive" }, threads: ThreadSummary[]): Promise<void>;
+    onModify(action: { type: "archive" | "star" }, threads: ThreadSummary[]): Promise<void>;
   }) => (
     <section>
       <span>{threads.length} conversations</span>
@@ -43,6 +43,9 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
           <button onClick={() => onSelect(thread)}>{thread.subject}</button>
           <button onClick={() => void onModify({ type: "archive" }, [thread])}>
             Archive {thread.subject}
+          </button>
+          <button onClick={() => void onModify({ type: "star" }, [thread])}>
+            Star {thread.subject}
           </button>
         </div>
       ))}
@@ -57,7 +60,7 @@ vi.mock("../src/renderer/components/ReadingPane", () => ({
     onQuickReplyDirtyChange,
   }: {
     thread?: ThreadSummary;
-    onModify(action: { type: "unstar" }): Promise<void>;
+    onModify(action: { type: "star" | "unstar" }): Promise<void>;
     onQuickReplyDirtyChange(dirty: boolean): void;
   }) => (
     <section>
@@ -65,7 +68,9 @@ vi.mock("../src/renderer/components/ReadingPane", () => ({
       {thread ? (
         <>
           <button onClick={() => onQuickReplyDirtyChange(true)}>Start quick reply</button>
-          <button onClick={() => void onModify({ type: "unstar" })}>Unstar conversation</button>
+          <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
+            {thread.starred ? "Unstar conversation" : "Star conversation"}
+          </button>
         </>
       ) : null}
     </section>
@@ -293,6 +298,31 @@ describe("App thread navigation", () => {
     await act(async () => finishArchive());
 
     expect(screen.getByText(`Reading ${current.subject}`)).toBeTruthy();
+  });
+
+  it("updates a thread opened in another mailbox when a star finishes", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    let finishStar!: () => void;
+    const pendingStar = new Promise<void>((resolve) => {
+      finishStar = resolve;
+    });
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingStar);
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    fireEvent.click(screen.getByRole("button", { name: "All mail" }));
+    fireEvent.click(await screen.findByRole("button", { name: current.subject }));
+    expect(screen.getByRole("button", { name: "Star conversation" })).toBeTruthy();
+
+    await act(async () => finishStar());
+
+    expect(screen.getByRole("button", { name: "Unstar conversation" })).toBeTruthy();
   });
 
   it("does not run mailbox shortcuts from compose controls", async () => {
