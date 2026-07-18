@@ -797,8 +797,12 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "About",
     ]);
     const settingsContent = settings.locator(".settings-content");
-    await settings.getByText("Shared data format").scrollIntoViewIfNeeded();
-    await expect(settings.getByText("Shared data format")).toBeVisible();
+    const sharedDataFormat = settings.locator(".settings-about span", {
+      hasText: "Shared data format",
+    });
+    await sharedDataFormat.scrollIntoViewIfNeeded();
+    await expect(settings.getByText("Fluxmail version", { exact: true })).toBeVisible();
+    await expect(sharedDataFormat.getByText(/^\d+$/)).toBeVisible();
     expect(
       await settings.evaluate((dialog) => {
         const dialogBounds = dialog.getBoundingClientRect();
