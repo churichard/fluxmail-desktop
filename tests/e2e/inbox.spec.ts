@@ -695,7 +695,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await page.getByText("Receipt for Tuesday", { exact: true }).click();
     const trashToolbar = page.locator(".reading-toolbar");
     await expect(trashToolbar.getByRole("button", { name: "Restore" })).toBeVisible();
-    await expect(trashToolbar.getByRole("button", { name: "Delete permanently" })).toBeVisible();
+    await expect(trashToolbar.getByRole("button", { name: "Delete permanently" })).toHaveCount(0);
     await trashToolbar.getByRole("button", { name: "Restore" }).click();
     await expect(page.getByText("Receipt for Tuesday", { exact: true })).toHaveCount(0);
 

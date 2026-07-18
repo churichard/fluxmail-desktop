@@ -23,6 +23,7 @@ const account: AccountInfo = {
   displayName: "Fluxmail Test",
   provider: "gmail",
   status: "active",
+  canPermanentlyDelete: false,
 };
 
 function todayAt(hour: number): string {

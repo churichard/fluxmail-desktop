@@ -48,6 +48,7 @@ interface Props {
   searchRef: RefObject<HTMLInputElement | null>;
   sync: SyncState;
   labels: string[];
+  permanentDeleteAccountIds: ReadonlySet<string>;
   sidebarCollapsed: boolean;
   onSearchText(value: string): void;
   onSearch(): void;
@@ -78,6 +79,10 @@ export function ThreadListPane(props: Props) {
       ? "mixed"
       : "unchecked";
   const readAction = getSelectionReadAction(selectedThreads);
+  const deleteAction = mailboxDeleteAction(
+    props.view,
+    selectedThreads.every((thread) => props.permanentDeleteAccountIds.has(thread.accountId)),
+  );
   const groups = useMemo(() => groupThreadsByDate(props.threads), [props.threads]);
   const entries = useMemo(
     () =>
@@ -154,13 +159,15 @@ export function ThreadListPane(props: Props) {
                 >
                   {props.view === "trash" ? <Undo2 size={16} /> : <Archive size={16} />}
                 </IconButton>
-                <IconButton
-                  label={mailboxDeleteLabel(props.view)}
-                  shortcut={KEYBOARD_SHORTCUTS.trash}
-                  onClick={() => void props.onModify(mailboxDeleteAction(props.view))}
-                >
-                  <Trash2 size={16} />
-                </IconButton>
+                {deleteAction ? (
+                  <IconButton
+                    label={mailboxDeleteLabel(props.view)}
+                    shortcut={KEYBOARD_SHORTCUTS.trash}
+                    onClick={() => void props.onModify(deleteAction)}
+                  >
+                    <Trash2 size={16} />
+                  </IconButton>
+                ) : null}
                 <IconButton
                   label={readAction === "markRead" ? "Mark read" : "Mark unread"}
                   shortcut={KEYBOARD_SHORTCUTS.toggleRead}

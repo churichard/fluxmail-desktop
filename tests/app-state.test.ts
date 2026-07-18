@@ -44,10 +44,11 @@ describe("mail view optimistic updates", () => {
     expect(shouldOptimisticallyRemoveFromView("drafts", { type: "discardDraft" })).toBe(true);
   });
 
-  it("uses Trash-specific move and delete actions", () => {
+  it("hides permanent delete unless the account supports it", () => {
     expect(mailboxMoveAction("trash")).toEqual({ type: "untrash" });
     expect(mailboxMoveAction("spam")).toEqual({ type: "move", folder: "archive" });
-    expect(mailboxDeleteAction("trash")).toEqual({ type: "delete" });
+    expect(mailboxDeleteAction("trash")).toBeUndefined();
+    expect(mailboxDeleteAction("trash", true)).toEqual({ type: "delete" });
     expect(mailboxMoveLabel("trash")).toBe("Restore");
     expect(mailboxDeleteLabel("trash")).toBe("Delete permanently");
     expect(mailboxMoveAction("inbox")).toEqual({ type: "archive" });

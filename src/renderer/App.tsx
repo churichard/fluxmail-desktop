@@ -68,6 +68,15 @@ export function App() {
   }, [mailboxContext]);
 
   const accountIds = useMemo(() => (accountId ? [accountId] : undefined), [accountId]);
+  const permanentDeleteAccountIds = useMemo(
+    () =>
+      new Set(
+        (bootstrap?.accounts ?? [])
+          .filter((account) => account.canPermanentlyDelete)
+          .map((account) => account.id),
+      ),
+    [bootstrap?.accounts],
+  );
   const handleQuickReplyDirtyChange = useCallback((dirty: boolean) => {
     quickReplyDirty.current = dirty;
   }, []);
@@ -533,7 +542,14 @@ export function App() {
       const activeView = submittedSearch ? "search" : view;
       if (event.key.toLowerCase() === "e")
         void modify(mailboxMoveAction(activeView), actionTargets);
-      if (event.key === "#") void modify(mailboxDeleteAction(activeView), actionTargets);
+      const deleteAction = mailboxDeleteAction(
+        activeView,
+        Boolean(
+          actionTargets?.length &&
+          actionTargets.every((thread) => permanentDeleteAccountIds.has(thread.accountId)),
+        ),
+      );
+      if (event.key === "#" && deleteAction) void modify(deleteAction, actionTargets);
       if (event.key.toLowerCase() === "s" && selectedThread)
         void modify({ type: selectedThread.starred ? "unstar" : "star" }, [selectedThread]);
       if (event.key.toLowerCase() === "r" && selectedThread)
@@ -567,11 +583,14 @@ export function App() {
     openCompose,
     openSeededCompose,
     openThread,
+    permanentDeleteAccountIds,
     refreshMail,
     selectedThread,
     selection,
     settingsOpen,
+    submittedSearch,
     threads,
+    view,
   ]);
 
   if (!bootstrap) return <Splash error={startupError} />;
@@ -637,6 +656,7 @@ export function App() {
         searchRef={searchRef}
         sync={bootstrap.sync}
         labels={availableLabels}
+        permanentDeleteAccountIds={permanentDeleteAccountIds}
         sidebarCollapsed={sidebarCollapsed}
         onSearchText={setSearchText}
         onSearch={submitSearch}
@@ -680,6 +700,9 @@ export function App() {
         view={submittedSearch ? "search" : view}
         thread={selectedThread}
         labels={availableLabels}
+        allowPermanentDelete={Boolean(
+          selectedThread && permanentDeleteAccountIds.has(selectedThread.accountId),
+        )}
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }

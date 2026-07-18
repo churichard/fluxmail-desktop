@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "@fluxmail/core";
-import { IncompatibleStoreError, type StoreCompatibility } from "fluxmail";
+import { encryptString, IncompatibleStoreError, type StoreCompatibility } from "fluxmail";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAnalytics } from "../src/main/analytics";
 import { MailCache } from "../src/main/cache";
@@ -12,18 +12,83 @@ import {
   shouldUseBundledGoogleConfig,
 } from "../src/main/fluxmail-runtime";
 import type { AccountInfo } from "../src/shared/contracts";
+import { GMAIL_FULL_ACCESS_SCOPE, GMAIL_MODIFY_SCOPE } from "../src/main/oauth";
 
 const account = {
   id: "account-1",
   email: "me@example.com",
   provider: "gmail" as const,
   status: "active" as const,
+  canPermanentlyDelete: false,
 };
 const directories: string[] = [];
 
 afterEach(() => {
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
+});
+
+describe("FluxmailRuntime account capabilities", () => {
+  it("reads the latest permanent-delete grant from shared Gmail credentials", () => {
+    const encryptionKey = Buffer.alloc(32, 7);
+    let encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({ scope: GMAIL_MODIFY_SCOPE }),
+    );
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+    });
+    const context = (
+      runtime as unknown as {
+        context: {
+          config: Record<string, unknown>;
+          db?: unknown;
+        };
+      }
+    ).context;
+    context.config.encryptionKey = encryptionKey;
+    context.db = {
+      $client: {
+        prepare: vi.fn(() => ({
+          get: vi.fn(() => ({ encrypted_credentials: encryptedCredentials })),
+        })),
+      },
+    };
+
+    expect(runtime.accounts()).toEqual([
+      expect.objectContaining({ id: account.id, canPermanentlyDelete: false }),
+    ]);
+
+    encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({ scope: GMAIL_FULL_ACCESS_SCOPE }),
+    );
+
+    expect(runtime.accounts()).toEqual([
+      expect.objectContaining({ id: account.id, canPermanentlyDelete: true }),
+    ]);
+
+    context.config.google = {
+      clientId: "current-custom-client",
+      clientSecret: "current-custom-secret",
+    };
+    encryptedCredentials = encryptString(encryptionKey, JSON.stringify({}));
+
+    expect(runtime.accounts()).toEqual([
+      expect.objectContaining({ id: account.id, canPermanentlyDelete: false }),
+    ]);
+
+    encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({ fluxmailOAuthClient: { clientId: "another-custom-client" } }),
+    );
+
+    expect(runtime.accounts()).toEqual([
+      expect.objectContaining({ id: account.id, canPermanentlyDelete: true }),
+    ]);
+  });
 });
 
 describe("FluxmailRuntime thread loading", () => {
