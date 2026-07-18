@@ -2,14 +2,19 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildEmailDocument,
   EmailHtml,
   hasRemoteImages,
 } from "../src/renderer/components/EmailHtml";
+import { TrackingPixelIndicator } from "../src/renderer/components/TrackingPixelIndicator";
 import { convertEmailToDarkMode } from "../src/renderer/email/convert-to-dark-mode";
+import {
+  blockTrackingPixels,
+  TRACKING_RULESET_METADATA,
+} from "../src/renderer/email/tracking-pixels";
 import type { MailMessage } from "../src/shared/contracts";
 
 globalThis.ResizeObserver = class ResizeObserver {
@@ -82,6 +87,245 @@ describe("email HTML security", () => {
     expect(document).toContain("data:image/png;base64,AAAA");
     expect(document).toContain('src="https://images.example/photo.jpg"');
     expect(document).toContain("img-src data: blob: https:;");
+  });
+
+  it("blocks known tracking services even when remote images are allowed", () => {
+    const document = buildEmailDocument(
+      `<img src="https://t.yesware.com/tt/message-1">
+       <img src="https://images.example/photo.jpg" width="600" height="400">`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("t.yesware.com");
+    expect(document).toContain('src="https://images.example/photo.jpg"');
+  });
+
+  it("blocks hidden and tracking-shaped images without removing responsive content", () => {
+    const document = buildEmailDocument(
+      `<img src="https://images.example/hidden.gif" style="display: none">
+       <img src="https://images.example/css-pixel.gif" style="width: 1px; height: 1px">
+       <img src="https://images.example/open/message-1/pixel.gif?recipient_id=abc">
+       <img src="https://track.example.com/newsletter.jpg" style="width: 100%; max-width: 600px">`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("hidden.gif");
+    expect(document).not.toContain("css-pixel.gif");
+    expect(document).not.toContain("recipient_id=abc");
+    expect(document).toContain('src="https://track.example.com/newsletter.jpg"');
+  });
+
+  it("blocks remote images when either declared dimension is tiny", () => {
+    const document = buildEmailDocument(
+      `<img src="https://images.example/narrow.gif" width="1" height="600">
+       <img src="https://images.example/short.gif" width="600" height="2">
+       <img src="https://images.example/content.jpg" width="3" height="600">`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("narrow.gif");
+    expect(document).not.toContain("short.gif");
+    expect(document).toContain('src="https://images.example/content.jpg"');
+  });
+
+  it("keeps compact inline data images", () => {
+    const inlineIcon =
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M0 0h10v10H0z'/%3E%3C/svg%3E";
+    const document = buildEmailDocument(
+      `<img src="${inlineIcon}" width="64" height="64">`,
+      {},
+      true,
+    );
+
+    expect(document).toContain(inlineIcon);
+  });
+
+  it("records the public sources and audit date for the bundled rules", () => {
+    expect(TRACKING_RULESET_METADATA.version).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
+    expect(TRACKING_RULESET_METADATA.auditedAt).toBe("2026-07-18");
+    expect(TRACKING_RULESET_METADATA.sources).toHaveLength(3);
+  });
+
+  it("blocks current email tracking services even when they claim content dimensions", () => {
+    const trackingUrls = [
+      "https://mailer.example/tr/op/message-1",
+      "https://open.example.awstrack.me/CI0/0/abc",
+      "https://e.customeriomail.com/e/o/message-1",
+      "https://clicks.mlsend.com/pixel.gif",
+      "https://link.mail.beehiiv.com/ss/message-1.gif",
+      "https://eotrx.substackcdn.com/open.gif",
+      "https://email.brand.com/o/message-1",
+      "https://cdn.shopify.com/shopifycloud/shopify/assets/themes_support/notifications/spacer-1.png",
+      "https://github.com/notifications/beacon/message-1.gif",
+      "https://t.paypal.com/ts?v=1",
+      "https://flask.us.nextdoor.com/open.gif",
+      "https://email.mgtp01.squarespace-mail.com/open.gif",
+      "https://open.convertkit-mail2.com/o/message-1",
+      "https://mail.example/e/o/YWJjZA==",
+      "https://click.icptrack.com/icp/track/message-1",
+      "https://mkt4477.com/open/message-1",
+      "https://strongview.com/t/message-1",
+    ];
+    const document = buildEmailDocument(
+      trackingUrls.map((url) => `<img src="${url}" width="600" height="400">`).join(""),
+      {},
+      true,
+    );
+
+    for (const url of trackingUrls) expect(document).not.toContain(url);
+  });
+
+  it("uses hostname boundaries and keeps ordinary attributed images", () => {
+    const document = buildEmailDocument(
+      `<img src="https://notmailchimp.com/photo.jpg">
+       <img src="https://facebook.com/logo.png">
+       <img src="https://images.example/photo.jpg?utm_source=newsletter">
+       <img src="https://cdn.example.com/e/o/product-hero.jpg" width="600" height="400">
+       <img src="https://track.example.com/campaign-hero.jpg" style="width: 600px; height: 400px">`,
+      {},
+      true,
+    );
+
+    expect(document).toContain('src="https://notmailchimp.com/photo.jpg"');
+    expect(document).toContain('src="https://facebook.com/logo.png"');
+    expect(document).toContain('src="https://images.example/photo.jpg?utm_source=newsletter"');
+    expect(document).toContain('src="https://cdn.example.com/e/o/product-hero.jpg"');
+    expect(document).toContain('src="https://track.example.com/campaign-hero.jpg"');
+  });
+
+  it("blocks trackers in img and picture srcsets", () => {
+    const document = buildEmailDocument(
+      `<picture>
+         <source srcset="https://t.yesware.com/t/message-1.gif 2x">
+         <img src="https://images.example/fallback.jpg" width="600" height="400">
+       </picture>
+       <img srcset="https://eotrx.substackcdn.com/open.gif 1x">`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("t.yesware.com");
+    expect(document).not.toContain("eotrx.substackcdn.com");
+    expect(document).toContain('src="https://images.example/fallback.jpg"');
+  });
+
+  it("preserves safe image and picture candidates when a srcset includes a tracker", () => {
+    const document = buildEmailDocument(
+      `<picture>
+         <source srcset="https://t.yesware.com/t/message-1.gif 1x, https://images.example/hero.webp 2x">
+         <img
+           src="https://images.example/fallback.jpg"
+           srcset="https://eotrx.substackcdn.com/open.gif 1x, https://images.example/hero.jpg 2x"
+           width="600"
+           height="400"
+         >
+       </picture>`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("t.yesware.com");
+    expect(document).not.toContain("eotrx.substackcdn.com");
+    expect(document).toContain('src="https://images.example/fallback.jpg"');
+    expect(document).toContain('srcset="https://images.example/hero.webp 2x"');
+    expect(document).toContain('srcset="https://images.example/hero.jpg 2x"');
+  });
+
+  it("blocks tracking URLs in legacy backgrounds and inline or stylesheet CSS", () => {
+    const parsed = new DOMParser().parseFromString(
+      `<style>.tracked { background-image: url(https://eotrx.substackcdn.com/open.gif); }</style>
+       <table background="https://t.yesware.com/t/message-1.gif"><tr><td>Tracked</td></tr></table>
+       <div style="background: #fff url('https://link.mail.beehiiv.com/ss/message.gif')">Tracked</div>
+       <div style="background-image: url(https://images.example/content.png)">Content</div>`,
+      "text/html",
+    );
+
+    const report = blockTrackingPixels(parsed);
+
+    expect(report.blockedCount).toBe(3);
+    expect(report.trackingPixels.map((pixel) => pixel.domain)).toEqual([
+      "t.yesware.com",
+      "link.mail.beehiiv.com",
+      "eotrx.substackcdn.com",
+    ]);
+    expect(parsed.documentElement.innerHTML).not.toContain("eotrx.substackcdn.com");
+    expect(parsed.documentElement.innerHTML).not.toContain("t.yesware.com");
+    expect(parsed.documentElement.innerHTML).not.toContain("link.mail.beehiiv.com");
+    expect(parsed.documentElement.innerHTML).toContain("https://images.example/content.png");
+  });
+
+  it("blocks string-form image-set trackers while preserving safe candidates", () => {
+    const parsed = new DOMParser().parseFromString(
+      `<style>
+         .mixed {
+           background-image: image-set(
+             "https://t.yesware.com/t/message-1.gif" 1x,
+             "https://images.example/content.png" 2x
+           );
+         }
+         .tracked {
+           background-image: -webkit-image-set(
+             "https://eotrx.substackcdn.com/open.gif" 1x
+           );
+         }
+       </style>`,
+      "text/html",
+    );
+
+    const report = blockTrackingPixels(parsed);
+
+    expect(report.blockedCount).toBe(2);
+    expect(parsed.documentElement.innerHTML).not.toContain("t.yesware.com");
+    expect(parsed.documentElement.innerHTML).not.toContain("eotrx.substackcdn.com");
+    expect(parsed.documentElement.innerHTML).toContain("https://images.example/content.png");
+  });
+
+  it("keeps legitimate content in CSS, legacy backgrounds, and picture sources", () => {
+    const parsed = new DOMParser().parseFromString(
+      `<style>.hero { background-image: url(https://track.example.com/campaign-hero.jpg); }</style>
+       <table background="https://track.example.com/campaign-background.jpg"><tr><td>Hero</td></tr></table>
+       <picture>
+         <source srcset="https://track.example.com/campaign-hero.webp 2x">
+         <img src="https://images.example/fallback.jpg" width="600" height="400">
+       </picture>`,
+      "text/html",
+    );
+
+    const report = blockTrackingPixels(parsed);
+
+    expect(report.blockedCount).toBe(0);
+    expect(parsed.documentElement.innerHTML).toContain(
+      "https://track.example.com/campaign-hero.jpg",
+    );
+    expect(parsed.documentElement.innerHTML).toContain(
+      "https://track.example.com/campaign-background.jpg",
+    );
+    expect(parsed.documentElement.innerHTML).toContain(
+      "https://track.example.com/campaign-hero.webp",
+    );
+  });
+
+  it("blocks SVG image trackers and honors the targeted allowlist", () => {
+    const svg = new DOMParser().parseFromString(
+      `<svg xmlns="http://www.w3.org/2000/svg">
+         <image href="https://t.yesware.com/t/message-1.gif" />
+         <image href="https://images.example/content.png" />
+       </svg>`,
+      "image/svg+xml",
+    );
+    blockTrackingPixels(svg);
+    expect(svg.querySelectorAll("image")).toHaveLength(1);
+    expect(svg.documentElement.innerHTML).toContain("https://images.example/content.png");
+
+    const allowlisted = buildEmailDocument(
+      '<img src="https://permies.com/t/community/a/" width="1" height="600">',
+      {},
+      true,
+    );
+    expect(allowlisted).toContain('src="https://permies.com/t/community/a/"');
   });
 
   it("renders email content with the selected desktop theme", () => {
@@ -257,6 +501,41 @@ describe("email HTML security", () => {
         '<picture><source srcset="https://images.example/photo.webp 2x"><img src="cid:photo"></picture>',
       ),
     ).toBe(true);
+    expect(
+      hasRemoteImages(
+        '<div style="background-image:url(https://images.example/background.png)">Image</div>',
+      ),
+    ).toBe(true);
+    expect(hasRemoteImages('<table background="https://images.example/background.png">')).toBe(
+      true,
+    );
+    expect(
+      hasRemoteImages('<svg><image href="https://images.example/vector.png"></image></svg>'),
+    ).toBe(false);
+    expect(
+      hasRemoteImages(
+        '<div class="hero">Hero</div><style>.hero { background-image: url(https://images.example/hero.png); }</style>',
+      ),
+    ).toBe(true);
+    expect(
+      hasRemoteImages(
+        "<style>@font-face { font-family: Mail; src: url(https://fonts.example/mail.woff2); }</style>",
+      ),
+    ).toBe(false);
+    expect(
+      hasRemoteImages("<style>/* https://images.example/comment.png */ p { color: red; }</style>"),
+    ).toBe(false);
+    expect(
+      hasRemoteImages(
+        '<div style="--hero: url(https://images.example/hero.png); background-image: var(--hero)">Hero</div>',
+      ),
+    ).toBe(true);
+    expect(
+      hasRemoteImages(
+        '<div class="hero">Hero</div><style>:root { --hero: url(https://images.example/hero.png); } .hero { background-image: var(--hero); }</style>',
+      ),
+    ).toBe(true);
+    expect(hasRemoteImages('<img src="https://t.yesware.com/t/message-1.gif">')).toBe(false);
     expect(hasRemoteImages('<img src="cid:photo">')).toBe(false);
   });
 
@@ -286,6 +565,62 @@ describe("email HTML security", () => {
     );
     expect(screen.getByTitle("Email message").getAttribute("srcdoc")).toContain(
       'data-remote-src="https://images.example/photo.jpg"',
+    );
+  });
+
+  it("shows blocked tracking domains when the privacy indicator is hovered", async () => {
+    render(
+      createElement(TrackingPixelIndicator, {
+        trackingPixels: [
+          {
+            url: "https://t.yesware.com/t/message-1.gif",
+            domain: "t.yesware.com",
+            reason: "Known tracking service",
+          },
+          {
+            url: "https://eotrx.substackcdn.com/open.gif",
+            domain: "eotrx.substackcdn.com",
+            reason: "Known tracking service",
+          },
+        ],
+      }),
+    );
+
+    const indicator = screen.getByLabelText("Blocked 2 tracking pixels");
+    fireEvent.pointerEnter(indicator.parentElement!);
+
+    const tooltip = await screen.findByRole("tooltip", { name: /Blocked 2 tracking pixels/ });
+    expect(tooltip.textContent).toContain("t.yesware.com");
+    expect(tooltip.textContent).toContain("eotrx.substackcdn.com");
+    expect(tooltip.textContent).toContain("Known tracking service");
+  });
+
+  it("reports blocked tracking pixels to the message header", async () => {
+    const message: MailMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      accountId: "account-1",
+      from: { email: "sender@example.com" },
+      to: [{ email: "me@example.com" }],
+      subject: "Tracked message",
+      date: "2026-07-18T12:00:00Z",
+      body: { html: '<img src="https://t.yesware.com/t/message-1.gif">' },
+      flags: { read: true, starred: false, draft: false },
+    };
+    const onTrackingPixelsChange = vi.fn();
+
+    render(
+      createElement(EmailHtml, {
+        message,
+        blockRemoteImages: true,
+        onTrackingPixelsChange,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(onTrackingPixelsChange).toHaveBeenCalledWith([
+        expect.objectContaining({ domain: "t.yesware.com" }),
+      ]),
     );
   });
 });

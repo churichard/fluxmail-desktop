@@ -64,7 +64,7 @@ Desktop message metadata and interface preferences live in the app's macOS Appli
 
 The renderer is context isolated, sandboxed, and has no Node access. Its only privileged surface is the typed `window.fluxmail` bridge. Both sides of every IPC call validate requests and responses, and the main process rejects calls from unknown frames.
 
-Email HTML is sanitized and rendered inside a scriptless sandboxed iframe with its own restrictive content security policy. Forms, scripts, nested frames, unsafe links, and small tracking pixels are removed. Remote images are off by default. CID images are resolved through the main process, and approved HTTPS or email links open in the system browser.
+Email HTML is sanitized and rendered inside a scriptless sandboxed iframe with its own restrictive content security policy. Forms, scripts, nested frames, unsafe links, and tracking pixels from common email services are removed automatically. Remote images are off by default. CID images are resolved through the main process, and approved HTTPS or email links open in the system browser.
 
 ## Analytics
 

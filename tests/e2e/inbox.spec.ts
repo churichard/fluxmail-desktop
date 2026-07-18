@@ -608,6 +608,17 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const messageFrame = page.frameLocator('iframe[title="Email message"]');
     await expect(messageFrame.locator("script")).toHaveCount(0);
     await expect(messageFrame.locator("img")).toHaveCount(1);
+    const trackingIndicator = page.locator(".message-from").getByLabel("Blocked 2 tracking pixels");
+    await expect(trackingIndicator).toBeVisible();
+    await expect(trackingIndicator).toHaveCSS("user-select", "none");
+    await expect(trackingIndicator).toHaveCSS("margin-left", "2px");
+    await trackingIndicator.hover();
+    const trackingTooltip = page.getByRole("tooltip", {
+      name: /Blocked 2 tracking pixels/,
+    });
+    await expect(trackingTooltip).toBeVisible();
+    await expect(trackingTooltip).toContainText("tracker.invalid");
+    await expect(trackingTooltip).toContainText("t.yesware.com");
     const loadImagesButton = page.getByRole("button", {
       name: "Load remote images",
     });

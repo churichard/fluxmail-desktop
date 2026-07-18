@@ -44,7 +44,7 @@ const seedMessages: Message[] = [
     date: todayAt(14),
     snippet: "Your desktop inbox is ready.",
     body: {
-      html: '<p>Your desktop inbox is ready.</p><script>window.evil = true</script><img src="https://tracker.invalid/pixel" width="1"><img src = "https://images.invalid/welcome.png" width="320" height="180">',
+      html: '<p>Your desktop inbox is ready.</p><script>window.evil = true</script><img src="https://tracker.invalid/pixel" width="1"><img src="https://t.yesware.com/tt/message-1"><img src = "https://images.invalid/welcome.png" width="320" height="180">',
     },
     flags: { read: false, starred: false, draft: false },
   },
