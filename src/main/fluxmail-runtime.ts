@@ -194,7 +194,7 @@ export class FluxmailRuntime {
       identity.tokens,
       identity.displayName,
       owner.id,
-      { sharingMode: "private" },
+      { sharedWithAll: false },
     );
     return toAccountInfo(account);
   }
