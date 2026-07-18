@@ -371,17 +371,19 @@ export function App() {
           })),
           action,
         });
-        if (!optimisticRemoval) setSelection(new Set());
-        setSelectedThread((current) => {
-          if (!current || !targetKeys.has(threadKey(current))) return current;
-          if (shouldClearSelectedThread(submittedSearch ? "search" : view, action))
-            return undefined;
-          if (action.type === "markRead" || action.type === "markUnread")
-            return { ...current, unread: action.type === "markUnread" };
-          if (action.type === "star" || action.type === "unstar")
-            return { ...current, starred: action.type === "star" };
-          return current;
-        });
+        if (mailboxContext === mailboxContextRef.current) {
+          if (!optimisticRemoval) setSelection(new Set());
+          setSelectedThread((current) => {
+            if (!current || !targetKeys.has(threadKey(current))) return current;
+            if (shouldClearSelectedThread(submittedSearch ? "search" : view, action))
+              return undefined;
+            if (action.type === "markRead" || action.type === "markUnread")
+              return { ...current, unread: action.type === "markUnread" };
+            if (action.type === "star" || action.type === "unstar")
+              return { ...current, starred: action.type === "star" };
+            return current;
+          });
+        }
         await loadThreads({
           quiet: optimisticRemoval,
           forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),
@@ -389,7 +391,7 @@ export function App() {
           preserveSelection: preserveQuickReply,
         });
       } catch (caught) {
-        if (optimisticRemoval) {
+        if (optimisticRemoval && mailboxContext === mailboxContextRef.current) {
           setThreads(previousThreads);
           setSelection(previousSelection);
           setSelectedThread((current) => current ?? previousSelectedThread);
@@ -400,6 +402,7 @@ export function App() {
     [
       confirmQuickReplyNavigation,
       loadThreads,
+      mailboxContext,
       selectedThread,
       selection,
       submittedSearch,

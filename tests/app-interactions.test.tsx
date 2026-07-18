@@ -15,11 +15,12 @@ vi.mock("../src/renderer/components/Sidebar", () => ({
     onViewChange,
   }: {
     onSettings(): void;
-    onViewChange(view: "starred"): void;
+    onViewChange(view: "starred" | "all"): void;
   }) => (
     <aside>
       Sidebar
       <button onClick={() => onViewChange("starred")}>Starred</button>
+      <button onClick={() => onViewChange("all")}>All mail</button>
       <button onClick={onSettings}>Settings</button>
     </aside>
   ),
@@ -29,16 +30,21 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   ThreadListPane: ({
     threads,
     onSelect,
+    onModify,
   }: {
     threads: ThreadSummary[];
     onSelect(thread: ThreadSummary): void;
+    onModify(action: { type: "archive" }, threads: ThreadSummary[]): Promise<void>;
   }) => (
     <section>
       <span>{threads.length} conversations</span>
       {threads.map((thread) => (
-        <button key={thread.id} onClick={() => onSelect(thread)}>
-          {thread.subject}
-        </button>
+        <div key={thread.id}>
+          <button onClick={() => onSelect(thread)}>{thread.subject}</button>
+          <button onClick={() => void onModify({ type: "archive" }, [thread])}>
+            Archive {thread.subject}
+          </button>
+        </div>
       ))}
     </section>
   ),
@@ -261,6 +267,32 @@ describe("App thread navigation", () => {
 
     await waitFor(() => expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(2));
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+  });
+
+  it("keeps a thread opened in another mailbox selected when an archive finishes", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    let finishArchive!: () => void;
+    const pendingArchive = new Promise<void>((resolve) => {
+      finishArchive = resolve;
+    });
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingArchive);
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${current.subject}` }));
+    await screen.findByText("0 conversations");
+    fireEvent.click(screen.getByRole("button", { name: "All mail" }));
+    fireEvent.click(await screen.findByRole("button", { name: current.subject }));
+    expect(screen.getByText(`Reading ${current.subject}`)).toBeTruthy();
+
+    await act(async () => finishArchive());
+
+    expect(screen.getByText(`Reading ${current.subject}`)).toBeTruthy();
   });
 
   it("does not run mailbox shortcuts from compose controls", async () => {
