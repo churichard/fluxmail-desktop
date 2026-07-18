@@ -8,6 +8,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Fluxmail Newsreader";
+  src: url("./assets/newsreader-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+}
+
 :root {
   font-family:
     "Fluxmail Inter",
@@ -179,12 +187,13 @@ textarea:focus-visible,
   align-items: center;
   gap: 7px;
   color: var(--ink);
-  font-family: inherit;
+  font-family: "Fluxmail Newsreader", Newsreader, ui-serif, Georgia, serif;
   font-size: 23px;
   font-optical-sizing: auto;
-  font-weight: 520;
+  font-weight: 400;
   line-height: 1;
-  letter-spacing: -0.038em;
+  letter-spacing: -0.025em;
+  user-select: none;
 }
 
 .brand > span:last-child {
@@ -2157,7 +2166,7 @@ textarea:focus-visible,
   place-items: center;
   background:
     radial-gradient(
-      circle at 50% 28%,
+      circle at 50% 50%,
       color-mix(in srgb, var(--paper) 96%, transparent),
       transparent 44%
     ),
@@ -2165,85 +2174,49 @@ textarea:focus-visible,
   -webkit-app-region: drag;
 }
 
-.onboarding-card {
-  width: min(490px, calc(100vw - 44px));
-  border: 1px solid var(--hairline);
-  border-radius: 22px;
-  padding: 38px 44px 40px;
-  background: color-mix(in srgb, var(--paper) 94%, transparent);
-  box-shadow: var(--shadow-md);
-  text-align: center;
-  backdrop-filter: blur(14px);
-  -webkit-app-region: no-drag;
-}
-
-.onboarding-card .brand {
+.onboarding {
+  display: flex;
+  flex-direction: column;
   justify-content: center;
-  margin-bottom: 32px;
 }
 
-.onboarding-card .brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+.onboarding > .brand {
+  gap: 14px;
+  margin-bottom: 30px;
+  font-size: 34px;
 }
 
-.onboarding-icon {
-  display: grid;
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 20px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
-  border-radius: 17px;
-  background: var(--accent-faint);
-  color: var(--accent);
-  box-shadow: inset 0 1px rgb(255 255 255 / 0.45);
+.onboarding > .brand > span:last-child {
+  transform: translateY(8px);
 }
 
-.onboarding h1 {
-  margin: 0;
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 32px;
-  font-optical-sizing: auto;
-  font-weight: 500;
-  line-height: 1.12;
-  letter-spacing: -0.04em;
+.onboarding > .brand .brand-mark {
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
 }
 
-.onboarding-card > p {
-  margin: 14px 0 24px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
+.onboarding > .brand .brand-mark img {
+  width: 58px;
+  max-width: none;
+  height: 58px;
+  user-select: none;
 }
 
 .connect-button {
-  width: 100%;
+  width: min(340px, calc(100vw - 80px));
   height: 43px;
+  -webkit-app-region: no-drag;
 }
 
-.privacy-note {
-  display: flex;
-  gap: 10px;
-  margin-top: 24px;
-  border-top: 1px solid var(--hairline-soft);
-  padding-top: 19px;
-  color: var(--muted);
-  text-align: left;
-}
-
-.privacy-note svg {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  color: color-mix(in srgb, var(--accent) 75%, var(--muted));
-}
-
-.privacy-note p {
-  margin: 0;
-  font-size: 9px;
-  line-height: 1.55;
+.onboarding > .form-error {
+  width: min(340px, calc(100vw - 80px));
+  margin: 12px 0 0;
+  text-align: center;
+  -webkit-app-region: no-drag;
 }
 
 .form-error {
@@ -2378,7 +2351,7 @@ textarea:focus-visible,
 :root[data-theme="dark"] .onboarding,
 :root[data-theme="dark"] .splash {
   background:
-    radial-gradient(circle at 50% 28%, rgb(55 57 62 / 0.74), transparent 43%), var(--canvas);
+    radial-gradient(circle at 50% 50%, rgb(55 57 62 / 0.74), transparent 43%), var(--canvas);
 }
 
 @media (prefers-reduced-motion: reduce) {

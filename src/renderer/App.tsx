@@ -581,7 +581,6 @@ export function App() {
   if (!bootstrap.accounts.length) {
     return (
       <Onboarding
-        telemetry={bootstrap.telemetry}
         onConnected={async () => {
           await loadBootstrap();
           await loadThreads();
