@@ -1,4 +1,4 @@
 interface:
   display_name: "Release"
-  short_description: "Validate, tag, and publish a Fluxmail release"
-  default_prompt: "Use $release to publish the version in package.json."
+  short_description: "Validate, build, publish, and repair releases"
+  default_prompt: "Use $release to validate, build, and publish the Fluxmail version in package.json."

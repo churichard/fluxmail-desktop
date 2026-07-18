@@ -1,5 +1,5 @@
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
-import { MakerDMG } from "@electron-forge/maker-dmg";
+import { MakerDMG, type MakerDMGConfig } from "@electron-forge/maker-dmg";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -9,9 +9,6 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-const shouldSign = Boolean(
-  process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER,
-);
 const packagedPaths = [
   "/.vite",
   "/node_modules/better-sqlite3/LICENSE",
@@ -25,6 +22,75 @@ const packagedPaths = [
   "/node_modules/@node-rs/argon2-darwin-x64",
 ];
 const runFile = promisify(execFile);
+
+type PackagerConfig = NonNullable<ForgeConfig["packagerConfig"]>;
+type StrictOsxSignOptions = Exclude<PackagerConfig["osxSign"], boolean | undefined> & {
+  continueOnError?: boolean;
+};
+type MacPackagingConfig = {
+  osxSign: StrictOsxSignOptions;
+  osxNotarize: PackagerConfig["osxNotarize"];
+};
+
+export function createMacPackagingConfig(
+  env: Record<string, string | undefined> = process.env,
+): MacPackagingConfig {
+  const identity = env.APPLE_SIGNING_IDENTITY?.trim();
+  const keychain = env.APPLE_SIGNING_KEYCHAIN?.trim();
+  const notarizationValues = [env.APPLE_API_KEY, env.APPLE_API_KEY_ID, env.APPLE_API_ISSUER];
+  const notarizationValueCount = notarizationValues.filter(Boolean).length;
+
+  if (notarizationValueCount !== 0 && notarizationValueCount !== notarizationValues.length) {
+    throw new Error("Set all three Apple notarization variables or remove all of them.");
+  }
+  if (notarizationValueCount && !identity) {
+    throw new Error("Apple notarization requires APPLE_SIGNING_IDENTITY.");
+  }
+
+  const shouldNotarize = notarizationValueCount === notarizationValues.length;
+  if (!identity) {
+    return {
+      osxSign: {
+        identity: "-",
+        identityValidation: false,
+        optionsForFile: () => ({ hardenedRuntime: false, timestamp: "none" }),
+      },
+      osxNotarize: undefined,
+    };
+  }
+
+  if (!shouldNotarize) {
+    return {
+      osxSign: {
+        identity,
+        ...(keychain ? { keychain } : {}),
+        continueOnError: false,
+        identityValidation: false,
+        optionsForFile: () => ({ hardenedRuntime: false, timestamp: "none" }),
+      },
+      osxNotarize: undefined,
+    };
+  }
+
+  return {
+    osxSign: {
+      identity,
+      ...(keychain ? { keychain } : {}),
+      continueOnError: false,
+      optionsForFile: () => ({
+        entitlements: path.join(process.cwd(), "build/entitlements.mac.plist"),
+        hardenedRuntime: true,
+      }),
+    },
+    osxNotarize: {
+      appleApiKey: env.APPLE_API_KEY!,
+      appleApiKeyId: env.APPLE_API_KEY_ID!,
+      appleApiIssuer: env.APPLE_API_ISSUER!,
+    },
+  };
+}
+
+const macPackagingConfig = createMacPackagingConfig();
 
 export function shouldIgnorePackagedPath(file: string, appRoot = process.cwd()): boolean {
   if (!file) return false;
@@ -48,6 +114,20 @@ export function shouldIgnorePackagedPath(file: string, appRoot = process.cwd()):
   );
 }
 
+export const dmgMakerConfig = {
+  format: "ULFO",
+  icon: "build/icon.icns",
+  background: "build/dmg-background.png",
+  iconSize: 96,
+  contents: (options) => [
+    { x: 462, y: 233, type: "link", path: "/Applications" },
+    { x: 196, y: 233, type: "file", path: options.appPath },
+  ],
+  additionalDMGOptions: {
+    window: { size: { width: 658, height: 498 } },
+  },
+} satisfies MakerDMGConfig;
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: { unpack: "**/*.node" },
@@ -63,22 +143,7 @@ const config: ForgeConfig = {
     extraResource: ["vendor/fluxmail-mcp/LICENSE.md"],
     prune: false,
     ignore: shouldIgnorePackagedPath,
-    osxSign: shouldSign
-      ? {
-          identity: process.env.APPLE_SIGNING_IDENTITY,
-          optionsForFile: () => ({
-            entitlements: path.join(process.cwd(), "build/entitlements.mac.plist"),
-            hardenedRuntime: true,
-          }),
-        }
-      : undefined,
-    osxNotarize: shouldSign
-      ? {
-          appleApiKey: process.env.APPLE_API_KEY!,
-          appleApiKeyId: process.env.APPLE_API_KEY_ID!,
-          appleApiIssuer: process.env.APPLE_API_ISSUER!,
-        }
-      : undefined,
+    ...macPackagingConfig,
   },
   // postinstall rebuilds the root copy for Electron. Ignoring it here keeps
   // Forge from following the Fluxmail workspace symlink into a standalone
@@ -87,9 +152,10 @@ const config: ForgeConfig = {
   hooks: {
     async generateAssets() {
       await runFile("bash", ["scripts/generate-icon.sh"], { cwd: process.cwd() });
+      await runFile("swift", ["scripts/generate-dmg-background.swift"], { cwd: process.cwd() });
     },
   },
-  makers: [new MakerZIP({}, ["darwin"]), new MakerDMG({ format: "ULFO" }, ["darwin"])],
+  makers: [new MakerZIP({}, ["darwin"]), new MakerDMG(dmgMakerConfig, ["darwin"])],
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({

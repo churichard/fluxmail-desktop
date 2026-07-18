@@ -13,4 +13,5 @@ for SIZE in 16 32 128 256 512; do
   DOUBLE=$((SIZE * 2))
   sips -z "$DOUBLE" "$DOUBLE" "$WORK/icon-1024.png" --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" >/dev/null
 done
+swift "$ROOT/scripts/align-titlebar-icon.swift" "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$ROOT/build/icon.icns"

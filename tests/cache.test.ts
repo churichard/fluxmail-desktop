@@ -200,6 +200,47 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("returns opened messages without caching their bodies when encryption is unavailable", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "fluxmail-cache-"));
+    directories.push(directory);
+    const cache = new MailCache(directory, {
+      encrypt: () => undefined,
+      decrypt: () => {
+        throw new Error("Encryption is unavailable");
+      },
+    });
+    const opened: Thread = {
+      id: "thread-without-keychain",
+      subject: "Available without caching",
+      messages: [
+        message({
+          id: "opened-without-keychain",
+          threadId: "thread-without-keychain",
+          body: { html: "<p>view this without storing it</p>" },
+        }),
+      ],
+    };
+
+    const result = cache.putThread(primary, opened);
+
+    expect(result.messages[0]?.body?.html).toContain("view this without storing it");
+    expect(cache.hasThreadBody(primary.id, opened.id)).toBe(false);
+    expect(cache.getThread(primary.id, opened.id)).toBeUndefined();
+    expect(cache.listThreads({ view: "inbox", offset: 0, limit: 20 })).toHaveLength(1);
+    const databaseBytes = ["mail-cache.db", "mail-cache.db-wal"]
+      .flatMap((file) => {
+        try {
+          return [readFileSync(path.join(directory, file))];
+        } catch {
+          return [];
+        }
+      })
+      .map((buffer) => buffer.toString("utf8"))
+      .join("");
+    expect(databaseBytes).not.toContain("view this without storing it");
+    cache.close();
+  });
+
   it("keeps provider search results that do not match summary text", () => {
     const cache = createCache();
     cache.putMessages(primary, [

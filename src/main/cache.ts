@@ -11,7 +11,7 @@ import type {
 } from "../shared/contracts";
 
 interface BodyCipher {
-  encrypt(value: string): Buffer;
+  encrypt(value: string): Buffer | undefined;
   decrypt(value: Buffer): string;
 }
 
@@ -302,6 +302,10 @@ export class MailCache {
     })();
     const normalized = this.toMailThread(account, thread);
     const encrypted = this.cipher.encrypt(JSON.stringify(normalized));
+    if (!encrypted) {
+      this.invalidateThreadBody(account.id, thread.id);
+      return normalized;
+    }
     this.db
       .prepare(
         `

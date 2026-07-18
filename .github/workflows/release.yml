@@ -52,34 +52,58 @@ jobs:
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          configured=0
-          for value in "$CERTIFICATE" "$CERTIFICATE_PASSWORD" "$SIGNING_IDENTITY" "$API_KEY" "$API_KEY_ID" "$API_ISSUER"; do
+          certificate_configured=0
+          for value in "$CERTIFICATE" "$CERTIFICATE_PASSWORD" "$SIGNING_IDENTITY"; do
             if [[ -n "$value" ]]; then
-              configured=$((configured + 1))
+              certificate_configured=$((certificate_configured + 1))
+            fi
+          done
+          notarization_configured=0
+          for value in "$API_KEY" "$API_KEY_ID" "$API_ISSUER"; do
+            if [[ -n "$value" ]]; then
+              notarization_configured=$((notarization_configured + 1))
             fi
           done
 
-          if [[ "$configured" -eq 0 ]]; then
-            echo "::notice::Apple credentials are not configured. Building unsigned artifacts."
-            exit 0
+          if [[ "$certificate_configured" -ne 0 && "$certificate_configured" -ne 3 ]]; then
+            echo "::error::Apple signing is only partially configured. Set the certificate, password, and identity together."
+            exit 1
+          fi
+          if [[ "$notarization_configured" -ne 0 && "$notarization_configured" -ne 3 ]]; then
+            echo "::error::Apple notarization is only partially configured. Set all three API credentials or remove all of them."
+            exit 1
+          fi
+          if [[ "$certificate_configured" -eq 0 && "$notarization_configured" -ne 0 ]]; then
+            echo "::error::Apple notarization requires a signing certificate."
+            exit 1
           fi
 
-          if [[ "$configured" -ne 6 ]]; then
-            echo "::error::Apple signing is only partially configured. Set all six Apple secrets or remove all of them."
-            exit 1
+          if [[ "$certificate_configured" -eq 0 ]]; then
+            echo "::notice::Apple credentials are not configured. Building artifacts with an ad hoc signature."
+            exit 0
           fi
 
           CERTIFICATE_PATH="$RUNNER_TEMP/fluxmail.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/fluxmail-signing.keychain-db"
           echo "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
-          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
           security create-keychain -p "$RUNNER_TEMP" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$RUNNER_TEMP" "$KEYCHAIN_PATH"
           security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$RUNNER_TEMP" "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$RUNNER_TEMP" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           echo "APPLE_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+          if [[ "$notarization_configured" -eq 0 ]]; then
+            CERTIFICATE_PEM="$RUNNER_TEMP/fluxmail-signing.pem"
+            security find-certificate -c "$SIGNING_IDENTITY" -p "$KEYCHAIN_PATH" > "$CERTIFICATE_PEM"
+            security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" "$CERTIFICATE_PEM"
+            echo "::notice::Using the persistent self-signed Fluxmail certificate without notarization."
+            exit 0
+          fi
+
+          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
           echo "APPLE_API_KEY_ID=$API_KEY_ID" >> "$GITHUB_ENV"
           echo "APPLE_API_ISSUER=$API_ISSUER" >> "$GITHUB_ENV"
@@ -112,11 +136,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: |
           mapfile -d '' artifacts < <(find release -type f \( -name '*.dmg' -o -name '*.zip' \) -print0)
           test "${#artifacts[@]}" -gt 0
           release_args=(--generate-notes --verify-tag)
           if [[ -z "$APPLE_CERTIFICATE" ]]; then
-            release_args+=(--notes "This release is unsigned and has not been notarized by Apple. macOS will require users to approve the app before opening it.")
+            release_args+=(--notes "This release uses an ad hoc signature and has not been notarized by Apple. macOS will require users to approve the app before opening it.")
+          elif [[ -z "$APPLE_API_KEY" ]]; then
+            release_args+=(--notes "This release uses Fluxmail's self-signed certificate and has not been notarized by Apple. macOS will require users to approve the app before opening it.")
           fi
           gh release create "${GITHUB_REF_NAME}" "${artifacts[@]}" "${release_args[@]}"
