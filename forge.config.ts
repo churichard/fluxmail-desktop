@@ -20,6 +20,9 @@ const packagedPaths = [
   "/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
   "/node_modules/bindings",
   "/node_modules/file-uri-to-path",
+  "/node_modules/@node-rs/argon2",
+  "/node_modules/@node-rs/argon2-darwin-arm64",
+  "/node_modules/@node-rs/argon2-darwin-x64",
 ];
 const runFile = promisify(execFile);
 

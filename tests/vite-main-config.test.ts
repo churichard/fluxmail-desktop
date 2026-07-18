@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { VERSION as reportedFluxmailEngineVersion } from "../vendor/fluxmail-mcp/packages/server/src/version";
-import { loadDesktopOAuthConfig, loadFluxmailEngineVersion } from "../vite.main.config";
+import {
+  loadDesktopOAuthConfig,
+  loadFluxmailEngineVersion,
+  mainExternalDependencies,
+} from "../vite.main.config";
 
 const directories: string[] = [];
 
@@ -15,6 +19,10 @@ afterEach(() => {
 describe("main Vite configuration", () => {
   it("reads the engine version from the pinned Fluxmail package", () => {
     expect(loadFluxmailEngineVersion()).toBe(reportedFluxmailEngineVersion);
+  });
+
+  it("leaves native dependencies for Electron to load", () => {
+    expect(mainExternalDependencies).toEqual(["better-sqlite3", "@node-rs/argon2"]);
   });
 
   it("loads desktop OAuth credentials from .env", () => {

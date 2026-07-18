@@ -8,6 +8,9 @@ describe("Forge package filtering", () => {
   it.each([
     "/.vite/build/main.js",
     "/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+    "/node_modules/@node-rs/argon2/index.js",
+    "/node_modules/@node-rs/argon2-darwin-arm64/argon2.darwin-arm64.node",
+    "/node_modules/@node-rs/argon2-darwin-x64/argon2.darwin-x64.node",
   ])("keeps root-relative packaged path %s", (file) => {
     expect(shouldIgnorePackagedPath(file, appRoot)).toBe(false);
   });
@@ -15,6 +18,14 @@ describe("Forge package filtering", () => {
   it.each([
     path.join(appRoot, ".vite", "build", "main.js"),
     path.join(appRoot, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"),
+    path.join(appRoot, "node_modules", "@node-rs", "argon2", "index.js"),
+    path.join(
+      appRoot,
+      "node_modules",
+      "@node-rs",
+      "argon2-darwin-arm64",
+      "argon2.darwin-arm64.node",
+    ),
   ])("keeps absolute packaged path %s", (file) => {
     expect(shouldIgnorePackagedPath(file, appRoot)).toBe(false);
   });

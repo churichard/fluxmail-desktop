@@ -43,7 +43,7 @@ describe("DesktopAnalytics", () => {
         client_platform: "desktop",
         deployment_environment: "production",
         desktop_app_version: "0.1.0",
-        mcp_version: "0.3.0",
+        mcp_version: "0.4.1",
         feature: "search",
         action: "submitted",
         source: "toolbar",
