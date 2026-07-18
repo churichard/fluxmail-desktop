@@ -70,6 +70,16 @@ describe("FluxmailRuntime account capabilities", () => {
       expect.objectContaining({ id: account.id, canPermanentlyDelete: true }),
     ]);
 
+    context.config.google = {
+      clientId: "current-custom-client",
+      clientSecret: "current-custom-secret",
+    };
+    encryptedCredentials = encryptString(encryptionKey, JSON.stringify({}));
+
+    expect(runtime.accounts()).toEqual([
+      expect.objectContaining({ id: account.id, canPermanentlyDelete: false }),
+    ]);
+
     encryptedCredentials = encryptString(
       encryptionKey,
       JSON.stringify({ fluxmailOAuthClient: { clientId: "another-custom-client" } }),

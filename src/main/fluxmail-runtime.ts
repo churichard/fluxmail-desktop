@@ -110,8 +110,7 @@ export class FluxmailRuntime {
         scope?: string;
         fluxmailOAuthClient?: { clientId: string };
       };
-      const clientId =
-        credentials.fluxmailOAuthClient?.clientId ?? this.context.config.google?.clientId;
+      const clientId = credentials.fluxmailOAuthClient?.clientId;
       const requestedScopes = clientId
         ? googleOAuthScopes(googleOAuthClientAllowsPermanentDelete(clientId))
         : [];
