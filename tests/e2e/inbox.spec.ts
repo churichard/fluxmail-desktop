@@ -855,7 +855,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   }
 });
 
-test("archives when the email iframe has focus", async () => {
+test("archives from a row and the email iframe without transferring focus", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
   const electronApp = await electron.launch({
     args: [process.cwd()],
@@ -873,14 +873,23 @@ test("archives when the email iframe has focus", async () => {
     const page = await electronApp.firstWindow();
     await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
     const welcomeThread = page.locator(".thread-row").filter({ hasText: "Welcome to Fluxmail" });
-    await welcomeThread.click();
+    await welcomeThread.locator(".thread-open").click();
+    await page.keyboard.press("e");
+
+    await expect(page.locator(".reading-placeholder")).toBeVisible();
+    await expect(welcomeThread).toHaveCount(0);
+    await expect(page.locator(".thread-row").first()).toBeVisible();
+    await expect(page.locator(".thread-open:focus")).toHaveCount(0);
+
+    const nextThread = page.locator(".thread-row").first();
+    await nextThread.locator(".thread-open").click();
 
     const messageFrame = page.frameLocator('iframe[title="Email message"]');
     await messageFrame.locator("#email-root").click();
     await page.keyboard.press("e");
 
     await expect(page.locator(".reading-placeholder")).toBeVisible();
-    await expect(welcomeThread).toHaveCount(0);
+    await expect(nextThread).toHaveCount(0);
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

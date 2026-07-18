@@ -223,6 +223,9 @@ export function ThreadListPane(props: Props) {
         ) : props.threads.length ? (
           <Virtuoso
             data={entries}
+            computeItemKey={(_index, entry) =>
+              entry.type === "thread" ? `thread:${threadKey(entry.thread)}` : `group:${entry.label}`
+            }
             scrollerRef={handleScrollerRef}
             endReached={() => {
               if (props.hasMore && !props.loadingMore) props.onLoadMore();
