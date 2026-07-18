@@ -1,9 +1,24 @@
 /** @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { buildEmailDocument, hasRemoteImages } from "../src/renderer/components/EmailHtml";
+import { createElement } from "react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildEmailDocument,
+  EmailHtml,
+  hasRemoteImages,
+} from "../src/renderer/components/EmailHtml";
 import { convertEmailToDarkMode } from "../src/renderer/email/convert-to-dark-mode";
+import type { MailMessage } from "../src/shared/contracts";
+
+globalThis.ResizeObserver = class ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+} as unknown as typeof ResizeObserver;
+
+afterEach(cleanup);
 
 describe("email HTML security", () => {
   it("removes active content, unsafe navigation, tracking pixels, and remote loads by default", () => {
@@ -243,5 +258,34 @@ describe("email HTML security", () => {
       ),
     ).toBe(true);
     expect(hasRemoteImages('<img src="cid:photo">')).toBe(false);
+  });
+
+  it("loads remote images automatically when image blocking is off", async () => {
+    const message: MailMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      accountId: "account-1",
+      from: { email: "sender@example.com" },
+      to: [{ email: "me@example.com" }],
+      subject: "Remote image",
+      date: "2026-07-18T12:00:00Z",
+      body: { html: '<img src="https://images.example/photo.jpg">' },
+      flags: { read: true, starred: false, draft: false },
+    };
+    const rendered = render(createElement(EmailHtml, { message, blockRemoteImages: false }));
+
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+    expect(screen.getByTitle("Email message").getAttribute("srcdoc")).toContain(
+      'src="https://images.example/photo.jpg"',
+    );
+
+    rendered.rerender(createElement(EmailHtml, { message, blockRemoteImages: true }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Load remote images" })).toBeTruthy(),
+    );
+    expect(screen.getByTitle("Email message").getAttribute("srcdoc")).toContain(
+      'data-remote-src="https://images.example/photo.jpg"',
+    );
   });
 });

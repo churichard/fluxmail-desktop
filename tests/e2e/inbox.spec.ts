@@ -835,6 +835,19 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(
       settings.getByText(
+        "We recommend keeping this on. Turning it off may expose your IP address to email senders.",
+      ),
+    ).toBeVisible();
+    const blockRemoteImagesCheckbox = settings.getByRole("checkbox", {
+      name: "Block remote images by default",
+    });
+    await expect(blockRemoteImagesCheckbox).toHaveAttribute("aria-checked", "true");
+    await blockRemoteImagesCheckbox.click();
+    await expect(blockRemoteImagesCheckbox).toHaveAttribute("aria-checked", "false");
+    await blockRemoteImagesCheckbox.click();
+    await expect(blockRemoteImagesCheckbox).toHaveAttribute("aria-checked", "true");
+    await expect(
+      settings.getByText(
         "Send anonymized analytics to help us improve our features, performance, and reliability. Your email content is never included.",
       ),
     ).toBeVisible();

@@ -7,12 +7,14 @@ import { convertEmailToDarkMode, removeSenderDarkModeCSS } from "../email/conver
 
 export function EmailHtml({
   message,
+  blockRemoteImages = true,
   onError,
 }: {
   message: MailMessage;
+  blockRemoteImages?: boolean;
   onError?(message: string): void;
 }) {
-  const [loadImages, setLoadImages] = useState(false);
+  const [loadImages, setLoadImages] = useState(!blockRemoteImages);
   const [cidUrls, setCidUrls] = useState<Record<string, string>>({});
   const [height, setHeight] = useState(120);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -20,6 +22,8 @@ export function EmailHtml({
   const clickCleanupRef = useRef<(() => void) | undefined>(undefined);
   const frameResizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
   const darkMode = useResolvedDarkTheme();
+
+  useEffect(() => setLoadImages(!blockRemoteImages), [blockRemoteImages]);
 
   useEffect(
     () => () => {

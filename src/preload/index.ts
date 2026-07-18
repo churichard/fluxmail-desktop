@@ -82,6 +82,8 @@ const api: FluxmailDesktopApi = {
       ),
     setDockBadge: (enabled) =>
       invoke(IPC.preferencesDockBadgeSet, enabled, z.boolean(), z.boolean()),
+    setBlockRemoteImages: (enabled) =>
+      invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
   },
   analytics: {
     trackFeature: (event) => invoke(IPC.analyticsFeature, event, featureEventSchema, z.void()),

@@ -41,6 +41,7 @@ interface Props {
   thread?: ThreadSummary;
   labels: string[];
   allowPermanentDelete: boolean;
+  blockRemoteImages?: boolean;
   onModify(action: ModifyActionInput): Promise<void>;
   onCompose(seed: ComposeSeed): void;
   onError(message: string): void;
@@ -53,6 +54,7 @@ export function ReadingPane({
   thread,
   labels,
   allowPermanentDelete,
+  blockRemoteImages = true,
   onModify,
   onCompose,
   onError,
@@ -233,7 +235,12 @@ export function ReadingPane({
           {detail.messages
             .filter((message) => !message.flags.draft)
             .map((message) => (
-              <MessageCard key={message.id} message={message} onError={onError} />
+              <MessageCard
+                key={message.id}
+                message={message}
+                blockRemoteImages={blockRemoteImages}
+                onError={onError}
+              />
             ))}
           {lastMessage ? (
             <div className="reply-actions">
@@ -260,6 +267,7 @@ export function ReadingPane({
               onSent={() => setReplying(undefined)}
               onError={onError}
               onDirtyChange={onQuickReplyDirtyChange}
+              blockRemoteImages={blockRemoteImages}
             />
           ) : null}
         </div>
@@ -271,9 +279,11 @@ export function ReadingPane({
 
 function MessageCard({
   message,
+  blockRemoteImages,
   onError,
 }: {
   message: MailMessage;
+  blockRemoteImages: boolean;
   onError(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -303,7 +313,7 @@ function MessageCard({
       </button>
       {expanded ? (
         <div className="message-body">
-          <EmailHtml message={message} onError={onError} />
+          <EmailHtml message={message} blockRemoteImages={blockRemoteImages} onError={onError} />
           {message.attachments?.length ? (
             <div className="attachment-list">
               {message.attachments
@@ -348,6 +358,7 @@ function QuickReply({
   onSent,
   onError,
   onDirtyChange,
+  blockRemoteImages,
 }: {
   accountId: string;
   message: MailMessage;
@@ -356,6 +367,7 @@ function QuickReply({
   onSent(): void;
   onError(message: string): void;
   onDirtyChange(dirty: boolean): void;
+  blockRemoteImages: boolean;
 }) {
   const [html, setHtml] = useState("<p></p>");
   const [text, setText] = useState("");
@@ -422,7 +434,7 @@ function QuickReply({
             <div className="quoted-reply-meta">
               {message.from?.name || message.from?.email || "Previous message"}
             </div>
-            <EmailHtml message={message} onError={onError} />
+            <EmailHtml message={message} blockRemoteImages={blockRemoteImages} onError={onError} />
           </div>
         ) : null}
       </div>
