@@ -273,6 +273,7 @@ export const bootstrapSchema = z.object({
   preferences: z.object({
     appearance: appearancePreferenceSchema,
     dockBadge: z.boolean(),
+    blockRemoteImages: z.boolean(),
   }),
   license: z.object({
     plan: z.string(),
@@ -401,6 +402,7 @@ export interface FluxmailDesktopApi {
   preferences: {
     setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
     setDockBadge(enabled: boolean): Promise<boolean>;
+    setBlockRemoteImages(enabled: boolean): Promise<boolean>;
   };
   analytics: { trackFeature(event: FeatureEvent): Promise<void> };
   system: {
@@ -436,6 +438,7 @@ export const IPC = {
   telemetrySet: "fluxmail:telemetry:set",
   preferencesAppearanceSet: "fluxmail:preferences:appearance:set",
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
+  preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",
   systemWindowCloseCancel: "fluxmail:system:window-close-cancel",

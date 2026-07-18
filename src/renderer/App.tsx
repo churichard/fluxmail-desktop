@@ -703,6 +703,7 @@ export function App() {
         allowPermanentDelete={Boolean(
           selectedThread && permanentDeleteAccountIds.has(selectedThread.accountId),
         )}
+        blockRemoteImages={bootstrap.preferences.blockRemoteImages}
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
@@ -716,6 +717,7 @@ export function App() {
           ref={composeDialogRef}
           seed={composeSeed}
           accounts={bootstrap.accounts}
+          blockRemoteImages={bootstrap.preferences.blockRemoteImages}
           onClose={() => setComposeSeed(null)}
           onSent={() => {
             setComposeSeed(null);

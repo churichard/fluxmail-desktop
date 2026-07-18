@@ -15,6 +15,7 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [dockBadgeBusy, setDockBadgeBusy] = useState(false);
+  const [blockRemoteImagesBusy, setBlockRemoteImagesBusy] = useState(false);
   const updateTelemetry = async (enabled: boolean) => {
     const previous = state.telemetry;
     setBusy(true);
@@ -119,6 +120,51 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
       onError(error instanceof Error ? error.message : "Could not change the Dock badge setting.");
     } finally {
       setDockBadgeBusy(false);
+    }
+  };
+  const updateBlockRemoteImages = async (enabled: boolean) => {
+    if (blockRemoteImagesBusy || enabled === state.preferences.blockRemoteImages) return;
+    const previous = state.preferences.blockRemoteImages;
+    setBlockRemoteImagesBusy(true);
+    onState((current) =>
+      current
+        ? {
+            ...current,
+            preferences: { ...current.preferences, blockRemoteImages: enabled },
+          }
+        : current,
+    );
+    try {
+      const value = await window.fluxmail.preferences.setBlockRemoteImages(enabled);
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, blockRemoteImages: value },
+            }
+          : current,
+      );
+      void window.fluxmail.analytics
+        .trackFeature({
+          feature: "settings",
+          action: "updated",
+          source: "settings",
+        })
+        .catch(() => undefined);
+    } catch (error) {
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, blockRemoteImages: previous },
+            }
+          : current,
+      );
+      onError(
+        error instanceof Error ? error.message : "Could not change the image blocking setting.",
+      );
+    } finally {
+      setBlockRemoteImagesBusy(false);
     }
   };
   return (
@@ -277,6 +323,22 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
           </section>
           <section>
             <h2>Privacy</h2>
+            <div className="toggle-row">
+              <span>
+                <strong>Block remote images by default</strong>
+                <small>
+                  We recommend keeping this on. Turning it off may expose your IP address to email
+                  senders.
+                </small>
+              </span>
+              <SelectionCheckbox
+                state={state.preferences.blockRemoteImages ? "checked" : "unchecked"}
+                label="Block remote images by default"
+                className="settings-checkbox"
+                disabled={blockRemoteImagesBusy}
+                onClick={() => void updateBlockRemoteImages(!state.preferences.blockRemoteImages)}
+              />
+            </div>
             <div className="toggle-row">
               <span>
                 <strong>Anonymous analytics</strong>

@@ -314,6 +314,7 @@ function registerIpc(): void {
       preferences: {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),
+        blockRemoteImages: requirePreferences().blockRemoteImages(),
       },
     };
   });
@@ -427,6 +428,9 @@ function registerIpc(): void {
     updateDockBadge();
     return value;
   });
+  handle(IPC.preferencesBlockRemoteImagesSet, z.boolean(), z.boolean(), (enabled) =>
+    requirePreferences().setBlockRemoteImages(enabled),
+  );
   handle(IPC.analyticsFeature, featureEventSchema, z.void(), async (event) =>
     requireAnalytics().captureFeature(event),
   );

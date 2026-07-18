@@ -37,6 +37,7 @@ export interface ComposeSeed {
 interface Props {
   seed: ComposeSeed;
   accounts: AccountInfo[];
+  blockRemoteImages?: boolean;
   onClose(): void;
   onSent(): void;
   onError(message: string): void;
@@ -47,7 +48,7 @@ export interface ComposeDialogHandle {
 }
 
 export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function ComposeDialog(
-  { seed, accounts, onClose, onSent, onError },
+  { seed, accounts, blockRemoteImages = true, onClose, onSent, onError },
   ref,
 ) {
   const initialEditorHtml = seed.initialHtml ?? htmlFromText(seed.initialText ?? "");
@@ -522,7 +523,11 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
                 <div className="quoted-reply-meta">
                   {quotedMessage.from?.name || quotedMessage.from?.email || "Previous message"}
                 </div>
-                <EmailHtml message={quotedMessage} onError={onError} />
+                <EmailHtml
+                  message={quotedMessage}
+                  blockRemoteImages={blockRemoteImages}
+                  onError={onError}
+                />
               </div>
             ) : null}
           </div>
