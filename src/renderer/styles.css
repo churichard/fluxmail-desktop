@@ -1907,9 +1907,11 @@ textarea:focus-visible,
 /* Settings */
 
 .settings-dialog {
+  display: flex;
   width: min(640px, calc(100vw - 50px));
-  max-height: min(730px, calc(100vh - 60px));
+  max-height: min(730px, calc(100vh - 80px));
   overflow: hidden;
+  flex-direction: column;
   border: 1px solid var(--hairline);
   border-radius: 18px;
   background: var(--paper);
@@ -1918,6 +1920,7 @@ textarea:focus-visible,
 
 .settings-dialog > header {
   display: flex;
+  flex: 0 0 58px;
   height: 58px;
   align-items: center;
   border-bottom: 0;
@@ -1944,8 +1947,9 @@ textarea:focus-visible,
 }
 
 .settings-content {
-  max-height: calc(100vh - 120px);
+  min-height: 0;
   overflow-y: auto;
+  flex: 1 1 auto;
   padding: 0 22px 26px;
 }
 

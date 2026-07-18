@@ -303,15 +303,12 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
             <h2>About</h2>
             <div className="settings-about">
               <span>
-                <strong>Fluxmail engine</strong>
+                <strong>Fluxmail version</strong>
                 <small>{state.engine.version}</small>
               </span>
               <span>
                 <strong>Shared data format</strong>
-                <small>
-                  {state.engine.storeFormat} (supports {state.engine.minimumSupportedFormat} through{" "}
-                  {state.engine.maximumSupportedFormat})
-                </small>
+                <small>{state.engine.storeFormat}</small>
               </span>
             </div>
           </section>
