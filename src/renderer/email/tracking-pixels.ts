@@ -368,6 +368,8 @@ function structuralTrackingReason(image: HTMLImageElement): string | undefined {
   if (width === 1 && height === 1) return "1 × 1 image";
   if (image.style.display === "none" || image.style.visibility === "hidden") return "Hidden image";
   if (width === 0 && height === 0) return "Zero-size image";
+  if (width !== undefined && width > 0 && width <= 2) return `Image is ${width} px wide`;
+  if (height !== undefined && height > 0 && height <= 2) return `Image is ${height} px tall`;
   return undefined;
 }
 
@@ -504,7 +506,13 @@ export function blockTrackingPixels(document: Document): TrackingPixelReport {
     const sourceReason = trackingReason(source, !likelyContent);
     const srcsetResult = filterTrackingSrcset(image.getAttribute("srcset") || "", !likelyContent);
     const remoteSources = imageSources(image).filter((candidate) => parseRemoteUrl(candidate));
-    const structuralReason = remoteSources.length ? structuralTrackingReason(image) : undefined;
+    const hasNonAllowlistedRemoteSource = remoteSources.some((candidate) => {
+      const url = parseRemoteUrl(candidate);
+      return url !== undefined && !isAllowlisted(url);
+    });
+    const structuralReason = hasNonAllowlistedRemoteSource
+      ? structuralTrackingReason(image)
+      : undefined;
     if (structuralReason) {
       for (const source of remoteSources) record(trackingPixelDetail(source, structuralReason));
       image.remove();

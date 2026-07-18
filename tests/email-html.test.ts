@@ -117,6 +117,20 @@ describe("email HTML security", () => {
     expect(document).toContain('src="https://track.example.com/newsletter.jpg"');
   });
 
+  it("blocks remote images when either declared dimension is tiny", () => {
+    const document = buildEmailDocument(
+      `<img src="https://images.example/narrow.gif" width="1" height="600">
+       <img src="https://images.example/short.gif" width="600" height="2">
+       <img src="https://images.example/content.jpg" width="3" height="600">`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("narrow.gif");
+    expect(document).not.toContain("short.gif");
+    expect(document).toContain('src="https://images.example/content.jpg"');
+  });
+
   it("keeps compact inline data images", () => {
     const inlineIcon =
       "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M0 0h10v10H0z'/%3E%3C/svg%3E";
@@ -164,12 +178,11 @@ describe("email HTML security", () => {
     for (const url of trackingUrls) expect(document).not.toContain(url);
   });
 
-  it("uses hostname boundaries and keeps ordinary small or attributed images", () => {
+  it("uses hostname boundaries and keeps ordinary attributed images", () => {
     const document = buildEmailDocument(
       `<img src="https://notmailchimp.com/photo.jpg">
        <img src="https://facebook.com/logo.png">
        <img src="https://images.example/photo.jpg?utm_source=newsletter">
-       <img src="https://images.example/divider.png" width="600" height="1">
        <img src="https://cdn.example.com/e/o/product-hero.jpg" width="600" height="400">
        <img src="https://track.example.com/campaign-hero.jpg" style="width: 600px; height: 400px">`,
       {},
@@ -179,7 +192,6 @@ describe("email HTML security", () => {
     expect(document).toContain('src="https://notmailchimp.com/photo.jpg"');
     expect(document).toContain('src="https://facebook.com/logo.png"');
     expect(document).toContain('src="https://images.example/photo.jpg?utm_source=newsletter"');
-    expect(document).toContain('src="https://images.example/divider.png"');
     expect(document).toContain('src="https://cdn.example.com/e/o/product-hero.jpg"');
     expect(document).toContain('src="https://track.example.com/campaign-hero.jpg"');
   });
