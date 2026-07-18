@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildEmailDocument, hasRemoteImages } from "../src/renderer/components/EmailHtml";
+import { convertEmailToDarkMode } from "../src/renderer/email/convert-to-dark-mode";
 
 describe("email HTML security", () => {
   it("removes active content, unsafe navigation, tracking pixels, and remote loads by default", () => {
@@ -99,6 +100,18 @@ describe("email HTML security", () => {
     );
 
     expect(document).not.toContain("prefers-color-scheme");
+  });
+
+  it("does not inline media-scoped stylesheet rules", () => {
+    const document = convertEmailToDarkMode(
+      `<style media="(max-width: 600px)">.desktop { display: none; }</style>
+       <style>.desktop { font-weight: bold; }</style>
+       <div class="desktop">Desktop content</div>`,
+    );
+
+    expect(document).toContain("font-weight: bold");
+    expect(document).not.toContain("display: none");
+    expect(document).toContain("Desktop content");
   });
 
   it("removes inline color-scheme declarations without dropping surrounding content", () => {

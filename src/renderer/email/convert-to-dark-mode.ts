@@ -324,9 +324,9 @@ function removeConflictingDarkModeCSS(html: string): string {
 
 function transformCSSInStyleTags(html: string, options: DarkModeOptions): string {
   try {
-    return html.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, cssContent) => {
+    return html.replace(/<style([^>]*)>([\s\S]*?)<\/style>/gi, (_, attributes, cssContent) => {
       const transformedCSS = transformCSSContent(cssContent, options);
-      return `<style>${transformedCSS}</style>`;
+      return `<style${attributes}>${transformedCSS}</style>`;
     });
   } catch (error) {
     console.error("Failed to transform CSS in style tags, falling back to original:", error);
@@ -855,6 +855,10 @@ function inlineTransformedStyleRules(doc: Document): void {
   let ruleOrder = 0;
   const styleElements = Array.from(doc.querySelectorAll("style"));
   styleElements.forEach((styleElement) => {
+    if ((styleElement.getAttribute("media") || "").trim()) {
+      return;
+    }
+
     const css = stripCssComments(styleElement.textContent || "");
 
     forEachTopLevelCssRule(css, (selectorText, declarationBlock) => {
