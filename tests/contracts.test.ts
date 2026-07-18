@@ -8,7 +8,7 @@ import {
   sendInputSchema,
   threadListInputSchema,
 } from "../src/shared/contracts";
-import { googleOAuthRedirectUri, isOAuthStateValid } from "../src/main/oauth";
+import { GMAIL_SCOPES, googleOAuthRedirectUri, isOAuthStateValid } from "../src/main/oauth";
 import { toEmailQuery } from "../src/main/mail-mapping";
 import { isAllowedFrameUrl } from "../src/main/ipc-security";
 
@@ -124,6 +124,11 @@ describe("desktop contracts", () => {
 
   it("uses a literal loopback address for the OAuth redirect", () => {
     expect(googleOAuthRedirectUri(8976)).toBe("http://127.0.0.1:8976/oauth/callback");
+  });
+
+  it("requests Gmail modification access without permanent deletion access", () => {
+    expect(GMAIL_SCOPES).toContain("https://www.googleapis.com/auth/gmail.modify");
+    expect(GMAIL_SCOPES).not.toContain("https://mail.google.com/");
   });
 
   it("accepts only the app origin or the exact development origin", () => {
