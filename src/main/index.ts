@@ -175,11 +175,15 @@ async function createServices(): Promise<void> {
   analytics = new DesktopAnalytics({ dataDir: fluxmailDataDir });
   cache = new MailCache(app.getPath("userData"), {
     encrypt(value) {
-      if (safeStorage.isEncryptionAvailable()) return safeStorage.encryptString(value);
+      if (safeStorage.isEncryptionAvailable()) {
+        try {
+          return safeStorage.encryptString(value);
+        } catch {
+          return undefined;
+        }
+      }
       if (!app.isPackaged) return Buffer.from(value, "utf8");
-      throw new Error(
-        "macOS Keychain is unavailable, so Fluxmail cannot cache this message safely.",
-      );
+      return undefined;
     },
     decrypt(value) {
       if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(value);

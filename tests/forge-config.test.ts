@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import forgeConfig, { shouldIgnorePackagedPath } from "../forge.config";
+import forgeConfig, {
+  createMacPackagingConfig,
+  dmgMakerConfig,
+  shouldIgnorePackagedPath,
+} from "../forge.config";
 
 describe("Forge package filtering", () => {
   const appRoot = path.join(path.sep, "workspace", "fluxmail-desktop");
@@ -37,5 +41,84 @@ describe("Forge package filtering", () => {
 
   it("uses the Electron binary prepared by postinstall instead of rebuilding workspace copies", () => {
     expect(forgeConfig.rebuildConfig?.ignoreModules).toContain("better-sqlite3");
+  });
+
+  it("uses an ad hoc signature when no signing identity is configured", () => {
+    const packaging = createMacPackagingConfig({});
+    const osxSign = packaging.osxSign;
+    expect(osxSign).toMatchObject({
+      identity: "-",
+      identityValidation: false,
+    });
+    expect(typeof osxSign === "object" && osxSign.optionsForFile?.("Fluxmail.app")).toEqual({
+      hardenedRuntime: false,
+      timestamp: "none",
+    });
+    expect(packaging.osxNotarize).toBeUndefined();
+  });
+
+  it("uses a persistent identity without notarizing self-signed builds", () => {
+    const packaging = createMacPackagingConfig({
+      APPLE_SIGNING_IDENTITY: "Fluxmail Self-Signed Code Signing",
+      APPLE_SIGNING_KEYCHAIN: "/tmp/fluxmail-signing.keychain-db",
+    });
+    const osxSign = packaging.osxSign;
+    expect(osxSign).toMatchObject({
+      identity: "Fluxmail Self-Signed Code Signing",
+      keychain: "/tmp/fluxmail-signing.keychain-db",
+      continueOnError: false,
+      identityValidation: false,
+    });
+    expect(typeof osxSign === "object" && osxSign.optionsForFile?.("Fluxmail.app")).toEqual({
+      hardenedRuntime: false,
+      timestamp: "none",
+    });
+    expect(packaging.osxNotarize).toBeUndefined();
+  });
+
+  it("uses hardened runtime and notarization with complete Apple API credentials", () => {
+    const packaging = createMacPackagingConfig({
+      APPLE_SIGNING_IDENTITY: "Developer ID Application: Fluxmail",
+      APPLE_API_KEY: "/tmp/AuthKey.p8",
+      APPLE_API_KEY_ID: "KEYID",
+      APPLE_API_ISSUER: "ISSUER",
+    });
+    const osxSign = packaging.osxSign;
+    expect(typeof osxSign === "object" && osxSign.optionsForFile?.("Fluxmail.app")).toMatchObject({
+      hardenedRuntime: true,
+    });
+    expect(packaging.osxNotarize).toEqual({
+      appleApiKey: "/tmp/AuthKey.p8",
+      appleApiKeyId: "KEYID",
+      appleApiIssuer: "ISSUER",
+    });
+  });
+
+  it("rejects partial notarization configuration", () => {
+    expect(() =>
+      createMacPackagingConfig({
+        APPLE_SIGNING_IDENTITY: "Developer ID Application: Fluxmail",
+        APPLE_API_KEY: "/tmp/AuthKey.p8",
+      }),
+    ).toThrow("Set all three Apple notarization variables or remove all of them.");
+  });
+
+  it("uses Fluxmail artwork and a centered DMG layout", () => {
+    expect(dmgMakerConfig).toMatchObject({
+      icon: "build/icon.icns",
+      background: "build/dmg-background.png",
+      iconSize: 96,
+      additionalDMGOptions: {
+        window: { size: { width: 658, height: 498 } },
+      },
+    });
+
+    const contents = dmgMakerConfig.contents;
+    expect(
+      typeof contents === "function" && contents({ appPath: "/tmp/Fluxmail.app" } as never),
+    ).toEqual([
+      { x: 462, y: 233, type: "link", path: "/Applications" },
+      { x: 196, y: 233, type: "file", path: "/tmp/Fluxmail.app" },
+    ]);
   });
 });

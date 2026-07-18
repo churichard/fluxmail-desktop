@@ -44,7 +44,7 @@ Desktop message metadata and interface preferences live in the app's macOS Appli
 - `pnpm lint` runs Oxlint.
 - `pnpm format:check` checks formatting.
 - `pnpm test` runs unit and privacy tests under Electron's Node runtime.
-- `pnpm build` creates an unsigned app bundle for the current architecture.
+- `pnpm build` creates an ad hoc-signed app bundle for the current architecture.
 - `pnpm make` creates the configured DMG and ZIP release files.
 
 ## Keyboard shortcuts
@@ -81,15 +81,20 @@ Releases use the OAuth app bundled with the Fluxmail package. These GitHub secre
 
 Set both Google secrets or leave both unset.
 
-Apple signing and notarization are optional. Signed releases require all six Apple secrets:
+Code signing is optional. A persistent self-signed identity requires these three GitHub secrets:
 
 - `MACOS_CERTIFICATE_P12_BASE64`
 - `MACOS_CERTIFICATE_PASSWORD`
 - `APPLE_SIGNING_IDENTITY`
+
+The workflow uses the same certificate for every release, which gives the app a stable designated requirement for macOS Keychain access. Keep an encrypted backup of the P12 and its password outside GitHub. A self-signed certificate does not make the app trusted by Gatekeeper and cannot be notarized.
+
+Developer ID signing and notarization also require these three secrets:
+
 - `APPLE_API_KEY_P8_BASE64`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
 
-If none of the Apple secrets are set, the workflow builds unsigned Apple Silicon and Intel DMGs and ZIPs. macOS warns users before opening an unsigned app. If any Apple secret is set, the workflow requires all six. Signed builds use hardened runtime and Apple notarization.
+Leave all Apple secrets unset to build with ad hoc signatures. Set only the signing group for persistent self-signed releases. Set both complete groups for Developer ID signing, hardened runtime, and notarization. The workflow rejects partial groups. macOS requires users to approve both ad hoc and self-signed apps before opening them.
 
-The workflow attaches both architectures to the GitHub Release that matches the pushed tag. Unsigned releases include a warning in their release notes.
+The workflow attaches both architectures to the GitHub Release that matches the pushed tag. Unnotarized releases include a warning in their release notes.
