@@ -235,6 +235,34 @@ describe("App thread navigation", () => {
     expect(screen.queryByRole("button", { name: inbox.subject })).toBeNull();
   });
 
+  it("keeps a newly opened thread selected when an archive finishes", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    let finishArchive!: () => void;
+    const pendingArchive = new Promise<void>((resolve) => {
+      finishArchive = resolve;
+    });
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingArchive);
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: first.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: first.subject }));
+    fireEvent.keyDown(window, { key: "e" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: first.subject })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: second.subject }));
+    expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+
+    await act(async () => finishArchive());
+
+    await waitFor(() => expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+  });
+
   it("does not run mailbox shortcuts from compose controls", async () => {
     const current = thread("thread-1", "Current conversation", false);
     installApi(
