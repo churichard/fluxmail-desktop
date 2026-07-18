@@ -766,6 +766,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await page.keyboard.press("Meta+Enter");
     await expect(compose).toBeHidden();
 
+    await electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.setSize(1040, 680),
+    );
     const settingsButton = page.getByRole("button", { name: "Settings" });
     await settingsButton.hover();
     await expect(settingsButton).toHaveCSS("border-top-width", "0px");
@@ -793,6 +796,28 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Privacy",
       "About",
     ]);
+    const settingsContent = settings.locator(".settings-content");
+    await settings.getByText("Shared data format").scrollIntoViewIfNeeded();
+    await expect(settings.getByText("Shared data format")).toBeVisible();
+    expect(
+      await settings.evaluate((dialog) => {
+        const dialogBounds = dialog.getBoundingClientRect();
+        const contentBounds = dialog.querySelector(".settings-content")!.getBoundingClientRect();
+        const aboutBounds = dialog.querySelector(".settings-about")!.getBoundingClientRect();
+        return {
+          dialogFitsViewport: dialogBounds.top >= 40 && dialogBounds.bottom <= innerHeight - 40,
+          contentFitsDialog: contentBounds.bottom <= dialogBounds.bottom,
+          aboutFitsContent: aboutBounds.bottom <= contentBounds.bottom,
+        };
+      }),
+    ).toEqual({
+      dialogFitsViewport: true,
+      contentFitsDialog: true,
+      aboutFitsContent: true,
+    });
+    await settingsContent.evaluate((content) => {
+      content.scrollTop = 0;
+    });
     const dockBadgeCheckbox = settings.getByRole("checkbox", {
       name: "Dock badge",
     });
