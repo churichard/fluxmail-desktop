@@ -24,7 +24,7 @@ pnpm build:mcp
 
 If the repository is already cloned, run `git submodule update --init --recursive` before installing.
 
-For a live Gmail build, copy `.env.example` to `.env` and provide `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID` and `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`. Vite injects these values into the Electron main bundle only. They are not available to the renderer.
+Fluxmail uses the OAuth app bundled with the pinned Fluxmail package by default. To use a different Google OAuth desktop client, copy `.env.example` to `.env` and set `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID` and `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`. Vite injects these overrides into the Electron main bundle only. They are not available to the renderer.
 
 Start the app with:
 
@@ -74,7 +74,14 @@ See [Desktop telemetry](docs/telemetry.md) for the event schema, prohibited data
 
 ## Release configuration
 
-Release builds need a Developer ID Application certificate in the active keychain and an App Store Connect API key for notarization. GitHub Actions expects these secrets:
+Releases use the OAuth app bundled with the Fluxmail package. These GitHub secrets can override it:
+
+- `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID`
+- `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`
+
+Set both Google secrets or leave both unset.
+
+Apple signing and notarization are optional. Signed releases require all six Apple secrets:
 
 - `MACOS_CERTIFICATE_P12_BASE64`
 - `MACOS_CERTIFICATE_PASSWORD`
@@ -82,7 +89,7 @@ Release builds need a Developer ID Application certificate in the active keychai
 - `APPLE_API_KEY_P8_BASE64`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
-- `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID`
-- `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`
 
-The release workflow builds separate Apple Silicon and Intel DMGs, signs each app with hardened runtime, notarizes it, and attaches both artifacts to the matching GitHub Release.
+If none of the Apple secrets are set, the workflow builds unsigned Apple Silicon and Intel DMGs and ZIPs. macOS warns users before opening an unsigned app. If any Apple secret is set, the workflow requires all six. Signed builds use hardened runtime and Apple notarization.
+
+The workflow attaches both architectures to the GitHub Release that matches the pushed tag. Unsigned releases include a warning in their release notes.
