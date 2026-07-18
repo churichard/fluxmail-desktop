@@ -17,7 +17,6 @@ import type {
   ThreadPage,
   ThreadSummary,
 } from "../shared/contracts";
-import { canUseHostedImageRelay } from "../shared/image-relay";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadListPane } from "./components/ThreadListPane";
 import { ReadingPane } from "./components/ReadingPane";
@@ -605,7 +604,7 @@ export function App() {
       />
     );
   }
-  const imageRelayAvailable = canUseHostedImageRelay(bootstrap.accounts);
+  const imageRelayAvailable = bootstrap.license.canUsePrivateImageRelay;
 
   return (
     <div

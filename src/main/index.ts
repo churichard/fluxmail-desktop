@@ -60,10 +60,10 @@ import {
 import { parseExternalUrl } from "../shared/external-url";
 import { DesktopAnalytics } from "./analytics";
 import { MailCache } from "./cache";
-import { FluxmailRuntime, resolveHostedImageRelayGoogleClientIds } from "./fluxmail-runtime";
+import { FluxmailRuntime } from "./fluxmail-runtime";
 import { FakeFluxmailRuntime } from "./fake-runtime";
 import { isAllowedFrameUrl } from "./ipc-security";
-import { HostedImageRelay } from "./image-relay";
+import { HostedImageRelay, HostedImageRelayAccess } from "./image-relay";
 import { createLaunchTimer } from "./performance";
 import { DesktopPreferences } from "./preferences";
 
@@ -90,6 +90,7 @@ let analytics: DesktopAnalytics | null = null;
 let cache: MailCache | null = null;
 let preferences: DesktopPreferences | null = null;
 let imageRelay: HostedImageRelay | null = null;
+let imageRelayAccess: HostedImageRelayAccess | null = null;
 let pollTimer: NodeJS.Timeout | undefined;
 let syncState: SyncState = { status: "idle" };
 let activeMailboxInput: ThreadListInput = { view: "inbox", pageSize: 100 };
@@ -215,9 +216,6 @@ async function createServices(): Promise<void> {
           resolveAttachment,
           onNewMessages: showNewMail,
           onCacheChanged,
-          imageRelayGoogleClientIds: resolveHostedImageRelayGoogleClientIds(
-            __FLUXMAIL_IMAGE_RELAY_GOOGLE_CLIENT_IDS__,
-          ),
         });
   await runtime.initialize();
   analytics.captureStarted({
@@ -900,8 +898,12 @@ function requirePreferences(): DesktopPreferences {
 }
 
 function requireImageRelay(): HostedImageRelay {
+  imageRelayAccess ??= new HostedImageRelayAccess(
+    (forceRefresh) => requireRuntime().imageRelayLicenseLease(forceRefresh),
+    (input, init) => net.fetch(input, init),
+  );
   imageRelay ??= new HostedImageRelay(
-    (forceRefresh) => requireRuntime().imageRelayIdentityTokens(forceRefresh),
+    (forceRefresh) => imageRelayAccess!.token(forceRefresh),
     (input, init) => net.fetch(input, init),
   );
   return imageRelay;

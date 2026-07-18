@@ -26,7 +26,6 @@ const account: AccountInfo = {
   provider: "gmail",
   status: "active",
   canPermanentlyDelete: false,
-  canUseImageRelay: true,
 };
 
 function todayAt(hour: number): string {
@@ -102,8 +101,8 @@ const seedMessages: Message[] = [
 ];
 
 export class FakeFluxmailRuntime {
-  async imageRelayIdentityTokens(_forceRefresh = false): Promise<string[]> {
-    return ["fake-image-relay-token"];
+  async imageRelayLicenseLease(_forceRefresh = false): Promise<string> {
+    return "fake-image-relay-license";
   }
 
   private connected = true;
@@ -112,6 +111,7 @@ export class FakeFluxmailRuntime {
     plan: "personal",
     maxMembers: 1,
     maxAccounts: 3,
+    canUsePrivateImageRelay: false,
   };
 
   constructor(
@@ -173,7 +173,12 @@ export class FakeFluxmailRuntime {
     if (!LICENSE_KEY_PATTERN.test(rawKey.trim())) {
       throw new Error("That license key does not look right. Check it and try again.");
     }
-    this.licenseValue = { plan: "pro", maxMembers: 1, maxAccounts: 5 };
+    this.licenseValue = {
+      plan: "pro",
+      maxMembers: 1,
+      maxAccounts: 5,
+      canUsePrivateImageRelay: true,
+    };
     return { outcome: "activated", license: this.licenseValue };
   }
 

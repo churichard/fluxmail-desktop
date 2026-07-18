@@ -1,18 +1,3 @@
-import type { AccountInfo } from "./contracts";
-
-export function canUseHostedImageRelay(
-  accounts: readonly Pick<AccountInfo, "canUseImageRelay">[],
-): boolean {
-  return accounts.some((account) => account.canUseImageRelay === true);
-}
-
-export function shouldUseHostedImageRelay(
-  enabled: boolean,
-  accounts: readonly Pick<AccountInfo, "canUseImageRelay">[],
-): boolean {
-  return enabled && canUseHostedImageRelay(accounts);
-}
-
 export function normalizeRemoteImageUrl(value: string): string | undefined {
   try {
     const trimmed = value.trim();

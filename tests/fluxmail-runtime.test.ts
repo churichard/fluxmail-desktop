@@ -9,15 +9,10 @@ import { MailCache } from "../src/main/cache";
 import {
   FluxmailRuntime,
   prepareFluxmailConfiguration,
-  resolveHostedImageRelayGoogleClientIds,
   shouldUseBundledGoogleConfig,
 } from "../src/main/fluxmail-runtime";
 import type { AccountInfo } from "../src/shared/contracts";
-import {
-  DEFAULT_GOOGLE_CLIENT_ID,
-  GMAIL_FULL_ACCESS_SCOPE,
-  GMAIL_MODIFY_SCOPE,
-} from "../src/main/oauth";
+import { GMAIL_FULL_ACCESS_SCOPE, GMAIL_MODIFY_SCOPE } from "../src/main/oauth";
 
 const account = {
   id: "account-1",
@@ -25,7 +20,6 @@ const account = {
   provider: "gmail" as const,
   status: "active" as const,
   canPermanentlyDelete: false,
-  canUseImageRelay: false,
 };
 const directories: string[] = [];
 
@@ -95,56 +89,6 @@ describe("FluxmailRuntime account capabilities", () => {
       expect.objectContaining({ id: account.id, canPermanentlyDelete: true }),
     ]);
   });
-
-  it("marks only allowlisted Google OAuth clients as image relay capable", async () => {
-    const encryptionKey = Buffer.alloc(32, 10);
-    let encryptedCredentials = encryptString(
-      encryptionKey,
-      JSON.stringify({ fluxmailOAuthClient: { clientId: "relay-client" } }),
-    );
-    const runtime = createRuntime({
-      cache: {},
-      service: {},
-      onCacheChanged: vi.fn(),
-      imageRelayGoogleClientIds: ["relay-client"],
-    });
-    const context = (
-      runtime as unknown as {
-        context: {
-          config: Record<string, unknown>;
-          db?: unknown;
-        };
-      }
-    ).context;
-    context.config.encryptionKey = encryptionKey;
-    context.db = {
-      $client: {
-        prepare: vi.fn(() => ({
-          get: vi.fn(() => ({ encrypted_credentials: encryptedCredentials })),
-        })),
-      },
-    };
-
-    expect(runtime.accounts()[0]?.canUseImageRelay).toBe(true);
-
-    encryptedCredentials = encryptString(
-      encryptionKey,
-      JSON.stringify({ fluxmailOAuthClient: { clientId: "custom-client" } }),
-    );
-
-    expect(runtime.accounts()[0]?.canUseImageRelay).toBe(false);
-    await expect(runtime.imageRelayIdentityTokens()).rejects.toThrow(
-      "connected Gmail configuration cannot use",
-    );
-  });
-
-  it("uses the bundled Google OAuth client when no relay audience list is configured", () => {
-    expect(resolveHostedImageRelayGoogleClientIds("")).toEqual([DEFAULT_GOOGLE_CLIENT_ID]);
-    expect(resolveHostedImageRelayGoogleClientIds(" first, second, first ")).toEqual([
-      "first",
-      "second",
-    ]);
-  });
 });
 
 describe("FluxmailRuntime license activation", () => {
@@ -170,13 +114,20 @@ describe("FluxmailRuntime license activation", () => {
     internals.fluxmail.setStoredConfig = setStoredConfig;
     internals.fluxmail.getEntitlements = vi.fn(() => ({
       plan: "pro",
+      licensed: true,
+      inGrace: false,
       maxMembers: 1,
       maxAccounts: 5,
     }));
 
     await expect(runtime.activateLicense(` ${licenseKey} `)).resolves.toEqual({
       outcome: "activated",
-      license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+      license: {
+        plan: "pro",
+        maxMembers: 1,
+        maxAccounts: 5,
+        canUsePrivateImageRelay: true,
+      },
     });
     expect(refreshLicense).toHaveBeenCalledWith(expect.anything(), {
       licenseKey,
@@ -244,111 +195,68 @@ describe("FluxmailRuntime license activation", () => {
   });
 });
 
-describe("FluxmailRuntime image relay identity", () => {
-  it("returns a current Google ID token without exposing Gmail credentials to the renderer", async () => {
-    const encryptionKey = Buffer.alloc(32, 8);
-    const encryptedCredentials = encryptString(
-      encryptionKey,
-      JSON.stringify({
-        access_token: "access-token",
-        id_token: "google-id-token",
-        expiry_date: Date.now() + 60 * 60 * 1000,
-        fluxmailOAuthClient: {
-          clientId: "desktop-client",
-          clientSecret: "desktop-secret",
-        },
-      }),
-    );
+describe("FluxmailRuntime private image relay license", () => {
+  it("exposes and returns the signed lease for a current paid plan", async () => {
     const runtime = createRuntime({
       cache: {},
       service: {},
       onCacheChanged: vi.fn(),
-      imageRelayGoogleClientIds: ["desktop-client"],
     });
-    const context = (
-      runtime as unknown as {
-        context: {
-          config: Record<string, unknown>;
-          db?: unknown;
-        };
-      }
-    ).context;
-    context.config.encryptionKey = encryptionKey;
-    context.db = {
-      $client: {
-        prepare: vi.fn(() => ({
-          get: vi.fn(() => ({ encrypted_credentials: encryptedCredentials })),
-        })),
-      },
+    const entitlements = {
+      plan: "team",
+      licensed: true,
+      inGrace: false,
+      maxMembers: 5,
+      maxAccounts: 10,
     };
+    const verifyLease = vi.fn();
+    Object.assign(runtime, {
+      fluxmail: {
+        ...runtimeFluxmailModule(),
+        getEntitlements: vi.fn(() => entitlements),
+        checkLicenseState: vi.fn(() => ({ entitlements })),
+        readLeaseRow: vi.fn(() => ({ token: "signed-license-lease", updatedAt: Date.now() })),
+        verifyLease,
+        licensePublicKeys: vi.fn(() => ["public-key"]),
+      },
+    });
 
-    await expect(runtime.imageRelayIdentityTokens()).resolves.toEqual(["google-id-token"]);
+    expect(runtime.license()).toMatchObject({
+      plan: "team",
+      canUsePrivateImageRelay: true,
+    });
+    await expect(runtime.imageRelayLicenseLease()).resolves.toBe("signed-license-lease");
+    expect(verifyLease).toHaveBeenCalledWith("signed-license-lease", ["public-key"]);
   });
 
-  it("tries the currently configured OAuth client before other active Gmail accounts", async () => {
-    const encryptionKey = Buffer.alloc(32, 9);
-    const accounts = [
-      { ...account, id: "custom-account", email: "custom@example.com" },
-      { ...account, id: "configured-account", email: "configured@example.com" },
-    ];
-    const encryptedCredentials = new Map([
-      [
-        "custom-account",
-        encryptString(
-          encryptionKey,
-          JSON.stringify({
-            access_token: "custom-access-token",
-            id_token: "custom-id-token",
-            expiry_date: Date.now() + 60 * 60 * 1000,
-            fluxmailOAuthClient: { clientId: "custom-client" },
-          }),
-        ),
-      ],
-      [
-        "configured-account",
-        encryptString(
-          encryptionKey,
-          JSON.stringify({
-            access_token: "configured-access-token",
-            id_token: "configured-id-token",
-            expiry_date: Date.now() + 60 * 60 * 1000,
-            fluxmailOAuthClient: { clientId: "configured-client" },
-          }),
-        ),
-      ],
-    ]);
+  it("refreshes a stale lease but does not use the licensing grace period", async () => {
     const runtime = createRuntime({
       cache: {},
       service: {},
       onCacheChanged: vi.fn(),
-      imageRelayGoogleClientIds: ["custom-client", "configured-client"],
     });
-    const context = (
-      runtime as unknown as {
-        context: {
-          config: Record<string, unknown>;
-          db?: unknown;
-          registry: { listAccounts(): typeof accounts };
-        };
-      }
-    ).context;
-    context.config.encryptionKey = encryptionKey;
-    context.config.google = { clientId: "configured-client" };
-    context.registry.listAccounts = () => accounts;
-    context.db = {
-      $client: {
-        prepare: vi.fn(() => ({
-          get: vi.fn((accountId: string) => ({
-            encrypted_credentials: encryptedCredentials.get(accountId),
-          })),
-        })),
-      },
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: { licenseController: { refreshNow: ReturnType<typeof vi.fn> } };
     };
+    const inGrace = {
+      plan: "pro",
+      licensed: true,
+      inGrace: true,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => inGrace),
+      readLeaseRow: vi.fn(() => ({ token: "expired-lease", updatedAt: Date.now() })),
+    };
+    internals.context.licenseController.refreshNow = vi.fn(async () => undefined);
 
-    await expect(runtime.imageRelayIdentityTokens()).resolves.toEqual([
-      "configured-id-token",
-      "custom-id-token",
-    ]);
+    await expect(runtime.imageRelayLicenseLease()).rejects.toThrow(
+      "available on Pro, Team, and Enterprise",
+    );
+    expect(internals.context.licenseController.refreshNow).toHaveBeenCalledOnce();
   });
 });
 
@@ -1440,7 +1348,6 @@ function createRuntime(input: {
   service: Record<string, ReturnType<typeof vi.fn>>;
   cache: Record<string, ReturnType<typeof vi.fn>>;
   onCacheChanged(): void;
-  imageRelayGoogleClientIds?: string[];
 }): FluxmailRuntime {
   const cache = {
     putThread: vi.fn(),
@@ -1461,7 +1368,6 @@ function createRuntime(input: {
     })),
     onNewMessages: vi.fn(),
     onCacheChanged: input.onCacheChanged,
-    imageRelayGoogleClientIds: input.imageRelayGoogleClientIds ?? [],
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1476,7 +1382,12 @@ function createRuntime(input: {
       registry: { listAccounts: () => [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
-      licenseController: { stop: vi.fn(), wake: vi.fn() },
+      licenseController: {
+        stop: vi.fn(),
+        wake: vi.fn(),
+        configuredKey: vi.fn(() => undefined),
+        refreshNow: vi.fn(async () => undefined),
+      },
     },
   });
   return runtime;
@@ -1488,7 +1399,6 @@ function createRuntimeWithCache(input: {
   accounts?: AccountInfo[];
   onCacheChanged(): void;
   onNewMessages?(messages: Message[], account: AccountInfo): void;
-  imageRelayGoogleClientIds?: string[];
 }): FluxmailRuntime {
   const runtime = new FluxmailRuntime({
     cache: input.cache,
@@ -1504,7 +1414,6 @@ function createRuntimeWithCache(input: {
     })),
     onNewMessages: input.onNewMessages ?? vi.fn(),
     onCacheChanged: input.onCacheChanged,
-    imageRelayGoogleClientIds: input.imageRelayGoogleClientIds ?? [],
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1519,7 +1428,12 @@ function createRuntimeWithCache(input: {
       registry: { listAccounts: () => input.accounts ?? [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
-      licenseController: { stop: vi.fn(), wake: vi.fn() },
+      licenseController: {
+        stop: vi.fn(),
+        wake: vi.fn(),
+        configuredKey: vi.fn(() => undefined),
+        refreshNow: vi.fn(async () => undefined),
+      },
     },
   });
   return runtime;
@@ -1556,10 +1470,15 @@ function runtimeFluxmailModule() {
     setStoredConfig: vi.fn(),
     getEntitlements: vi.fn(() => ({
       plan: "personal",
+      licensed: false,
+      inGrace: false,
       maxMembers: 1,
       maxAccounts: 3,
     })),
-    checkLicenseState: vi.fn(() => ({})),
+    checkLicenseState: vi.fn(() => ({ warning: undefined })),
+    readLeaseRow: vi.fn(() => undefined),
+    verifyLease: vi.fn(),
+    licensePublicKeys: vi.fn(() => []),
   };
 }
 

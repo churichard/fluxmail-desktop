@@ -12,7 +12,12 @@ describe("SettingsDialog license activation", () => {
   it("activates a key, clears the input, and updates the displayed plan", async () => {
     const activate = vi.fn(async () => ({
       outcome: "activated" as const,
-      license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+      license: {
+        plan: "pro",
+        maxMembers: 1,
+        maxAccounts: 5,
+        canUsePrivateImageRelay: true,
+      },
     }));
     installApi(activate);
     render(<SettingsHarness />);
@@ -52,8 +57,52 @@ describe("SettingsDialog license activation", () => {
   });
 });
 
+describe("SettingsDialog private image relay", () => {
+  it("keeps a saved image relay preference checked but inactive on Personal", () => {
+    const state = bootstrapState(false);
+    const { rerender } = render(
+      <SettingsDialog state={state} onState={vi.fn()} onClose={vi.fn()} onError={vi.fn()} />,
+    );
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Private image relay",
+    }) as HTMLButtonElement;
+
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+    expect(checkbox.disabled).toBe(true);
+    expect(
+      screen
+        .getByText("Private image relay")
+        .closest(".toggle-row")
+        ?.classList.contains("setting-unavailable"),
+    ).toBe(true);
+    expect(
+      screen.getByText("Private image relay is available on Pro, Team, and Enterprise."),
+    ).toBeTruthy();
+
+    rerender(
+      <SettingsDialog
+        state={{
+          ...state,
+          license: {
+            plan: "pro",
+            maxMembers: 1,
+            maxAccounts: 5,
+            canUsePrivateImageRelay: true,
+          },
+        }}
+        onState={vi.fn()}
+        onClose={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+    expect(checkbox.disabled).toBe(false);
+  });
+});
+
 function SettingsHarness() {
-  const [state, setState] = useState<BootstrapState | null>(bootstrapState());
+  const [state, setState] = useState<BootstrapState | null>(bootstrapState(false));
   if (!state) return null;
   return <SettingsDialog state={state} onState={setState} onClose={vi.fn()} onError={vi.fn()} />;
 }
@@ -74,7 +123,7 @@ function installApi(
   });
 }
 
-function bootstrapState(): BootstrapState {
+function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
   return {
     engine: {
       version: "0.5.0",
@@ -89,7 +138,17 @@ function bootstrapState(): BootstrapState {
     countsByAccount: {},
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },
-    preferences: { appearance: "system", dockBadge: true, blockRemoteImages: true },
-    license: { plan: "personal", maxMembers: 1, maxAccounts: 3 },
+    preferences: {
+      appearance: "system",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: true,
+    },
+    license: {
+      plan: "personal",
+      maxMembers: 1,
+      maxAccounts: 3,
+      canUsePrivateImageRelay,
+    },
   };
 }

@@ -898,19 +898,19 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       initialAnalyticsState === "true" ? "false" : "true",
     );
     const imageRelayCheckbox = settings.getByRole("checkbox", {
-      name: "Image relay",
+      name: "Private image relay",
     });
     await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "false");
     await expect(
       settings.getByText(
-        "Use Fluxmail's relay when you load remote images. This hides your IP address from the sender.",
+        "Use Fluxmail's private hosted relay when you load remote images. This hides your IP address from the sender.",
       ),
     ).toBeVisible();
     await imageRelayCheckbox.click();
     await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "true");
-    await expect(settings.getByText("Personal", { exact: true })).toBeVisible();
+    await expect(settings.getByText("Pro", { exact: true })).toBeVisible();
     await expect(
-      settings.getByText("Includes up to 3 connected mailboxes for one member."),
+      settings.getByText("Includes up to 5 connected mailboxes for one member."),
     ).toBeVisible();
     await expect(settings.getByRole("button", { name: "View plans" })).toBeVisible();
     await expect(settings.getByLabel("License key")).toBeHidden();

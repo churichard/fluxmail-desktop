@@ -20,7 +20,6 @@ export const accountSchema = z.object({
   provider: z.enum(["gmail", "outlook", "imap"]),
   status: z.enum(["active", "auth_error", "disabled"]),
   canPermanentlyDelete: z.boolean().optional(),
-  canUseImageRelay: z.boolean().optional(),
 });
 export type AccountInfo = z.infer<typeof accountSchema>;
 
@@ -258,6 +257,7 @@ export const licenseStatusSchema = z.object({
   plan: z.string(),
   maxMembers: z.number().int().positive(),
   maxAccounts: z.number().int().positive(),
+  canUsePrivateImageRelay: z.boolean(),
   warning: z.string().optional(),
 });
 

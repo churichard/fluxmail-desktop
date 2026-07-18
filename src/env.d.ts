@@ -2,6 +2,5 @@
 
 declare const __FLUXMAIL_GOOGLE_CLIENT_ID__: string;
 declare const __FLUXMAIL_GOOGLE_CLIENT_SECRET__: string;
-declare const __FLUXMAIL_IMAGE_RELAY_GOOGLE_CLIENT_IDS__: string;
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;

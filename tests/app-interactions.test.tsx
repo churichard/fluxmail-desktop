@@ -413,7 +413,6 @@ function installApi(
         email: "me@example.com",
         provider: "gmail",
         status: "active",
-        canUseImageRelay: true,
       },
     ],
     folders: [],
@@ -430,7 +429,12 @@ function installApi(
       blockRemoteImages: true,
       imageRelay: true,
     },
-    license: { plan: "personal", maxMembers: 1, maxAccounts: 3 },
+    license: {
+      plan: "personal",
+      maxMembers: 1,
+      maxAccounts: 3,
+      canUsePrivateImageRelay: false,
+    },
   };
   let visibleThreads = threads;
   Object.defineProperty(window, "fluxmail", {
