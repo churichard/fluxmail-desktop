@@ -9,10 +9,15 @@ import { MailCache } from "../src/main/cache";
 import {
   FluxmailRuntime,
   prepareFluxmailConfiguration,
+  resolveHostedImageRelayGoogleClientIds,
   shouldUseBundledGoogleConfig,
 } from "../src/main/fluxmail-runtime";
 import type { AccountInfo } from "../src/shared/contracts";
-import { GMAIL_FULL_ACCESS_SCOPE, GMAIL_MODIFY_SCOPE } from "../src/main/oauth";
+import {
+  DEFAULT_GOOGLE_CLIENT_ID,
+  GMAIL_FULL_ACCESS_SCOPE,
+  GMAIL_MODIFY_SCOPE,
+} from "../src/main/oauth";
 
 const account = {
   id: "account-1",
@@ -20,6 +25,7 @@ const account = {
   provider: "gmail" as const,
   status: "active" as const,
   canPermanentlyDelete: false,
+  canUseImageRelay: false,
 };
 const directories: string[] = [];
 
@@ -87,6 +93,56 @@ describe("FluxmailRuntime account capabilities", () => {
 
     expect(runtime.accounts()).toEqual([
       expect.objectContaining({ id: account.id, canPermanentlyDelete: true }),
+    ]);
+  });
+
+  it("marks only allowlisted Google OAuth clients as image relay capable", async () => {
+    const encryptionKey = Buffer.alloc(32, 10);
+    let encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({ fluxmailOAuthClient: { clientId: "relay-client" } }),
+    );
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      imageRelayGoogleClientIds: ["relay-client"],
+    });
+    const context = (
+      runtime as unknown as {
+        context: {
+          config: Record<string, unknown>;
+          db?: unknown;
+        };
+      }
+    ).context;
+    context.config.encryptionKey = encryptionKey;
+    context.db = {
+      $client: {
+        prepare: vi.fn(() => ({
+          get: vi.fn(() => ({ encrypted_credentials: encryptedCredentials })),
+        })),
+      },
+    };
+
+    expect(runtime.accounts()[0]?.canUseImageRelay).toBe(true);
+
+    encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({ fluxmailOAuthClient: { clientId: "custom-client" } }),
+    );
+
+    expect(runtime.accounts()[0]?.canUseImageRelay).toBe(false);
+    await expect(runtime.imageRelayIdentityTokens()).rejects.toThrow(
+      "connected Gmail configuration cannot use",
+    );
+  });
+
+  it("uses the bundled Google OAuth client when no relay audience list is configured", () => {
+    expect(resolveHostedImageRelayGoogleClientIds("")).toEqual([DEFAULT_GOOGLE_CLIENT_ID]);
+    expect(resolveHostedImageRelayGoogleClientIds(" first, second, first ")).toEqual([
+      "first",
+      "second",
     ]);
   });
 });
@@ -203,7 +259,12 @@ describe("FluxmailRuntime image relay identity", () => {
         },
       }),
     );
-    const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      imageRelayGoogleClientIds: ["desktop-client"],
+    });
     const context = (
       runtime as unknown as {
         context: {
@@ -256,7 +317,12 @@ describe("FluxmailRuntime image relay identity", () => {
         ),
       ],
     ]);
-    const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      imageRelayGoogleClientIds: ["custom-client", "configured-client"],
+    });
     const context = (
       runtime as unknown as {
         context: {
@@ -1374,6 +1440,7 @@ function createRuntime(input: {
   service: Record<string, ReturnType<typeof vi.fn>>;
   cache: Record<string, ReturnType<typeof vi.fn>>;
   onCacheChanged(): void;
+  imageRelayGoogleClientIds?: string[];
 }): FluxmailRuntime {
   const cache = {
     putThread: vi.fn(),
@@ -1394,6 +1461,7 @@ function createRuntime(input: {
     })),
     onNewMessages: vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    imageRelayGoogleClientIds: input.imageRelayGoogleClientIds ?? [],
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1420,6 +1488,7 @@ function createRuntimeWithCache(input: {
   accounts?: AccountInfo[];
   onCacheChanged(): void;
   onNewMessages?(messages: Message[], account: AccountInfo): void;
+  imageRelayGoogleClientIds?: string[];
 }): FluxmailRuntime {
   const runtime = new FluxmailRuntime({
     cache: input.cache,
@@ -1435,6 +1504,7 @@ function createRuntimeWithCache(input: {
     })),
     onNewMessages: input.onNewMessages ?? vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    imageRelayGoogleClientIds: input.imageRelayGoogleClientIds ?? [],
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),

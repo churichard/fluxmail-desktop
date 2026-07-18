@@ -413,6 +413,7 @@ function installApi(
         email: "me@example.com",
         provider: "gmail",
         status: "active",
+        canUseImageRelay: true,
       },
     ],
     folders: [],

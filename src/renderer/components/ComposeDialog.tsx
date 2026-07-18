@@ -39,6 +39,7 @@ interface Props {
   accounts: AccountInfo[];
   blockRemoteImages?: boolean;
   imageRelay?: boolean;
+  imageRelayAvailable?: boolean;
   onClose(): void;
   onSent(): void;
   onError(message: string): void;
@@ -49,7 +50,16 @@ export interface ComposeDialogHandle {
 }
 
 export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function ComposeDialog(
-  { seed, accounts, blockRemoteImages = true, imageRelay = true, onClose, onSent, onError },
+  {
+    seed,
+    accounts,
+    blockRemoteImages = true,
+    imageRelay = true,
+    imageRelayAvailable = true,
+    onClose,
+    onSent,
+    onError,
+  },
   ref,
 ) {
   const initialEditorHtml = seed.initialHtml ?? htmlFromText(seed.initialText ?? "");
@@ -528,6 +538,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
                   message={quotedMessage}
                   blockRemoteImages={blockRemoteImages}
                   imageRelay={imageRelay}
+                  imageRelayAvailable={imageRelayAvailable}
                   onError={onError}
                 />
               </div>

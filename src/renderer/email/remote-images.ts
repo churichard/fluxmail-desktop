@@ -1,6 +1,7 @@
 import { normalizeRemoteImageUrl } from "../../shared/image-relay";
 
-const CSS_URL_REGEX = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+const CSS_URL_REGEX =
+  /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|((?:\\.|[^'")])+?))\s*\)/gi;
 
 interface SrcsetEntry {
   url: string;
@@ -81,18 +82,20 @@ export function rewriteRemoteImageUrls(
 
 function cssUrls(value: string): string[] {
   const urls: string[] = [];
-  value.replace(CSS_URL_REGEX, (match, _quote, url: unknown) => {
-    if (typeof url === "string" && url.trim()) urls.push(url.trim());
-    return match;
-  });
+  for (const match of value.matchAll(CSS_URL_REGEX)) {
+    const url = match[1] ?? match[2] ?? match[3];
+    if (url?.trim()) urls.push(url.trim());
+  }
   return urls;
 }
 
 function rewriteCss(value: string, replace: (url: string) => string | undefined): string {
-  return value.replace(CSS_URL_REGEX, (match, quote: string, url: unknown) => {
+  return value.replace(CSS_URL_REGEX, (match, doubleQuoted, singleQuoted, unquoted) => {
+    const url = doubleQuoted ?? singleQuoted ?? unquoted;
     if (typeof url !== "string" || !normalizeRemoteImageUrl(url.trim())) return match;
     const proxied = replace(url.trim());
     if (!proxied) return 'url("data:,")';
+    const quote = doubleQuoted !== undefined ? '"' : singleQuoted !== undefined ? "'" : "";
     return `url(${quote}${proxied}${quote})`;
   });
 }

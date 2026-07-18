@@ -149,7 +149,6 @@ export function EmailHtml({
     }
     void loadRemoteImages();
   }, [blockRemoteImages, imageRelay, imageRelayAvailable, loadRemoteImages, policyKey]);
-
   const rendered = useMemo(
     () => buildEmailContent(rawHtml, cidUrls, loadImages, darkMode, relayUrls),
     [cidUrls, darkMode, loadImages, rawHtml, relayUrls],

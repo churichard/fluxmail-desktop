@@ -81,6 +81,44 @@ describe("EmailHtml remote image consent", () => {
     expect(frameSource(container)).not.toContain("images.example");
     expect(proxy).toHaveBeenCalledWith(["https://images.example/first.png"]);
   });
+
+  it("does not fall back to direct loading when the relay is unavailable", () => {
+    const proxy = vi.fn(async () => ({}));
+    installApi(proxy);
+    const { container } = render(
+      <EmailHtml
+        message={message("first")}
+        blockRemoteImages={false}
+        imageRelay
+        imageRelayAvailable={false}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Image relay unavailable" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(frameDocument(container).querySelector("img")?.hasAttribute("src")).toBe(false);
+    expect(frameSource(container)).toContain('data-remote-src="https://images.example/first.png"');
+    expect(proxy).not.toHaveBeenCalled();
+  });
+
+  it("skips the relay for messages without remote images", async () => {
+    const proxy = vi.fn(async () => ({}));
+    installApi(proxy);
+    const onError = vi.fn();
+    render(
+      <EmailHtml
+        message={{ ...message("plain"), body: { text: "No remote images" } }}
+        blockRemoteImages={false}
+        imageRelay
+        onError={onError}
+      />,
+    );
+
+    await waitFor(() => expect(onError).not.toHaveBeenCalled());
+    expect(proxy).not.toHaveBeenCalled();
+  });
 });
 
 function installApi(proxy: FluxmailDesktopApi["images"]["proxy"]): void {

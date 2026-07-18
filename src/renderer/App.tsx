@@ -17,6 +17,7 @@ import type {
   ThreadPage,
   ThreadSummary,
 } from "../shared/contracts";
+import { canUseHostedImageRelay } from "../shared/image-relay";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadListPane } from "./components/ThreadListPane";
 import { ReadingPane } from "./components/ReadingPane";
@@ -604,6 +605,7 @@ export function App() {
       />
     );
   }
+  const imageRelayAvailable = canUseHostedImageRelay(bootstrap.accounts);
 
   return (
     <div
@@ -705,6 +707,7 @@ export function App() {
         )}
         blockRemoteImages={bootstrap.preferences.blockRemoteImages}
         imageRelay={bootstrap.preferences.imageRelay}
+        imageRelayAvailable={imageRelayAvailable}
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
@@ -720,6 +723,7 @@ export function App() {
           accounts={bootstrap.accounts}
           blockRemoteImages={bootstrap.preferences.blockRemoteImages}
           imageRelay={bootstrap.preferences.imageRelay}
+          imageRelayAvailable={imageRelayAvailable}
           onClose={() => setComposeSeed(null)}
           onSent={() => {
             setComposeSeed(null);

@@ -110,6 +110,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
           FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID: ${{ secrets.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID }}
           FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET: ${{ secrets.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET }}
+          FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS: ${{ secrets.FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS }}
         run: pnpm exec electron-forge make --arch=${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:

@@ -60,7 +60,7 @@ import {
 import { parseExternalUrl } from "../shared/external-url";
 import { DesktopAnalytics } from "./analytics";
 import { MailCache } from "./cache";
-import { FluxmailRuntime } from "./fluxmail-runtime";
+import { FluxmailRuntime, resolveHostedImageRelayGoogleClientIds } from "./fluxmail-runtime";
 import { FakeFluxmailRuntime } from "./fake-runtime";
 import { isAllowedFrameUrl } from "./ipc-security";
 import { HostedImageRelay } from "./image-relay";
@@ -215,6 +215,9 @@ async function createServices(): Promise<void> {
           resolveAttachment,
           onNewMessages: showNewMail,
           onCacheChanged,
+          imageRelayGoogleClientIds: resolveHostedImageRelayGoogleClientIds(
+            __FLUXMAIL_IMAGE_RELAY_GOOGLE_CLIENT_IDS__,
+          ),
         });
   await runtime.initialize();
   analytics.captureStarted({
@@ -353,8 +356,9 @@ function registerAppProtocol(): void {
 function registerIpc(): void {
   handle(IPC.bootstrap, z.undefined(), bootstrapSchema, async () => {
     if (startupError) throw startupError;
+    const bootstrap = await requireRuntime().bootstrap(syncState);
     return {
-      ...(await requireRuntime().bootstrap(syncState)),
+      ...bootstrap,
       preferences: {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),

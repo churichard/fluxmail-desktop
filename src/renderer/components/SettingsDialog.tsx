@@ -1,6 +1,7 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { ExternalLink, Monitor, Moon, RefreshCw, Sun, Trash2, X } from "lucide-react";
 import type { AppearancePreference, BootstrapState } from "../../shared/contracts";
+import { canUseHostedImageRelay } from "../../shared/image-relay";
 import { IconButton, SelectionCheckbox } from "./Controls";
 
 interface Props {
@@ -24,6 +25,10 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
     message: string;
   }>();
   const [imageRelayBusy, setImageRelayBusy] = useState(false);
+  const imageRelayAvailable = canUseHostedImageRelay(state.accounts);
+  const hasActiveGmail = state.accounts.some(
+    (account) => account.provider === "gmail" && account.status === "active",
+  );
   const updateTelemetry = async (enabled: boolean) => {
     const previous = state.telemetry;
     setBusy(true);
@@ -497,15 +502,18 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
               <span>
                 <strong>Image relay</strong>
                 <small>
-                  Use Fluxmail's relay when you load remote images. This hides your IP address from
-                  the sender.
+                  {imageRelayAvailable
+                    ? "Use Fluxmail's relay when you load remote images. This hides your IP address from the sender."
+                    : hasActiveGmail
+                      ? "The connected Gmail configuration cannot use Fluxmail's image relay."
+                      : "Connect an active Gmail account to use Fluxmail's image relay."}
                 </small>
               </span>
               <SelectionCheckbox
                 state={state.preferences.imageRelay ? "checked" : "unchecked"}
                 label="Image relay"
                 className="settings-checkbox"
-                disabled={imageRelayBusy}
+                disabled={imageRelayBusy || (!imageRelayAvailable && !state.preferences.imageRelay)}
                 onClick={() => void updateImageRelay(!state.preferences.imageRelay)}
               />
             </div>

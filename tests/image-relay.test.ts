@@ -1,8 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import { HostedImageRelay } from "../src/main/image-relay";
-import { normalizeRemoteImageUrl } from "../src/shared/image-relay";
+import {
+  canUseHostedImageRelay,
+  normalizeRemoteImageUrl,
+  shouldUseHostedImageRelay,
+} from "../src/shared/image-relay";
 
 describe("hosted image relay", () => {
+  it("uses the capability reported for connected accounts", () => {
+    expect(canUseHostedImageRelay([{ canUseImageRelay: true }])).toBe(true);
+    expect(canUseHostedImageRelay([{ canUseImageRelay: false }])).toBe(false);
+    expect(canUseHostedImageRelay([{}])).toBe(false);
+    expect(shouldUseHostedImageRelay(true, [{ canUseImageRelay: false }])).toBe(false);
+    expect(shouldUseHostedImageRelay(true, [{ canUseImageRelay: true }])).toBe(true);
+    expect(shouldUseHostedImageRelay(false, [{ canUseImageRelay: true }])).toBe(false);
+  });
+
+  it("stops using the relay when the last capable account is removed", () => {
+    const accounts = [{ id: "relay", canUseImageRelay: true }, { id: "custom" }];
+
+    expect(shouldUseHostedImageRelay(true, accounts)).toBe(true);
+    expect(
+      shouldUseHostedImageRelay(
+        true,
+        accounts.filter((account) => account.id !== "relay"),
+      ),
+    ).toBe(false);
+  });
+
   it("normalizes image URLs without copying the server's tracking rules", () => {
     expect(
       normalizeRemoteImageUrl(

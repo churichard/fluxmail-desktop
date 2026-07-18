@@ -26,6 +26,7 @@ const account: AccountInfo = {
   provider: "gmail",
   status: "active",
   canPermanentlyDelete: false,
+  canUseImageRelay: true,
 };
 
 function todayAt(hour: number): string {

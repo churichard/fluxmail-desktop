@@ -30,21 +30,25 @@ describe("main Vite configuration", () => {
     directories.push(directory);
     writeFileSync(
       path.join(directory, ".env"),
-      "FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID=desktop-client\nFLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET=desktop-secret\n",
+      "FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID=desktop-client\nFLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET=desktop-secret\nFLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS=desktop-client,second-client\n",
     );
 
     const previousClientId = process.env.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID;
     const previousClientSecret = process.env.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET;
+    const previousRelayClientIds = process.env.FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS;
     delete process.env.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID;
     delete process.env.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET;
+    delete process.env.FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS;
     try {
       expect(loadDesktopOAuthConfig("development", directory)).toEqual({
         clientId: "desktop-client",
         clientSecret: "desktop-secret",
+        imageRelayClientIds: "desktop-client,second-client",
       });
     } finally {
       restoreEnvironment("FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID", previousClientId);
       restoreEnvironment("FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET", previousClientSecret);
+      restoreEnvironment("FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS", previousRelayClientIds);
     }
   });
 });

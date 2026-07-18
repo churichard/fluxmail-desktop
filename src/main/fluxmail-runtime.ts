@@ -28,6 +28,7 @@ import { MailCache } from "./cache";
 import { DesktopAnalytics, type MailOperation, type SyncTrigger } from "./analytics";
 import { toEmailQuery } from "./mail-mapping";
 import {
+  DEFAULT_GOOGLE_CLIENT_ID,
   googleCredentialsAllowPermanentDelete,
   googleOAuthClientAllowsPermanentDelete,
   googleOAuthScopes,
@@ -41,6 +42,7 @@ interface RuntimeOptions {
   resolveAttachment(attachment: ComposeAttachment): Promise<AttachmentInput>;
   onNewMessages(messages: Message[], account: AccountInfo): void;
   onCacheChanged(): void;
+  imageRelayGoogleClientIds: readonly string[];
 }
 
 type StoredGoogleCredentials = Credentials & {
@@ -55,10 +57,13 @@ export class FluxmailRuntime {
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
   private readonly imageRelayIdentities = new Map<string, { token: string; expiresAt: number }>();
+  private readonly imageRelayGoogleClientIds: Set<string>;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
 
-  constructor(private readonly options: RuntimeOptions) {}
+  constructor(private readonly options: RuntimeOptions) {
+    this.imageRelayGoogleClientIds = new Set(options.imageRelayGoogleClientIds);
+  }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -86,15 +91,22 @@ export class FluxmailRuntime {
     return this.context.registry
       .listAccounts()
       .map((account) =>
-        toAccountInfo(account, this.accountCanPermanentlyDelete(account.id, account.provider)),
+        toAccountInfo(
+          account,
+          this.accountCanPermanentlyDelete(account.id, account.provider),
+          this.accountCanUseHostedImageRelay(account.id, account.provider, account.status),
+        ),
       );
   }
 
   async imageRelayIdentityTokens(forceRefresh = false): Promise<string[]> {
-    const accounts = this.accounts().filter(
+    const gmailAccounts = this.accounts().filter(
       (candidate) => candidate.provider === "gmail" && candidate.status === "active",
     );
-    if (!accounts.length) throw new Error("Connect Gmail before using the image relay.");
+    if (!gmailAccounts.length) throw new Error("Connect Gmail before using the image relay.");
+    const accounts = gmailAccounts.filter((account) => account.canUseImageRelay);
+    if (!accounts.length)
+      throw new Error("The connected Gmail configuration cannot use Fluxmail's image relay.");
     if (forceRefresh) this.invalidateImageRelayIdentities();
 
     const configuredClientId = this.context.config.google?.clientId;
@@ -105,7 +117,9 @@ export class FluxmailRuntime {
           const credentials = this.imageRelayCredentials(account.id);
           if (!credentials) return [];
           const oauthClient = credentials.fluxmailOAuthClient ?? this.context.config.google;
-          return oauthClient?.clientId ? [{ account, credentials, oauthClient }] : [];
+          return oauthClient?.clientId && this.imageRelayGoogleClientIds.has(oauthClient.clientId)
+            ? [{ account, credentials, oauthClient }]
+            : [];
         } catch (error) {
           lastError = error;
           return [];
@@ -229,6 +243,21 @@ export class FluxmailRuntime {
         ? googleOAuthScopes(googleOAuthClientAllowsPermanentDelete(clientId))
         : [];
       return googleCredentialsAllowPermanentDelete(credentials, requestedScopes);
+    } catch {
+      return false;
+    }
+  }
+
+  private accountCanUseHostedImageRelay(
+    accountId: string,
+    provider: AccountInfo["provider"],
+    status: AccountInfo["status"],
+  ): boolean {
+    if (provider !== "gmail" || status !== "active") return false;
+    try {
+      const credentials = this.imageRelayCredentials(accountId);
+      const clientId = (credentials?.fluxmailOAuthClient ?? this.context.config.google)?.clientId;
+      return Boolean(clientId && this.imageRelayGoogleClientIds.has(clientId));
     } catch {
       return false;
     }
@@ -388,7 +417,11 @@ export class FluxmailRuntime {
       { sharedWithAll: false },
     );
     this.invalidateImageRelayIdentities();
-    return toAccountInfo(account, identity.canPermanentlyDelete);
+    return toAccountInfo(
+      account,
+      identity.canPermanentlyDelete,
+      this.accountCanUseHostedImageRelay(account.id, account.provider, account.status),
+    );
   }
 
   removeAccount(accountId: string): void {
@@ -1025,6 +1058,7 @@ function escapeHtml(value: string): string {
 function toAccountInfo(
   account: ReturnType<AppContext["registry"]["getAccount"]>,
   canPermanentlyDelete: boolean,
+  canUseImageRelay: boolean,
 ): AccountInfo {
   return {
     id: account.id,
@@ -1033,6 +1067,7 @@ function toAccountInfo(
     provider: account.provider,
     status: account.status,
     canPermanentlyDelete,
+    canUseImageRelay,
   };
 }
 
@@ -1090,6 +1125,13 @@ type FluxmailConfigurationModule = Pick<
   | "resolveStoreLocation"
   | "setStoredConfig"
 >;
+
+export function resolveHostedImageRelayGoogleClientIds(value: string): string[] {
+  const configured = [...new Set(value.split(",").map((clientId) => clientId.trim()))].filter(
+    Boolean,
+  );
+  return configured.length ? configured : [DEFAULT_GOOGLE_CLIENT_ID];
+}
 
 export function prepareFluxmailConfiguration(
   fluxmail: FluxmailConfigurationModule,

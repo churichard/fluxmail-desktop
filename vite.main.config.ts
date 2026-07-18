@@ -9,6 +9,7 @@ export function loadDesktopOAuthConfig(mode: string, root = process.cwd()) {
   return {
     clientId: environment.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID ?? "",
     clientSecret: environment.FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET ?? "",
+    imageRelayClientIds: environment.FLUXMAIL_DESKTOP_IMAGE_RELAY_GOOGLE_CLIENT_IDS ?? "",
   };
 }
 
@@ -39,6 +40,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __FLUXMAIL_GOOGLE_CLIENT_ID__: JSON.stringify(oauth.clientId),
       __FLUXMAIL_GOOGLE_CLIENT_SECRET__: JSON.stringify(oauth.clientSecret),
+      __FLUXMAIL_IMAGE_RELAY_GOOGLE_CLIENT_IDS__: JSON.stringify(oauth.imageRelayClientIds),
     },
     build: {
       assetsInlineLimit: 0,
