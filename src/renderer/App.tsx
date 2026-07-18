@@ -359,9 +359,9 @@ export function App() {
           for (const key of targetKeys) next.delete(key);
           return next;
         });
-        if (selectedThread && targetKeys.has(threadKey(selectedThread))) {
-          setSelectedThread(undefined);
-        }
+        setSelectedThread((current) =>
+          current && targetKeys.has(threadKey(current)) ? undefined : current,
+        );
       }
       try {
         await window.fluxmail.mail.modify({
@@ -372,22 +372,16 @@ export function App() {
           action,
         });
         if (!optimisticRemoval) setSelection(new Set());
-        if (
-          selectedThread &&
-          targets.some((thread) => threadKey(thread) === threadKey(selectedThread))
-        ) {
-          if (shouldClearSelectedThread(submittedSearch ? "search" : view, action)) {
-            setSelectedThread(undefined);
-          } else if (action.type === "markRead" || action.type === "markUnread") {
-            setSelectedThread((current) =>
-              current ? { ...current, unread: action.type === "markUnread" } : current,
-            );
-          } else if (action.type === "star" || action.type === "unstar") {
-            setSelectedThread((current) =>
-              current ? { ...current, starred: action.type === "star" } : current,
-            );
-          }
-        }
+        setSelectedThread((current) => {
+          if (!current || !targetKeys.has(threadKey(current))) return current;
+          if (shouldClearSelectedThread(submittedSearch ? "search" : view, action))
+            return undefined;
+          if (action.type === "markRead" || action.type === "markUnread")
+            return { ...current, unread: action.type === "markUnread" };
+          if (action.type === "star" || action.type === "unstar")
+            return { ...current, starred: action.type === "star" };
+          return current;
+        });
         await loadThreads({
           quiet: optimisticRemoval,
           forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),
@@ -398,7 +392,7 @@ export function App() {
         if (optimisticRemoval) {
           setThreads(previousThreads);
           setSelection(previousSelection);
-          setSelectedThread(previousSelectedThread);
+          setSelectedThread((current) => current ?? previousSelectedThread);
         }
         setError(errorMessage(caught));
       }
