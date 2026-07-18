@@ -19,6 +19,7 @@ export const accountSchema = z.object({
   displayName: z.string().optional(),
   provider: z.enum(["gmail", "outlook", "imap"]),
   status: z.enum(["active", "auth_error", "disabled"]),
+  canPermanentlyDelete: z.boolean().optional(),
 });
 export type AccountInfo = z.infer<typeof accountSchema>;
 

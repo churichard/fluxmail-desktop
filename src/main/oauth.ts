@@ -1,25 +1,29 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { OAuth2Client, type Credentials } from "google-auth-library";
+import { DEFAULT_GOOGLE_CLIENT_ID } from "../../vendor/fluxmail-mcp/packages/server/src/accounts/defaultGoogleOAuth";
 
-export const GMAIL_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.modify",
-  "openid",
-  "email",
-  "profile",
-];
+export { DEFAULT_GOOGLE_CLIENT_ID };
+
+export const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+export const GMAIL_FULL_ACCESS_SCOPE = "https://mail.google.com/";
+const GOOGLE_IDENTITY_SCOPES = ["openid", "email", "profile"];
+export const GMAIL_SCOPES = [GMAIL_MODIFY_SCOPE, ...GOOGLE_IDENTITY_SCOPES];
+export const CUSTOM_GMAIL_SCOPES = [GMAIL_FULL_ACCESS_SCOPE, ...GOOGLE_IDENTITY_SCOPES];
 const OAUTH_LOOPBACK_HOST = "127.0.0.1";
 
 export interface GoogleIdentity {
   email: string;
   displayName?: string;
   tokens: Credentials;
+  canPermanentlyDelete: boolean;
 }
 
 export async function runGoogleOAuth(input: {
   clientId: string;
   clientSecret: string;
   port: number;
+  allowPermanentDelete: boolean;
   openExternal(url: string): Promise<void>;
 }): Promise<GoogleIdentity> {
   const redirectUri = googleOAuthRedirectUri(input.port);
@@ -29,10 +33,11 @@ export async function runGoogleOAuth(input: {
     redirectUri,
   });
   const state = randomBytes(24).toString("hex");
+  const scopes = googleOAuthScopes(input.allowPermanentDelete);
   const authUrl = client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: GMAIL_SCOPES,
+    scope: scopes,
     state,
   });
 
@@ -77,10 +82,12 @@ export async function runGoogleOAuth(input: {
         const payload = ticket.getPayload();
         if (!payload?.email || !payload.email_verified)
           throw new Error("Google did not return a verified email address.");
+        const grantedTokens = googleCredentialsWithGrantedScopes(tokens, scopes);
         const identity: GoogleIdentity = {
           email: payload.email,
           ...(payload.name ? { displayName: payload.name } : {}),
-          tokens,
+          tokens: grantedTokens,
+          canPermanentlyDelete: googleCredentialsAllowPermanentDelete(grantedTokens, scopes),
         };
         response
           .writeHead(200, { "content-type": "text/html; charset=utf-8" })
@@ -115,6 +122,31 @@ export async function runGoogleOAuth(input: {
       void input.openExternal(authUrl).catch((error) => settle(() => reject(error)));
     });
   });
+}
+
+export function googleOAuthScopes(allowPermanentDelete: boolean): string[] {
+  return allowPermanentDelete ? CUSTOM_GMAIL_SCOPES : GMAIL_SCOPES;
+}
+
+export function googleOAuthClientAllowsPermanentDelete(clientId: string): boolean {
+  return clientId !== DEFAULT_GOOGLE_CLIENT_ID;
+}
+
+export function googleCredentialsWithGrantedScopes(
+  credentials: Credentials,
+  requestedScopes: readonly string[],
+): Credentials {
+  return credentials.scope ? credentials : { ...credentials, scope: requestedScopes.join(" ") };
+}
+
+export function googleCredentialsAllowPermanentDelete(
+  credentials: Credentials,
+  requestedScopes: readonly string[],
+): boolean {
+  const grantedScopes = credentials.scope
+    ? credentials.scope.split(/\s+/).filter(Boolean)
+    : requestedScopes;
+  return grantedScopes.includes(GMAIL_FULL_ACCESS_SCOPE);
 }
 
 export function googleOAuthRedirectUri(port: number): string {

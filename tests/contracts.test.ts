@@ -8,7 +8,18 @@ import {
   sendInputSchema,
   threadListInputSchema,
 } from "../src/shared/contracts";
-import { GMAIL_SCOPES, googleOAuthRedirectUri, isOAuthStateValid } from "../src/main/oauth";
+import {
+  CUSTOM_GMAIL_SCOPES,
+  DEFAULT_GOOGLE_CLIENT_ID,
+  GMAIL_FULL_ACCESS_SCOPE,
+  GMAIL_SCOPES,
+  googleCredentialsAllowPermanentDelete,
+  googleCredentialsWithGrantedScopes,
+  googleOAuthClientAllowsPermanentDelete,
+  googleOAuthRedirectUri,
+  googleOAuthScopes,
+  isOAuthStateValid,
+} from "../src/main/oauth";
 import { toEmailQuery } from "../src/main/mail-mapping";
 import { isAllowedFrameUrl } from "../src/main/ipc-security";
 
@@ -128,7 +139,29 @@ describe("desktop contracts", () => {
 
   it("requests Gmail modification access without permanent deletion access", () => {
     expect(GMAIL_SCOPES).toContain("https://www.googleapis.com/auth/gmail.modify");
-    expect(GMAIL_SCOPES).not.toContain("https://mail.google.com/");
+    expect(GMAIL_SCOPES).not.toContain(GMAIL_FULL_ACCESS_SCOPE);
+  });
+
+  it("requests and detects permanent deletion access for custom OAuth clients", () => {
+    expect(googleOAuthClientAllowsPermanentDelete(DEFAULT_GOOGLE_CLIENT_ID)).toBe(false);
+    expect(googleOAuthClientAllowsPermanentDelete("custom-client-id")).toBe(true);
+    expect(googleOAuthScopes(true)).toEqual(CUSTOM_GMAIL_SCOPES);
+    expect(
+      googleCredentialsAllowPermanentDelete(
+        { scope: `openid ${GMAIL_FULL_ACCESS_SCOPE} email` },
+        GMAIL_SCOPES,
+      ),
+    ).toBe(true);
+    expect(
+      googleCredentialsAllowPermanentDelete(
+        { scope: "openid https://www.googleapis.com/auth/gmail.modify email" },
+        CUSTOM_GMAIL_SCOPES,
+      ),
+    ).toBe(false);
+    expect(googleCredentialsAllowPermanentDelete({}, CUSTOM_GMAIL_SCOPES)).toBe(true);
+    expect(googleCredentialsWithGrantedScopes({}, CUSTOM_GMAIL_SCOPES).scope).toBe(
+      CUSTOM_GMAIL_SCOPES.join(" "),
+    );
   });
 
   it("accepts only the app origin or the exact development origin", () => {

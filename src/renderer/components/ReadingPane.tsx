@@ -40,6 +40,7 @@ interface Props {
   view: MailboxView;
   thread?: ThreadSummary;
   labels: string[];
+  allowPermanentDelete: boolean;
   onModify(action: ModifyActionInput): Promise<void>;
   onCompose(seed: ComposeSeed): void;
   onError(message: string): void;
@@ -51,6 +52,7 @@ export function ReadingPane({
   view,
   thread,
   labels,
+  allowPermanentDelete,
   onModify,
   onCompose,
   onError,
@@ -144,6 +146,7 @@ export function ReadingPane({
       </section>
     );
   const lastMessage = detail.messages.at(-1);
+  const deleteAction = mailboxDeleteAction(view, allowPermanentDelete);
 
   return (
     <section className="reading-pane">
@@ -156,13 +159,15 @@ export function ReadingPane({
           >
             {view === "trash" ? <Undo2 size={17} /> : <Archive size={17} />}
           </IconButton>
-          <IconButton
-            label={mailboxDeleteLabel(view)}
-            shortcut={KEYBOARD_SHORTCUTS.trash}
-            onClick={() => void onModify(mailboxDeleteAction(view))}
-          >
-            <Trash2 size={17} />
-          </IconButton>
+          {deleteAction ? (
+            <IconButton
+              label={mailboxDeleteLabel(view)}
+              shortcut={KEYBOARD_SHORTCUTS.trash}
+              onClick={() => void onModify(deleteAction)}
+            >
+              <Trash2 size={17} />
+            </IconButton>
+          ) : null}
           <IconButton
             label="Mark unread"
             shortcut={KEYBOARD_SHORTCUTS.toggleRead}

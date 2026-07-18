@@ -41,6 +41,7 @@ describe("ReadingPane", () => {
         view="inbox"
         thread={summary({ messageCount: 2, date: "2026-07-16T13:00:00Z" })}
         labels={[]}
+        allowPermanentDelete={false}
         onModify={vi.fn(async () => undefined)}
         onCompose={vi.fn()}
         onError={vi.fn()}
@@ -52,7 +53,7 @@ describe("ReadingPane", () => {
     await waitFor(() => expect(getThread).toHaveBeenCalledTimes(2));
   });
 
-  it("offers restore and permanent delete actions in Trash", async () => {
+  it("offers restore without permanent delete for Gmail Trash", async () => {
     const getThread = vi.fn(async () => detail("Deleted subject", "message-1"));
     const onModify = vi.fn<(action: ModifyActionInput) => Promise<void>>(async () => undefined);
     Object.defineProperty(window, "fluxmail", {
@@ -63,10 +64,28 @@ describe("ReadingPane", () => {
     await screen.findByText("Deleted subject");
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
     expect(onModify).toHaveBeenNthCalledWith(1, { type: "untrash" });
-    expect(onModify).toHaveBeenNthCalledWith(2, { type: "delete" });
+    expect(screen.queryByRole("button", { name: "Delete permanently" })).toBeNull();
+  });
+
+  it("offers permanent delete when the account grants full Gmail access", async () => {
+    const getThread = vi.fn(async () => detail("Deleted subject", "message-1"));
+    const onModify = vi.fn<(action: ModifyActionInput) => Promise<void>>(async () => undefined);
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary({ folderRoles: ["trash"] }), {
+      view: "trash",
+      onModify,
+      allowPermanentDelete: true,
+    });
+    await screen.findByText("Deleted subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    expect(onModify).toHaveBeenCalledWith({ type: "delete" });
   });
 
   it("shows original attachments in the forward composer", async () => {
@@ -131,6 +150,7 @@ describe("ReadingPane", () => {
         view="inbox"
         thread={summary()}
         labels={[]}
+        allowPermanentDelete={false}
         onModify={vi.fn(async () => undefined)}
         onCompose={vi.fn()}
         onError={vi.fn()}
@@ -150,6 +170,7 @@ function renderPane(
     onModify?: (action: ModifyActionInput) => Promise<void>;
     onCompose?: (seed: ComposeSeed) => void;
     quickReplyDiscardVersion?: number;
+    allowPermanentDelete?: boolean;
   } = {},
 ) {
   return render(
@@ -157,6 +178,7 @@ function renderPane(
       view={options.view ?? "inbox"}
       thread={thread}
       labels={[]}
+      allowPermanentDelete={options.allowPermanentDelete ?? false}
       onModify={options.onModify ?? vi.fn(async () => undefined)}
       onCompose={options.onCompose ?? vi.fn()}
       onError={vi.fn()}

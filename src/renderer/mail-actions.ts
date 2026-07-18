@@ -6,9 +6,13 @@ export function mailboxMoveAction(view: MailboxView): ModifyActionInput {
   return { type: "archive" };
 }
 
-export function mailboxDeleteAction(view: MailboxView): ModifyActionInput {
+export function mailboxDeleteAction(
+  view: MailboxView,
+  allowPermanentDelete = false,
+): ModifyActionInput | undefined {
   if (view === "drafts") return { type: "discardDraft" };
-  return view === "trash" ? { type: "delete" } : { type: "trash" };
+  if (view === "trash") return allowPermanentDelete ? { type: "delete" } : undefined;
+  return { type: "trash" };
 }
 
 export function mailboxMoveLabel(view: MailboxView): string {

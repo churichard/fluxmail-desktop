@@ -4,6 +4,7 @@ import type { AttachmentInput, Message, ModifyAction } from "@fluxmail/core";
 import { isEmailError } from "@fluxmail/core";
 import {
   buildForwardBody,
+  decryptString,
   type AppContext,
   type SendInput,
   type StoreCompatibility,
@@ -24,7 +25,12 @@ import type {
 import { MailCache } from "./cache";
 import { DesktopAnalytics, type MailOperation, type SyncTrigger } from "./analytics";
 import { toEmailQuery } from "./mail-mapping";
-import { runGoogleOAuth } from "./oauth";
+import {
+  googleCredentialsAllowPermanentDelete,
+  googleOAuthClientAllowsPermanentDelete,
+  googleOAuthScopes,
+  runGoogleOAuth,
+} from "./oauth";
 
 interface RuntimeOptions {
   cache: MailCache;
@@ -70,7 +76,49 @@ export class FluxmailRuntime {
   }
 
   accounts(): AccountInfo[] {
-    return this.context.registry.listAccounts().map(toAccountInfo);
+    return this.context.registry
+      .listAccounts()
+      .map((account) =>
+        toAccountInfo(account, this.accountCanPermanentlyDelete(account.id, account.provider)),
+      );
+  }
+
+  private accountCanPermanentlyDelete(
+    accountId: string,
+    provider: AccountInfo["provider"],
+  ): boolean {
+    if (provider !== "gmail") return true;
+    try {
+      // CLI and MCP reconnections update this shared credential row, so the
+      // desktop capability must be derived here instead of kept in its mail cache.
+      const sqlite = (
+        this.context.db as unknown as {
+          $client: {
+            prepare(source: string): {
+              get(accountId: string): { encrypted_credentials: string } | undefined;
+            };
+          };
+        }
+      ).$client;
+      const row = sqlite
+        .prepare("SELECT encrypted_credentials FROM account_credentials WHERE account_id = ?")
+        .get(accountId);
+      if (!row) return false;
+      const credentials = JSON.parse(
+        decryptString(this.context.config.encryptionKey, row.encrypted_credentials),
+      ) as {
+        scope?: string;
+        fluxmailOAuthClient?: { clientId: string };
+      };
+      const clientId =
+        credentials.fluxmailOAuthClient?.clientId ?? this.context.config.google?.clientId;
+      const requestedScopes = clientId
+        ? googleOAuthScopes(googleOAuthClientAllowsPermanentDelete(clientId))
+        : [];
+      return googleCredentialsAllowPermanentDelete(credentials, requestedScopes);
+    } catch {
+      return false;
+    }
   }
 
   maxAttachmentBytes(): number {
@@ -169,6 +217,7 @@ export class FluxmailRuntime {
       clientId: config.clientId,
       clientSecret: config.clientSecret,
       port: this.context.config.oauthPort,
+      allowPermanentDelete: googleOAuthClientAllowsPermanentDelete(config.clientId),
       openExternal: this.options.openExternal,
     });
     let identity: Awaited<ReturnType<typeof runGoogleOAuth>>;
@@ -196,7 +245,7 @@ export class FluxmailRuntime {
       owner.id,
       { sharedWithAll: false },
     );
-    return toAccountInfo(account);
+    return toAccountInfo(account, identity.canPermanentlyDelete);
   }
 
   removeAccount(accountId: string): void {
@@ -801,13 +850,17 @@ function escapeHtml(value: string): string {
   );
 }
 
-function toAccountInfo(account: ReturnType<AppContext["registry"]["getAccount"]>): AccountInfo {
+function toAccountInfo(
+  account: ReturnType<AppContext["registry"]["getAccount"]>,
+  canPermanentlyDelete: boolean,
+): AccountInfo {
   return {
     id: account.id,
     email: account.email,
     ...(account.displayName ? { displayName: account.displayName } : {}),
     provider: account.provider,
     status: account.status,
+    canPermanentlyDelete,
   };
 }
 
