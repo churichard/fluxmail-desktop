@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Mail, ShieldCheck } from "lucide-react";
 import type { TelemetryStatus } from "../../shared/contracts";
 import { FluxmailLogoMark } from "./FluxmailLogoMark";
 
@@ -21,14 +20,7 @@ export function Onboarding({
           </span>
           <span>Fluxmail</span>
         </div>
-        <div className="onboarding-icon">
-          <Mail size={28} />
-        </div>
         <h1>Your inbox, on your Mac</h1>
-        <p>
-          Connect Gmail to read, search, and send mail from Fluxmail. Your messages go straight from
-          this app to Gmail through the local Fluxmail service.
-        </p>
         <button
           className="primary-button connect-button"
           disabled={connecting}
@@ -53,14 +45,11 @@ export function Onboarding({
             {error}
           </p>
         ) : null}
-        <div className="privacy-note">
-          <ShieldCheck size={17} />
-          <p>
-            {telemetry.enabled
-              ? "Fluxmail sends anonymous feature and performance counts. It never sends email content, addresses, or search text. You can turn analytics off in Settings."
-              : "Anonymous analytics are off for this installation."}
-          </p>
-        </div>
+        <p className="privacy-note">
+          {telemetry.enabled
+            ? "Fluxmail sends anonymous usage and performance data. It never includes email content, addresses, or search terms. Turn it off in Settings."
+            : "Anonymous analytics are off."}
+        </p>
       </div>
     </main>
   );
