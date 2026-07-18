@@ -188,6 +188,104 @@ describe("FluxmailRuntime license activation", () => {
   });
 });
 
+describe("FluxmailRuntime image relay identity", () => {
+  it("returns a current Google ID token without exposing Gmail credentials to the renderer", async () => {
+    const encryptionKey = Buffer.alloc(32, 8);
+    const encryptedCredentials = encryptString(
+      encryptionKey,
+      JSON.stringify({
+        access_token: "access-token",
+        id_token: "google-id-token",
+        expiry_date: Date.now() + 60 * 60 * 1000,
+        fluxmailOAuthClient: {
+          clientId: "desktop-client",
+          clientSecret: "desktop-secret",
+        },
+      }),
+    );
+    const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
+    const context = (
+      runtime as unknown as {
+        context: {
+          config: Record<string, unknown>;
+          db?: unknown;
+        };
+      }
+    ).context;
+    context.config.encryptionKey = encryptionKey;
+    context.db = {
+      $client: {
+        prepare: vi.fn(() => ({
+          get: vi.fn(() => ({ encrypted_credentials: encryptedCredentials })),
+        })),
+      },
+    };
+
+    await expect(runtime.imageRelayIdentityTokens()).resolves.toEqual(["google-id-token"]);
+  });
+
+  it("tries the currently configured OAuth client before other active Gmail accounts", async () => {
+    const encryptionKey = Buffer.alloc(32, 9);
+    const accounts = [
+      { ...account, id: "custom-account", email: "custom@example.com" },
+      { ...account, id: "configured-account", email: "configured@example.com" },
+    ];
+    const encryptedCredentials = new Map([
+      [
+        "custom-account",
+        encryptString(
+          encryptionKey,
+          JSON.stringify({
+            access_token: "custom-access-token",
+            id_token: "custom-id-token",
+            expiry_date: Date.now() + 60 * 60 * 1000,
+            fluxmailOAuthClient: { clientId: "custom-client" },
+          }),
+        ),
+      ],
+      [
+        "configured-account",
+        encryptString(
+          encryptionKey,
+          JSON.stringify({
+            access_token: "configured-access-token",
+            id_token: "configured-id-token",
+            expiry_date: Date.now() + 60 * 60 * 1000,
+            fluxmailOAuthClient: { clientId: "configured-client" },
+          }),
+        ),
+      ],
+    ]);
+    const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
+    const context = (
+      runtime as unknown as {
+        context: {
+          config: Record<string, unknown>;
+          db?: unknown;
+          registry: { listAccounts(): typeof accounts };
+        };
+      }
+    ).context;
+    context.config.encryptionKey = encryptionKey;
+    context.config.google = { clientId: "configured-client" };
+    context.registry.listAccounts = () => accounts;
+    context.db = {
+      $client: {
+        prepare: vi.fn(() => ({
+          get: vi.fn((accountId: string) => ({
+            encrypted_credentials: encryptedCredentials.get(accountId),
+          })),
+        })),
+      },
+    };
+
+    await expect(runtime.imageRelayIdentityTokens()).resolves.toEqual([
+      "configured-id-token",
+      "custom-id-token",
+    ]);
+  });
+});
+
 describe("FluxmailRuntime thread loading", () => {
   it("paginates with provider tokens when messages collapse into fewer threads", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) =>

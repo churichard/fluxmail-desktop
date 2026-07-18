@@ -37,6 +37,8 @@ import {
   draftDeleteInputSchema,
   draftResultSchema,
   featureEventSchema,
+  imageRelayInputSchema,
+  imageRelayResultSchema,
   IPC,
   licenseActivationResultSchema,
   licenseKeySchema,
@@ -61,6 +63,7 @@ import { MailCache } from "./cache";
 import { FluxmailRuntime } from "./fluxmail-runtime";
 import { FakeFluxmailRuntime } from "./fake-runtime";
 import { isAllowedFrameUrl } from "./ipc-security";
+import { HostedImageRelay } from "./image-relay";
 import { createLaunchTimer } from "./performance";
 import { DesktopPreferences } from "./preferences";
 
@@ -86,6 +89,7 @@ let runtime: FluxmailRuntime | FakeFluxmailRuntime | null = null;
 let analytics: DesktopAnalytics | null = null;
 let cache: MailCache | null = null;
 let preferences: DesktopPreferences | null = null;
+let imageRelay: HostedImageRelay | null = null;
 let pollTimer: NodeJS.Timeout | undefined;
 let syncState: SyncState = { status: "idle" };
 let activeMailboxInput: ThreadListInput = { view: "inbox", pageSize: 100 };
@@ -355,6 +359,7 @@ function registerIpc(): void {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),
         blockRemoteImages: requirePreferences().blockRemoteImages(),
+        imageRelay: requirePreferences().imageRelay(),
       },
     };
   });
@@ -473,6 +478,12 @@ function registerIpc(): void {
   );
   handle(IPC.licenseActivate, licenseKeySchema, licenseActivationResultSchema, (key) =>
     requireRuntime().activateLicense(key),
+  );
+  handle(IPC.preferencesImageRelaySet, z.boolean(), z.boolean(), (enabled) =>
+    requirePreferences().setImageRelay(enabled),
+  );
+  handle(IPC.imagesProxy, imageRelayInputSchema, imageRelayResultSchema, (urls) =>
+    requireImageRelay().proxy(urls),
   );
   handle(IPC.analyticsFeature, featureEventSchema, z.void(), async (event) =>
     requireAnalytics().captureFeature(event),
@@ -882,4 +893,12 @@ function requireAnalytics(): DesktopAnalytics {
 function requirePreferences(): DesktopPreferences {
   if (!preferences) throw new Error("Fluxmail preferences are not ready.");
   return preferences;
+}
+
+function requireImageRelay(): HostedImageRelay {
+  imageRelay ??= new HostedImageRelay(
+    (forceRefresh) => requireRuntime().imageRelayIdentityTokens(forceRefresh),
+    (input, init) => net.fetch(input, init),
+  );
+  return imageRelay;
 }

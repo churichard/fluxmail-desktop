@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -7,6 +7,16 @@ import { _electron as electron, expect, test } from "@playwright/test";
 test("uses the desktop bridge for the inbox, secure reading, search, compose, and settings", async () => {
   test.setTimeout(60_000);
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-e2e-"));
+  writeFileSync(
+    path.join(dataDirectory, "desktop-preferences.json"),
+    JSON.stringify({
+      version: 4,
+      appearance: "system",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: false,
+    }),
+  );
   const electronApp = await electron.launch({
     args: [process.cwd()],
     env: {
@@ -887,6 +897,17 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "aria-checked",
       initialAnalyticsState === "true" ? "false" : "true",
     );
+    const imageRelayCheckbox = settings.getByRole("checkbox", {
+      name: "Image relay",
+    });
+    await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "false");
+    await expect(
+      settings.getByText(
+        "Use Fluxmail's relay when you load remote images. This hides your IP address from the sender.",
+      ),
+    ).toBeVisible();
+    await imageRelayCheckbox.click();
+    await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "true");
     await expect(settings.getByText("Personal", { exact: true })).toBeVisible();
     await expect(
       settings.getByText("Includes up to 3 connected mailboxes for one member."),

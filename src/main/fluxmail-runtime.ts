@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { AttachmentInput, Message, ModifyAction } from "@fluxmail/core";
 import { isEmailError } from "@fluxmail/core";
+import { OAuth2Client, type Credentials } from "google-auth-library";
 import {
   buildForwardBody,
   decryptString,
@@ -42,6 +43,10 @@ interface RuntimeOptions {
   onCacheChanged(): void;
 }
 
+type StoredGoogleCredentials = Credentials & {
+  fluxmailOAuthClient?: { clientId: string; clientSecret?: string };
+};
+
 export class FluxmailRuntime {
   private context!: AppContext;
   private fluxmail!: typeof import("fluxmail");
@@ -49,6 +54,7 @@ export class FluxmailRuntime {
   private cacheGeneration = 0;
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
+  private readonly imageRelayIdentities = new Map<string, { token: string; expiresAt: number }>();
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
 
@@ -82,6 +88,113 @@ export class FluxmailRuntime {
       .map((account) =>
         toAccountInfo(account, this.accountCanPermanentlyDelete(account.id, account.provider)),
       );
+  }
+
+  async imageRelayIdentityTokens(forceRefresh = false): Promise<string[]> {
+    const accounts = this.accounts().filter(
+      (candidate) => candidate.provider === "gmail" && candidate.status === "active",
+    );
+    if (!accounts.length) throw new Error("Connect Gmail before using the image relay.");
+    if (forceRefresh) this.invalidateImageRelayIdentities();
+
+    const configuredClientId = this.context.config.google?.clientId;
+    let lastError: unknown;
+    const candidates = accounts
+      .flatMap((account) => {
+        try {
+          const credentials = this.imageRelayCredentials(account.id);
+          if (!credentials) return [];
+          const oauthClient = credentials.fluxmailOAuthClient ?? this.context.config.google;
+          return oauthClient?.clientId ? [{ account, credentials, oauthClient }] : [];
+        } catch (error) {
+          lastError = error;
+          return [];
+        }
+      })
+      .sort((left, right) => {
+        const leftConfigured = left.oauthClient.clientId === configuredClientId ? 1 : 0;
+        const rightConfigured = right.oauthClient.clientId === configuredClientId ? 1 : 0;
+        return rightConfigured - leftConfigured;
+      });
+
+    const tokens: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        tokens.push(
+          await this.imageRelayIdentityTokenFor(
+            candidate.account.id,
+            candidate.credentials,
+            candidate.oauthClient,
+            forceRefresh,
+          ),
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    const uniqueTokens = [...new Set(tokens)];
+    if (uniqueTokens.length) return uniqueTokens;
+    if (lastError) throw lastError;
+    throw new Error("Reconnect Gmail before using the image relay.");
+  }
+
+  private imageRelayCredentials(accountId: string): StoredGoogleCredentials | undefined {
+    const sqlite = (
+      this.context.db as unknown as {
+        $client: {
+          prepare(source: string): {
+            get(accountId: string): { encrypted_credentials: string } | undefined;
+          };
+        };
+      }
+    ).$client;
+    const row = sqlite
+      .prepare("SELECT encrypted_credentials FROM account_credentials WHERE account_id = ?")
+      .get(accountId);
+    if (!row) return undefined;
+    return JSON.parse(
+      decryptString(this.context.config.encryptionKey, row.encrypted_credentials),
+    ) as StoredGoogleCredentials;
+  }
+
+  private async imageRelayIdentityTokenFor(
+    accountId: string,
+    credentials: StoredGoogleCredentials,
+    oauthClient: { clientId: string; clientSecret?: string },
+    forceRefresh: boolean,
+  ): Promise<string> {
+    const cached = this.imageRelayIdentities.get(accountId);
+    if (!forceRefresh && cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+
+    const auth = new OAuth2Client({
+      clientId: oauthClient.clientId,
+      clientSecret: oauthClient.clientSecret,
+    });
+    const { fluxmailOAuthClient: _storedClient, ...tokens } = credentials;
+    auth.setCredentials(tokens);
+    const storedIdentityExpiration = identityTokenExpiration(auth.credentials.id_token);
+    if (
+      forceRefresh ||
+      (storedIdentityExpiration && storedIdentityExpiration <= Date.now() + 60_000)
+    )
+      auth.credentials.expiry_date = 0;
+    await auth.getAccessToken();
+    if (!auth.credentials.id_token)
+      throw new Error("Google did not provide an identity token. Reconnect Gmail and try again.");
+    const identity = {
+      token: auth.credentials.id_token,
+      expiresAt:
+        identityTokenExpiration(auth.credentials.id_token) ??
+        auth.credentials.expiry_date ??
+        Date.now() + 5 * 60_000,
+    };
+    this.imageRelayIdentities.set(accountId, identity);
+    return identity.token;
+  }
+
+  private invalidateImageRelayIdentities(accountId?: string): void {
+    if (accountId) this.imageRelayIdentities.delete(accountId);
+    else this.imageRelayIdentities.clear();
   }
 
   private accountCanPermanentlyDelete(
@@ -274,12 +387,14 @@ export class FluxmailRuntime {
       owner.id,
       { sharedWithAll: false },
     );
+    this.invalidateImageRelayIdentities();
     return toAccountInfo(account, identity.canPermanentlyDelete);
   }
 
   removeAccount(accountId: string): void {
     this.assertStoreCompatible();
     this.context.registry.removeAccount(accountId);
+    this.invalidateImageRelayIdentities(accountId);
     this.options.cache.deleteAccount(accountId);
     this.options.onCacheChanged();
   }
@@ -869,6 +984,20 @@ function licenseActivationError(
     bad_lease: "Fluxmail could not verify the license response. Update Fluxmail and try again.",
   } as const;
   return messages[outcome];
+}
+
+function identityTokenExpiration(token?: string | null): number | undefined {
+  if (!token) return undefined;
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
+    ) as {
+      exp?: unknown;
+    };
+    return typeof payload.exp === "number" ? payload.exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function forwardBody(

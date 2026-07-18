@@ -704,6 +704,7 @@ export function App() {
           selectedThread && permanentDeleteAccountIds.has(selectedThread.accountId),
         )}
         blockRemoteImages={bootstrap.preferences.blockRemoteImages}
+        imageRelay={bootstrap.preferences.imageRelay}
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
@@ -718,6 +719,7 @@ export function App() {
           seed={composeSeed}
           accounts={bootstrap.accounts}
           blockRemoteImages={bootstrap.preferences.blockRemoteImages}
+          imageRelay={bootstrap.preferences.imageRelay}
           onClose={() => setComposeSeed(null)}
           onSent={() => {
             setComposeSeed(null);

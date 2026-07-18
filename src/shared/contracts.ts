@@ -266,6 +266,20 @@ export const licenseActivationResultSchema = z.object({
 });
 export type LicenseActivationResult = z.infer<typeof licenseActivationResultSchema>;
 
+export const imageRelayInputSchema = z
+  .array(
+    z
+      .string()
+      .url()
+      .refine((value) => {
+        const protocol = new URL(value).protocol;
+        return protocol === "http:" || protocol === "https:";
+      }),
+  )
+  .min(1)
+  .max(200);
+export const imageRelayResultSchema = z.record(z.string().url());
+
 export const bootstrapSchema = z.object({
   engine: z.object({
     version: z.string(),
@@ -289,6 +303,7 @@ export const bootstrapSchema = z.object({
     appearance: appearancePreferenceSchema,
     dockBadge: z.boolean(),
     blockRemoteImages: z.boolean(),
+    imageRelay: z.boolean(),
   }),
   license: licenseStatusSchema,
 });
@@ -413,6 +428,10 @@ export interface FluxmailDesktopApi {
     setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
     setDockBadge(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
+    setImageRelay(enabled: boolean): Promise<boolean>;
+  };
+  images: {
+    proxy(urls: z.infer<typeof imageRelayInputSchema>): Promise<Record<string, string>>;
   };
   license: {
     activate(key: string): Promise<LicenseActivationResult>;
@@ -453,6 +472,8 @@ export const IPC = {
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   licenseActivate: "fluxmail:license:activate",
+  preferencesImageRelaySet: "fluxmail:preferences:image-relay:set",
+  imagesProxy: "fluxmail:images:proxy",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",
   systemWindowCloseCancel: "fluxmail:system:window-close-cancel",

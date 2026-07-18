@@ -101,6 +101,10 @@ const seedMessages: Message[] = [
 ];
 
 export class FakeFluxmailRuntime {
+  async imageRelayIdentityTokens(_forceRefresh = false): Promise<string[]> {
+    return ["fake-image-relay-token"];
+  }
+
   private connected = true;
   private messages = structuredClone(seedMessages);
   private licenseValue: BootstrapState["license"] = {

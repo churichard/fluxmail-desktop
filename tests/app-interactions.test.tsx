@@ -423,7 +423,12 @@ function installApi(
     },
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },
-    preferences: { appearance: "light", dockBadge: true, blockRemoteImages: true },
+    preferences: {
+      appearance: "light",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: true,
+    },
     license: { plan: "personal", maxMembers: 1, maxAccounts: 3 },
   };
   let visibleThreads = threads;

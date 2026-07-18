@@ -44,6 +44,8 @@ interface Props {
   labels: string[];
   allowPermanentDelete: boolean;
   blockRemoteImages?: boolean;
+  imageRelay?: boolean;
+  imageRelayAvailable?: boolean;
   onModify(action: ModifyActionInput): Promise<void>;
   onCompose(seed: ComposeSeed): void;
   onError(message: string): void;
@@ -57,6 +59,8 @@ export function ReadingPane({
   labels,
   allowPermanentDelete,
   blockRemoteImages = true,
+  imageRelay = true,
+  imageRelayAvailable = true,
   onModify,
   onCompose,
   onError,
@@ -241,6 +245,8 @@ export function ReadingPane({
                 key={message.id}
                 message={message}
                 blockRemoteImages={blockRemoteImages}
+                imageRelay={imageRelay}
+                imageRelayAvailable={imageRelayAvailable}
                 onError={onError}
               />
             ))}
@@ -265,6 +271,8 @@ export function ReadingPane({
               accountId={thread.accountId}
               message={lastMessage}
               replyAll={replying === "replyAll"}
+              imageRelay={imageRelay}
+              imageRelayAvailable={imageRelayAvailable}
               onCancel={() => setReplying(undefined)}
               onSent={() => setReplying(undefined)}
               onError={onError}
@@ -282,10 +290,14 @@ export function ReadingPane({
 function MessageCard({
   message,
   blockRemoteImages,
+  imageRelay,
+  imageRelayAvailable,
   onError,
 }: {
   message: MailMessage;
   blockRemoteImages: boolean;
+  imageRelay: boolean;
+  imageRelayAvailable: boolean;
   onError(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -333,6 +345,8 @@ function MessageCard({
           <EmailHtml
             message={message}
             blockRemoteImages={blockRemoteImages}
+            imageRelay={imageRelay}
+            imageRelayAvailable={imageRelayAvailable}
             onError={onError}
             onTrackingPixelsChange={setTrackingPixels}
           />
@@ -376,6 +390,8 @@ function QuickReply({
   accountId,
   message,
   replyAll,
+  imageRelay,
+  imageRelayAvailable,
   onCancel,
   onSent,
   onError,
@@ -385,6 +401,8 @@ function QuickReply({
   accountId: string;
   message: MailMessage;
   replyAll: boolean;
+  imageRelay: boolean;
+  imageRelayAvailable: boolean;
   onCancel(): void;
   onSent(): void;
   onError(message: string): void;
@@ -456,7 +474,13 @@ function QuickReply({
             <div className="quoted-reply-meta">
               {message.from?.name || message.from?.email || "Previous message"}
             </div>
-            <EmailHtml message={message} blockRemoteImages={blockRemoteImages} onError={onError} />
+            <EmailHtml
+              message={message}
+              blockRemoteImages={blockRemoteImages}
+              imageRelay={imageRelay}
+              imageRelayAvailable={imageRelayAvailable}
+              onError={onError}
+            />
           </div>
         ) : null}
       </div>
