@@ -2,7 +2,12 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { OAuth2Client, type Credentials } from "google-auth-library";
 
-const GMAIL_SCOPES = ["https://mail.google.com/", "openid", "email", "profile"];
+export const GMAIL_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.modify",
+  "openid",
+  "email",
+  "profile",
+];
 const OAUTH_LOOPBACK_HOST = "127.0.0.1";
 
 export interface GoogleIdentity {
