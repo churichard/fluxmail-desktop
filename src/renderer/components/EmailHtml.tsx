@@ -3,6 +3,7 @@ import DOMPurify from "dompurify";
 import { Image as ImageIcon } from "lucide-react";
 import type { MailMessage } from "../../shared/contracts";
 import { parseExternalUrl } from "../../shared/external-url";
+import { convertEmailToDarkMode, removeSenderDarkModeCSS } from "../email/convert-to-dark-mode";
 
 export function EmailHtml({
   message,
@@ -172,7 +173,16 @@ export function buildEmailDocument(
     ALLOWED_URI_REGEXP:
       /^(?:(?:https?|mailto|tel|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
   });
-  const document = new DOMParser().parseFromString(clean, "text/html");
+  const themedHtml = darkMode
+    ? convertEmailToDarkMode(clean, {
+        preserveBrands: true,
+        minContrast: 4.5,
+        darkBackground: "#28292c",
+        lightText: "#eeeeee",
+        linkColor: "#9eb7ff",
+      })
+    : removeSenderDarkModeCSS(clean);
+  const document = new DOMParser().parseFromString(themedHtml, "text/html");
   normalizeNonWrappingText(document);
   for (const image of document.querySelectorAll("img")) {
     const source = image.getAttribute("src") || "";
