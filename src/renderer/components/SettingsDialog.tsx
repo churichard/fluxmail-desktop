@@ -482,8 +482,8 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
               <span>
                 <strong>Block remote images by default</strong>
                 <small>
-                  We recommend keeping this on. Turning it off may expose your IP address to email
-                  senders.
+                  If you're not using the private image relay, we recommend keeping this on. Turning
+                  it off may expose your IP address to email senders.
                 </small>
               </span>
               <SelectionCheckbox

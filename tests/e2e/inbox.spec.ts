@@ -871,7 +871,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(
       settings.getByText(
-        "We recommend keeping this on. Turning it off may expose your IP address to email senders.",
+        "If you're not using the private image relay, we recommend keeping this on. Turning it off may expose your IP address to email senders.",
       ),
     ).toBeVisible();
     const blockRemoteImagesCheckbox = settings.getByRole("checkbox", {
