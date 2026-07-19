@@ -251,6 +251,21 @@ export type TelemetryStatus = z.infer<typeof telemetryStatusSchema>;
 export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 
+export const licenseKeySchema = z.string().trim().min(1).max(200);
+
+export const licenseStatusSchema = z.object({
+  plan: z.string(),
+  maxMembers: z.number().int().positive(),
+  maxAccounts: z.number().int().positive(),
+  warning: z.string().optional(),
+});
+
+export const licenseActivationResultSchema = z.object({
+  outcome: z.enum(["activated", "saved_for_retry"]),
+  license: licenseStatusSchema,
+});
+export type LicenseActivationResult = z.infer<typeof licenseActivationResultSchema>;
+
 export const bootstrapSchema = z.object({
   engine: z.object({
     version: z.string(),
@@ -275,12 +290,7 @@ export const bootstrapSchema = z.object({
     dockBadge: z.boolean(),
     blockRemoteImages: z.boolean(),
   }),
-  license: z.object({
-    plan: z.string(),
-    maxMembers: z.number().int().positive(),
-    maxAccounts: z.number().int().positive(),
-    warning: z.string().optional(),
-  }),
+  license: licenseStatusSchema,
 });
 export type BootstrapState = z.infer<typeof bootstrapSchema>;
 
@@ -404,6 +414,9 @@ export interface FluxmailDesktopApi {
     setDockBadge(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
   };
+  license: {
+    activate(key: string): Promise<LicenseActivationResult>;
+  };
   analytics: { trackFeature(event: FeatureEvent): Promise<void> };
   system: {
     openExternal(url: string): Promise<void>;
@@ -439,6 +452,7 @@ export const IPC = {
   preferencesAppearanceSet: "fluxmail:preferences:appearance:set",
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
+  licenseActivate: "fluxmail:license:activate",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",
   systemWindowCloseCancel: "fluxmail:system:window-close-cancel",

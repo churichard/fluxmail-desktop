@@ -892,6 +892,19 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       settings.getByText("Includes up to 3 connected mailboxes for one member."),
     ).toBeVisible();
     await expect(settings.getByRole("button", { name: "View plans" })).toBeVisible();
+    await expect(settings.getByLabel("License key")).toBeHidden();
+    await settings.getByRole("button", { name: "Activate license key" }).click();
+    const licenseKeyInput = settings.getByLabel("License key");
+    await expect(licenseKeyInput).toHaveAttribute("type", "password");
+    await licenseKeyInput.fill(`fluxmail_lic_${"ab".repeat(20)}`);
+    await settings.getByRole("button", { name: "Activate", exact: true }).click();
+    await expect(settings.getByText("License activated.")).toBeVisible();
+    await expect(settings.getByText("Pro", { exact: true })).toBeVisible();
+    await expect(
+      settings.getByText("Includes up to 5 connected mailboxes for one member."),
+    ).toBeVisible();
+    await expect(licenseKeyInput).toBeHidden();
+    await expect(settings.getByRole("button", { name: "Activate license key" })).toBeVisible();
     await expect(settings.locator("header")).toHaveCSS("border-bottom-width", "0px");
     expect(
       await settings.evaluate((dialog) => {
