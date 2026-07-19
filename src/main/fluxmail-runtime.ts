@@ -16,6 +16,7 @@ import type {
   ComposeAttachment,
   ComposeInput,
   FolderInfo,
+  LicenseActivationResult,
   MailThread,
   MailboxView,
   ModifyActionInput,
@@ -200,6 +201,35 @@ export class FluxmailRuntime {
       maxMembers: entitlements.maxMembers,
       maxAccounts: entitlements.maxAccounts,
       ...(state.warning ? { warning: state.warning } : {}),
+    };
+  }
+
+  async activateLicense(rawKey: string): Promise<LicenseActivationResult> {
+    this.assertStoreCompatible();
+    const licenseKey = rawKey.trim();
+    if (!this.fluxmail.LICENSE_KEY_PATTERN.test(licenseKey)) {
+      throw new Error("That license key does not look right. Check it and try again.");
+    }
+    if (this.context.config.licenseKeyFromEnvironment) {
+      throw new Error(
+        "This license is managed by FLUXMAIL_LICENSE_KEY. Remove that setting before activating a different key.",
+      );
+    }
+
+    const result = await this.fluxmail.refreshLicense(this.context.db, {
+      licenseKey,
+      serverUrl: this.context.config.licenseServerUrl,
+      dataDir: this.context.config.dataDir,
+    });
+    if (result.outcome !== "refreshed" && result.outcome !== "outage") {
+      throw new Error(licenseActivationError(result.outcome));
+    }
+
+    this.fluxmail.setStoredConfig(this.context.config.dataDir, "FLUXMAIL_LICENSE_KEY", licenseKey);
+    this.context.licenseController.wake();
+    return {
+      outcome: result.outcome === "refreshed" ? "activated" : "saved_for_retry",
+      license: this.license(),
     };
   }
 
@@ -825,6 +855,20 @@ export class FluxmailRuntime {
     this.context.licenseController.stop();
     throw new this.fluxmail.IncompatibleStoreError(compatibility);
   }
+}
+
+function licenseActivationError(
+  outcome: "invalid_key" | "not_found" | "inactive" | "in_use" | "bad_lease",
+): string {
+  const messages = {
+    invalid_key: "That license key is invalid. Check it for typos.",
+    not_found: "That license key is invalid. Check it for typos.",
+    inactive: "That license is no longer active.",
+    in_use:
+      "This license is active on another Fluxmail instance. Deactivate it there first, or manage instances from your Fluxmail account.",
+    bad_lease: "Fluxmail could not verify the license response. Update Fluxmail and try again.",
+  } as const;
+  return messages[outcome];
 }
 
 function forwardBody(

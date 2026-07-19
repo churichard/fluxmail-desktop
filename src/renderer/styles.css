@@ -2245,6 +2245,61 @@ textarea:focus-visible,
   font-size: 10px;
 }
 
+.license-activation,
+.license-activation-trigger {
+  margin-top: 16px;
+}
+
+.license-activation > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.license-activation > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.license-activation input {
+  min-width: 0;
+  height: 35px;
+  flex: 1;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  padding: 0 11px;
+  background: var(--field);
+  color: var(--ink);
+  font-size: 11px;
+  box-shadow: inset 0 1px 2px rgb(30 32 28 / 0.025);
+}
+
+.license-activation input:focus {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  background: var(--paper);
+}
+
+.license-activation input::placeholder {
+  color: var(--muted-faint);
+}
+
+.license-activation .secondary-button {
+  flex: 0 0 auto;
+}
+
+.license-activation .settings-help,
+.license-feedback {
+  margin: 7px 0 0;
+}
+
+.form-success {
+  color: var(--accent-deep);
+  font-size: 10px;
+}
+
 .settings-about {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

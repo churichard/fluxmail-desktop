@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { ExternalLink, Monitor, Moon, RefreshCw, Sun, Trash2, X } from "lucide-react";
 import type { AppearancePreference, BootstrapState } from "../../shared/contracts";
 import { IconButton, SelectionCheckbox } from "./Controls";
@@ -16,6 +16,13 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
   const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [dockBadgeBusy, setDockBadgeBusy] = useState(false);
   const [blockRemoteImagesBusy, setBlockRemoteImagesBusy] = useState(false);
+  const [licenseOpen, setLicenseOpen] = useState(false);
+  const [licenseKey, setLicenseKey] = useState("");
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseFeedback, setLicenseFeedback] = useState<{
+    kind: "success" | "error";
+    message: string;
+  }>();
   const updateTelemetry = async (enabled: boolean) => {
     const previous = state.telemetry;
     setBusy(true);
@@ -167,6 +174,39 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
       setBlockRemoteImagesBusy(false);
     }
   };
+  const activateLicense = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (licenseBusy || !licenseKey.trim()) return;
+    setLicenseBusy(true);
+    setLicenseFeedback(undefined);
+    try {
+      const result = await window.fluxmail.license.activate(licenseKey);
+      onState((current) => (current ? { ...current, license: result.license } : current));
+      setLicenseKey("");
+      setLicenseOpen(false);
+      setLicenseFeedback({
+        kind: "success",
+        message:
+          result.outcome === "activated"
+            ? "License activated."
+            : "License key saved. Fluxmail will retry when it can reach the license server.",
+      });
+      void window.fluxmail.analytics
+        .trackFeature({ feature: "settings", action: "completed", source: "settings" })
+        .catch(() => undefined);
+    } catch (error) {
+      setLicenseFeedback({
+        kind: "error",
+        message:
+          error instanceof Error ? error.message : "Fluxmail could not activate the license.",
+      });
+      void window.fluxmail.analytics
+        .trackFeature({ feature: "settings", action: "failed", source: "settings" })
+        .catch(() => undefined);
+    } finally {
+      setLicenseBusy(false);
+    }
+  };
   return (
     <div
       className="modal-backdrop"
@@ -207,6 +247,75 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                 <ExternalLink size={13} />
               </button>
             </div>
+            {licenseOpen ? (
+              <form
+                id="license-activation-form"
+                className="license-activation"
+                onSubmit={(event) => void activateLicense(event)}
+              >
+                <label htmlFor="settings-license-key">License key</label>
+                <div>
+                  <input
+                    id="settings-license-key"
+                    type="password"
+                    value={licenseKey}
+                    placeholder="fluxmail_lic_..."
+                    autoComplete="off"
+                    autoFocus
+                    spellCheck={false}
+                    disabled={licenseBusy}
+                    onChange={(event) => {
+                      setLicenseKey(event.target.value);
+                      if (licenseFeedback) setLicenseFeedback(undefined);
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    className="secondary-button"
+                    disabled={licenseBusy || !licenseKey.trim()}
+                  >
+                    {licenseBusy ? "Activating..." : "Activate"}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={licenseBusy}
+                    onClick={() => {
+                      setLicenseOpen(false);
+                      setLicenseKey("");
+                      setLicenseFeedback(undefined);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <p className="settings-help">
+                  Paste the key from your Fluxmail purchase. The desktop app, CLI, and MCP server
+                  use the same license.
+                </p>
+              </form>
+            ) : (
+              <button
+                type="button"
+                className="secondary-button license-activation-trigger"
+                aria-expanded="false"
+                aria-controls="license-activation-form"
+                onClick={() => {
+                  setLicenseOpen(true);
+                  setLicenseFeedback(undefined);
+                }}
+              >
+                Activate license key
+              </button>
+            )}
+            {licenseFeedback ? (
+              <p
+                className={`${licenseFeedback.kind === "error" ? "form-error" : "form-success"} license-feedback`}
+                role={licenseFeedback.kind === "error" ? "alert" : "status"}
+              >
+                {licenseFeedback.message}
+              </p>
+            ) : null}
             {state.license.warning ? <p className="form-error">{state.license.warning}</p> : null}
           </section>
           <section>

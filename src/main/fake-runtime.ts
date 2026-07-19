@@ -1,6 +1,7 @@
 import type { Message } from "@fluxmail/core";
 import {
   CURRENT_STORE_FORMAT,
+  LICENSE_KEY_PATTERN,
   MAX_SUPPORTED_STORE_FORMAT,
   MIN_SUPPORTED_STORE_FORMAT,
   VERSION,
@@ -9,6 +10,7 @@ import type {
   AccountInfo,
   BootstrapState,
   ComposeInput,
+  LicenseActivationResult,
   MailThread,
   ModifyActionInput,
   ThreadListInput,
@@ -101,6 +103,11 @@ const seedMessages: Message[] = [
 export class FakeFluxmailRuntime {
   private connected = true;
   private messages = structuredClone(seedMessages);
+  private licenseValue: BootstrapState["license"] = {
+    plan: "personal",
+    maxMembers: 1,
+    maxAccounts: 3,
+  };
 
   constructor(
     private readonly options: {
@@ -153,8 +160,16 @@ export class FakeFluxmailRuntime {
         : {},
       sync,
       telemetry: this.options.analytics.status(),
-      license: { plan: "personal", maxMembers: 1, maxAccounts: 3 },
+      license: this.licenseValue,
     };
+  }
+
+  async activateLicense(rawKey: string): Promise<LicenseActivationResult> {
+    if (!LICENSE_KEY_PATTERN.test(rawKey.trim())) {
+      throw new Error("That license key does not look right. Check it and try again.");
+    }
+    this.licenseValue = { plan: "pro", maxMembers: 1, maxAccounts: 5 };
+    return { outcome: "activated", license: this.licenseValue };
   }
 
   async folders(_force = false): Promise<BootstrapState["folders"]> {

@@ -38,6 +38,8 @@ import {
   draftResultSchema,
   featureEventSchema,
   IPC,
+  licenseActivationResultSchema,
+  licenseKeySchema,
   mailForwardInputSchema,
   mailModifyInputSchema,
   sendInputSchema,
@@ -468,6 +470,9 @@ function registerIpc(): void {
   });
   handle(IPC.preferencesBlockRemoteImagesSet, z.boolean(), z.boolean(), (enabled) =>
     requirePreferences().setBlockRemoteImages(enabled),
+  );
+  handle(IPC.licenseActivate, licenseKeySchema, licenseActivationResultSchema, (key) =>
+    requireRuntime().activateLicense(key),
   );
   handle(IPC.analyticsFeature, featureEventSchema, z.void(), async (event) =>
     requireAnalytics().captureFeature(event),

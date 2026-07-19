@@ -3,6 +3,8 @@ import {
   appearancePreferenceSchema,
   composeInputSchema,
   featureEventSchema,
+  licenseActivationResultSchema,
+  licenseKeySchema,
   mailForwardInputSchema,
   messageSchema,
   sendInputSchema,
@@ -177,6 +179,21 @@ describe("desktop contracts", () => {
     expect(appearancePreferenceSchema.parse("light")).toBe("light");
     expect(appearancePreferenceSchema.parse("dark")).toBe("dark");
     expect(() => appearancePreferenceSchema.parse("midnight")).toThrow();
+  });
+
+  it("trims license keys and validates activation results", () => {
+    expect(licenseKeySchema.parse("  fluxmail_lic_key  ")).toBe("fluxmail_lic_key");
+    expect(() => licenseKeySchema.parse(" ")).toThrow();
+    expect(() => licenseKeySchema.parse("x".repeat(201))).toThrow();
+    expect(
+      licenseActivationResultSchema.parse({
+        outcome: "activated",
+        license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+      }),
+    ).toEqual({
+      outcome: "activated",
+      license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+    });
   });
 
   it("preserves Reply-To addresses in renderer messages", () => {

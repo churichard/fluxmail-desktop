@@ -16,6 +16,8 @@ import {
   draftResultSchema,
   featureEventSchema,
   IPC,
+  licenseActivationResultSchema,
+  licenseKeySchema,
   mailForwardInputSchema,
   mailModifyInputSchema,
   sendInputSchema,
@@ -84,6 +86,10 @@ const api: FluxmailDesktopApi = {
       invoke(IPC.preferencesDockBadgeSet, enabled, z.boolean(), z.boolean()),
     setBlockRemoteImages: (enabled) =>
       invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
+  },
+  license: {
+    activate: (key) =>
+      invoke(IPC.licenseActivate, key, licenseKeySchema, licenseActivationResultSchema),
   },
   analytics: {
     trackFeature: (event) => invoke(IPC.analyticsFeature, event, featureEventSchema, z.void()),
