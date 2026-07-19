@@ -92,19 +92,41 @@ describe("email HTML security", () => {
 
   it("rewrites remote image sources through the hosted relay", () => {
     const original = "https://images.example/photo(large).jpg?utm_source=newsletter&size=large";
+    const cleaned = "https://images.example/photo(large).jpg?size=large";
     const proxied = "https://cdn.fluxmail.workers.dev/?url=image&exp=2000000000&sig=signature";
     const document = buildEmailDocument(
       `<picture><source srcset="${original} 2x"><img src="${original}" style="background-image:url('${original}')"></picture>`,
       {},
       true,
       false,
-      { [original]: proxied },
+      { [cleaned]: proxied },
     );
 
     expect(document).not.toContain("images.example");
     expect(document).toContain("cdn.fluxmail.workers.dev");
     expect(document).toContain("img-src data: blob: https://cdn.fluxmail.workers.dev;");
     expect(document).not.toContain("img-src data: blob: https:;");
+  });
+
+  it("strips tracking parameters from direct image loads", () => {
+    const document = buildEmailDocument(
+      `<picture>
+         <source srcset="https://images.example/hero.webp?utm_source=email&width=1200 2x">
+         <img
+           src="https://images.example/hero.jpg?mc_eid=recipient&height=600"
+           style="background-image:url('https://images.example/background.jpg?fbclid=click&size=large')"
+         >
+       </picture>`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("utm_source");
+    expect(document).not.toContain("mc_eid");
+    expect(document).not.toContain("fbclid");
+    expect(document).toContain("hero.webp?width=1200");
+    expect(document).toContain("hero.jpg?height=600");
+    expect(document).toContain("background.jpg?size=large");
   });
 
   it("rewrites string-form image-set candidates through the hosted relay", () => {
@@ -248,7 +270,7 @@ describe("email HTML security", () => {
 
     expect(document).toContain('src="https://notmailchimp.com/photo.jpg"');
     expect(document).toContain('src="https://facebook.com/logo.png"');
-    expect(document).toContain('src="https://images.example/photo.jpg?utm_source=newsletter"');
+    expect(document).toContain('src="https://images.example/photo.jpg"');
     expect(document).toContain('src="https://cdn.example.com/e/o/product-hero.jpg"');
     expect(document).toContain('src="https://track.example.com/campaign-hero.jpg"');
   });

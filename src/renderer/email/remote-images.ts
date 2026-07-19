@@ -1,4 +1,5 @@
 import { normalizeRemoteImageUrl } from "../../shared/image-relay";
+import { blockTrackingPixels } from "./tracking-pixels";
 
 const CSS_URL_REGEX =
   /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|((?:\\.|[^'")])+?))\s*\)/gi;
@@ -11,6 +12,7 @@ interface SrcsetEntry {
 
 export function collectRemoteImageUrls(html: string): string[] {
   const document = new DOMParser().parseFromString(html, "text/html");
+  blockTrackingPixels(document);
   const urls = new Set<string>();
   const add = (value?: string | null) => {
     const normalized = value ? normalizeRemoteImageUrl(value) : undefined;
@@ -35,11 +37,11 @@ export function collectRemoteImageUrls(html: string): string[] {
 
 export function rewriteRemoteImageUrls(
   document: Document,
-  relayUrls: Record<string, string>,
+  relayUrls?: Record<string, string>,
 ): void {
   const replacement = (value: string): string | undefined => {
     const normalized = normalizeRemoteImageUrl(value);
-    return normalized ? relayUrls[normalized] : undefined;
+    return normalized ? (relayUrls ? relayUrls[normalized] : normalized) : undefined;
   };
 
   for (const image of document.querySelectorAll("img[src]")) {

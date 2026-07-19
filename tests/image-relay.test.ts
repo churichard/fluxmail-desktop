@@ -3,12 +3,12 @@ import { HostedImageRelay, HostedImageRelayAccess } from "../src/main/image-rela
 import { normalizeRemoteImageUrl } from "../src/shared/image-relay";
 
 describe("hosted image relay", () => {
-  it("normalizes image URLs without copying the server's tracking rules", () => {
+  it("normalizes image URLs and removes known tracking parameters", () => {
     expect(
       normalizeRemoteImageUrl(
-        "https://images.example/photo.png?utm_source=email&size=large#tracking",
+        "https://images.example/photo.png?utm_source=email&size=large&FBCLID=click&mc_eid=user#tracking",
       ),
-    ).toBe("https://images.example/photo.png?utm_source=email&size=large#tracking");
+    ).toBe("https://images.example/photo.png?size=large#tracking");
     expect(normalizeRemoteImageUrl("//images.example/photo.png")).toBe(
       "https://images.example/photo.png",
     );

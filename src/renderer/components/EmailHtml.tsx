@@ -292,7 +292,7 @@ function buildEmailContent(
       image.removeAttribute("srcset");
     }
   }
-  if (loadImages && relayUrls) rewriteRemoteImageUrls(document, relayUrls);
+  if (loadImages) rewriteRemoteImageUrls(document, relayUrls);
   for (const link of document.querySelectorAll("a")) {
     const href = link.getAttribute("href") || "";
     if (!parseExternalUrl(href)) link.removeAttribute("href");

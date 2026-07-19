@@ -82,6 +82,32 @@ describe("EmailHtml remote image consent", () => {
     expect(proxy).toHaveBeenCalledWith(["https://images.example/first.png"]);
   });
 
+  it("does not request tracking pixels or image tracking parameters through the relay", async () => {
+    const image = "https://images.example/photo.png?size=large";
+    const proxied = "https://cdn.fluxmail.workers.dev/?url=photo&exp=2000000000&sig=test";
+    const proxy = vi.fn(async () => ({ [image]: proxied }));
+    installApi(proxy);
+    const { container } = render(
+      <EmailHtml
+        message={{
+          ...message("tracked"),
+          body: {
+            html: `<img src="https://t.yesware.com/t/open.gif">
+              <img src="${image}&utm_source=email&mc_eid=recipient" width="600" height="400">`,
+          },
+        }}
+        blockRemoteImages={false}
+        imageRelay
+      />,
+    );
+
+    await waitFor(() => expect(proxy).toHaveBeenCalledWith([image]));
+    expect(frameDocument(container).querySelector("img")?.getAttribute("src")).toBe(proxied);
+    expect(frameSource(container)).not.toContain("t.yesware.com");
+    expect(frameSource(container)).not.toContain("utm_source");
+    expect(frameSource(container)).not.toContain("mc_eid");
+  });
+
   it("splits large image sets into valid relay requests", async () => {
     const urls = Array.from({ length: 201 }, (_, index) => `https://images.example/${index}.png`);
     const proxy = vi.fn(async (batch: string[]) =>
