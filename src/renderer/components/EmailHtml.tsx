@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Image as ImageIcon } from "lucide-react";
-import type { MailMessage } from "../../shared/contracts";
+import { MAX_IMAGE_RELAY_URLS_PER_REQUEST, type MailMessage } from "../../shared/contracts";
 import { parseExternalUrl } from "../../shared/external-url";
 import { convertEmailToDarkMode, removeSenderDarkModeCSS } from "../email/convert-to-dark-mode";
 import { collectRemoteImageUrls, rewriteRemoteImageUrls } from "../email/remote-images";
@@ -118,7 +118,7 @@ export function EmailHtml({
     }
     setRemoteImages({ policyKey: requestPolicyKey, status: "loading" });
     try {
-      const proxied = await window.fluxmail.images.proxy(urls);
+      const proxied = await proxyRemoteImageUrls(urls);
       if (currentPolicyKeyRef.current !== requestPolicyKey) return;
       setRemoteImages({ policyKey: requestPolicyKey, status: "loaded", relayUrls: proxied });
     } catch (error) {
@@ -400,6 +400,19 @@ function remoteImagePolicyKey(
 ): string {
   const relayPolicy = imageRelay ? (imageRelayAvailable ? "relay" : "relay-unavailable") : "direct";
   return `${messageId}:${blockRemoteImages ? "blocked" : "automatic"}:${relayPolicy}`;
+}
+
+async function proxyRemoteImageUrls(urls: string[]): Promise<Record<string, string>> {
+  const proxied: Record<string, string> = {};
+  for (let offset = 0; offset < urls.length; offset += MAX_IMAGE_RELAY_URLS_PER_REQUEST) {
+    Object.assign(
+      proxied,
+      await window.fluxmail.images.proxy(
+        urls.slice(offset, offset + MAX_IMAGE_RELAY_URLS_PER_REQUEST),
+      ),
+    );
+  }
+  return proxied;
 }
 
 export function hasRemoteImages(value: string): boolean {

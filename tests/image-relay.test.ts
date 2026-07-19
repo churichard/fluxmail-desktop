@@ -36,6 +36,36 @@ describe("hosted image relay", () => {
     });
   });
 
+  it("shares an in-flight access token request", async () => {
+    let resolveResponse!: (response: Response) => void;
+    const licenseLease = vi.fn(async () => "signed-license-lease");
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponse = resolve;
+        }),
+    );
+    const access = new HostedImageRelayAccess(licenseLease, fetch);
+
+    const first = access.token();
+    const second = access.token();
+    await Promise.resolve();
+
+    expect(licenseLease).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+
+    resolveResponse(
+      Response.json({
+        accessToken: "relay-access-token",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      }),
+    );
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "relay-access-token",
+      "relay-access-token",
+    ]);
+  });
+
   it("refreshes the license lease once when the exchange rejects it", async () => {
     const licenseLease = vi
       .fn<(forceRefresh?: boolean) => Promise<string>>()

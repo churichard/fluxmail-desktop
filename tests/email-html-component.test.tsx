@@ -82,6 +82,35 @@ describe("EmailHtml remote image consent", () => {
     expect(proxy).toHaveBeenCalledWith(["https://images.example/first.png"]);
   });
 
+  it("splits large image sets into valid relay requests", async () => {
+    const urls = Array.from({ length: 201 }, (_, index) => `https://images.example/${index}.png`);
+    const proxy = vi.fn(async (batch: string[]) =>
+      Object.fromEntries(
+        batch.map((url, index) => [
+          url,
+          `https://cdn.fluxmail.workers.dev/${encodeURIComponent(url)}-${index}.png`,
+        ]),
+      ),
+    );
+    installApi(proxy);
+    const { container } = render(
+      <EmailHtml
+        message={{
+          ...message("large"),
+          body: { html: urls.map((url) => `<img src="${url}">`).join("") },
+        }}
+        blockRemoteImages={false}
+        imageRelay
+      />,
+    );
+
+    await waitFor(() => expect(proxy).toHaveBeenCalledTimes(2));
+    expect(proxy.mock.calls.map(([batch]) => batch.length)).toEqual([200, 1]);
+    await waitFor(() =>
+      expect(frameDocument(container).querySelectorAll("img[src]")).toHaveLength(201),
+    );
+  });
+
   it("does not fall back to direct loading when the relay is unavailable", () => {
     const proxy = vi.fn(async () => ({}));
     installApi(proxy);

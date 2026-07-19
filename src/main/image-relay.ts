@@ -24,6 +24,7 @@ type RelayFetch = (input: string, init: RequestInit) => Promise<Response>;
 
 export class HostedImageRelayAccess {
   private cached?: { accessToken: string; expiresAt: number };
+  private pending?: Promise<string>;
 
   constructor(
     private readonly licenseLease: (forceRefresh?: boolean) => Promise<string>,
@@ -36,6 +37,18 @@ export class HostedImageRelayAccess {
       return this.cached.accessToken;
     }
 
+    if (this.pending) return this.pending;
+
+    const request = this.fetchToken(forceRefresh);
+    this.pending = request;
+    try {
+      return await request;
+    } finally {
+      if (this.pending === request) this.pending = undefined;
+    }
+  }
+
+  private async fetchToken(forceRefresh: boolean): Promise<string> {
     let response = await this.exchange(forceRefresh);
     if (response.status === 401 && !forceRefresh) response = await this.exchange(true);
     if (!response.ok) throw relayAccessError(response.status);

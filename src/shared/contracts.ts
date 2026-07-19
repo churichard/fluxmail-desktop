@@ -267,6 +267,7 @@ export const licenseActivationResultSchema = z.object({
 });
 export type LicenseActivationResult = z.infer<typeof licenseActivationResultSchema>;
 
+export const MAX_IMAGE_RELAY_URLS_PER_REQUEST = 200;
 export const imageRelayInputSchema = z
   .array(
     z
@@ -278,7 +279,7 @@ export const imageRelayInputSchema = z
       }),
   )
   .min(1)
-  .max(200);
+  .max(MAX_IMAGE_RELAY_URLS_PER_REQUEST);
 export const imageRelayResultSchema = z.record(z.string().url());
 
 export const bootstrapSchema = z.object({
