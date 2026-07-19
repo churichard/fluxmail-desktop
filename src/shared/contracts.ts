@@ -364,6 +364,7 @@ export const appEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sync-status"), state: syncStateSchema }),
   z.object({ type: z.literal("cache-changed") }),
   z.object({ type: z.literal("accounts-changed") }),
+  z.object({ type: z.literal("license-changed") }),
   z.object({ type: z.literal("new-mail"), count: z.number().int().positive() }),
   z.object({ type: z.literal("window-close-requested") }),
 ]);

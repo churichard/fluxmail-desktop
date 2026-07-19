@@ -237,7 +237,8 @@ export function App() {
     const unsubscribe = window.fluxmail.onEvent((event: AppEvent) => {
       if (event.type === "sync-status")
         setBootstrap((current) => (current ? { ...current, sync: event.state } : current));
-      if (event.type === "accounts-changed") void loadBootstrap();
+      if (event.type === "accounts-changed" || event.type === "license-changed")
+        void loadBootstrap();
       if (event.type === "window-close-requested") {
         const composeDialog = composeDialogRef.current;
         if (!composeDialog) {

@@ -108,10 +108,10 @@ export class FakeFluxmailRuntime {
   private connected = true;
   private messages = structuredClone(seedMessages);
   private licenseValue: BootstrapState["license"] = {
-    plan: "personal",
+    plan: "pro",
     maxMembers: 1,
-    maxAccounts: 3,
-    canUsePrivateImageRelay: false,
+    maxAccounts: 5,
+    canUsePrivateImageRelay: true,
   };
 
   constructor(

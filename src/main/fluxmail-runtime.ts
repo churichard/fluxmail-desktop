@@ -40,6 +40,7 @@ interface RuntimeOptions {
   resolveAttachment(attachment: ComposeAttachment): Promise<AttachmentInput>;
   onNewMessages(messages: Message[], account: AccountInfo): void;
   onCacheChanged(): void;
+  onLicenseChanged(): void;
 }
 
 const PRIVATE_IMAGE_RELAY_PLANS = new Set(["pro", "team", "enterprise"]);
@@ -51,6 +52,7 @@ export class FluxmailRuntime {
   private cacheGeneration = 0;
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
+  private imageRelayLicenseRefresh?: Promise<void>;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
 
@@ -216,6 +218,7 @@ export class FluxmailRuntime {
   }
 
   license(): BootstrapState["license"] {
+    this.refreshImageRelayLicenseInBackground();
     const entitlements = this.fluxmail.getEntitlements(this.context.db);
     const state = this.fluxmail.checkLicenseState(this.context.db);
     return {
@@ -257,6 +260,23 @@ export class FluxmailRuntime {
       outcome: result.outcome === "refreshed" ? "activated" : "saved_for_retry",
       license: this.license(),
     };
+  }
+
+  private refreshImageRelayLicenseInBackground(): void {
+    if (this.imageRelayLicenseRefresh) return;
+    const entitlements = this.fluxmail.getEntitlements(this.context.db);
+    if (entitlements.licensed && !entitlements.inGrace) return;
+    if (!this.context.licenseController.configuredKey()) return;
+
+    this.imageRelayLicenseRefresh = this.context.licenseController
+      .refreshNow()
+      .then((result) => {
+        if (result?.outcome === "refreshed") this.options.onLicenseChanged();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.imageRelayLicenseRefresh = undefined;
+      });
   }
 
   async connectGmail(accountId?: string): Promise<AccountInfo> {

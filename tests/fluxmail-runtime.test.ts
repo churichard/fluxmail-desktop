@@ -258,6 +258,59 @@ describe("FluxmailRuntime private image relay license", () => {
     );
     expect(internals.context.licenseController.refreshNow).toHaveBeenCalledOnce();
   });
+
+  it("notifies the renderer after refreshing an unusable cached lease", async () => {
+    const onLicenseChanged = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      onLicenseChanged,
+    });
+    const inGrace = {
+      plan: "pro",
+      licensed: true,
+      inGrace: true,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    const current = { ...inGrace, inGrace: false };
+    let entitlements = inGrace;
+    let finishRefresh!: (value: { outcome: "refreshed" }) => void;
+    const refreshNow = vi.fn(
+      () =>
+        new Promise<{ outcome: "refreshed" }>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: {
+        licenseController: {
+          configuredKey(): string;
+          refreshNow: typeof refreshNow;
+        };
+      };
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => entitlements),
+      checkLicenseState: vi.fn(() => ({ entitlements })),
+    };
+    internals.context.licenseController = {
+      configuredKey: () => "configured-license-key",
+      refreshNow,
+    };
+
+    expect(runtime.license().canUsePrivateImageRelay).toBe(false);
+    expect(refreshNow).toHaveBeenCalledOnce();
+    entitlements = current;
+    finishRefresh({ outcome: "refreshed" });
+
+    await vi.waitFor(() => expect(onLicenseChanged).toHaveBeenCalledOnce());
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    expect(refreshNow).toHaveBeenCalledOnce();
+  });
 });
 
 describe("FluxmailRuntime thread loading", () => {
@@ -1348,6 +1401,7 @@ function createRuntime(input: {
   service: Record<string, ReturnType<typeof vi.fn>>;
   cache: Record<string, ReturnType<typeof vi.fn>>;
   onCacheChanged(): void;
+  onLicenseChanged?(): void;
 }): FluxmailRuntime {
   const cache = {
     putThread: vi.fn(),
@@ -1368,6 +1422,7 @@ function createRuntime(input: {
     })),
     onNewMessages: vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    onLicenseChanged: input.onLicenseChanged ?? vi.fn(),
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1399,6 +1454,7 @@ function createRuntimeWithCache(input: {
   accounts?: AccountInfo[];
   onCacheChanged(): void;
   onNewMessages?(messages: Message[], account: AccountInfo): void;
+  onLicenseChanged?(): void;
 }): FluxmailRuntime {
   const runtime = new FluxmailRuntime({
     cache: input.cache,
@@ -1414,6 +1470,7 @@ function createRuntimeWithCache(input: {
     })),
     onNewMessages: input.onNewMessages ?? vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    onLicenseChanged: input.onLicenseChanged ?? vi.fn(),
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),

@@ -206,6 +206,7 @@ async function createServices(): Promise<void> {
     sendEvent({ type: "cache-changed" });
     updateDockBadge();
   };
+  const onLicenseChanged = () => sendEvent({ type: "license-changed" });
   runtime =
     !app.isPackaged && process.env.FLUXMAIL_DESKTOP_FAKE_MAIL === "1"
       ? new FakeFluxmailRuntime({ analytics, onCacheChanged })
@@ -216,6 +217,7 @@ async function createServices(): Promise<void> {
           resolveAttachment,
           onNewMessages: showNewMail,
           onCacheChanged,
+          onLicenseChanged,
         });
   await runtime.initialize();
   analytics.captureStarted({
