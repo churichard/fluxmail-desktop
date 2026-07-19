@@ -96,9 +96,6 @@ jobs:
           echo "APPLE_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
           if [[ "$notarization_configured" -eq 0 ]]; then
-            CERTIFICATE_PEM="$RUNNER_TEMP/fluxmail-signing.pem"
-            security find-certificate -c "$SIGNING_IDENTITY" -p "$KEYCHAIN_PATH" > "$CERTIFICATE_PEM"
-            security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" "$CERTIFICATE_PEM"
             echo "::notice::Using the persistent self-signed Fluxmail certificate without notarization."
             exit 0
           fi
