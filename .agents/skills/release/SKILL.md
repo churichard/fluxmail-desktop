@@ -1,11 +1,11 @@
 ---
 name: release
-description: Cut, publish, repair, or replace a Fluxmail Desktop GitHub release from the repository's main branch. Use when the user invokes $release, asks to cut or publish a release, pushes a Fluxmail version tag, wants the full preflight, pull request, merge, tag, GitHub Actions, and artifact verification workflow handled, or asks to rebuild or replace existing release assets.
+description: Cut, publish, repair, or replace a Fluxmail Desktop GitHub release from the repository's main branch. Use when the user invokes $release, asks to choose or bump a version, cut or publish a release, push a Fluxmail version tag, run the full preflight, handle the pull request, merge, tag, GitHub Actions, and artifact verification workflow, or rebuild or replace existing release assets.
 ---
 
 # Release
 
-Publish the version in the root `package.json` unless the user supplies a version. Treat an invocation of this skill as authorization to run checks, commit release-related changes, push the workspace branch, open and merge its pull request, push a new version tag, monitor GitHub Actions, and verify the GitHub Release.
+Choose the release version from the changes since the latest published release unless the user supplies a version. Update the root `package.json` when the selected version differs. Treat an invocation of this skill as authorization to run checks, commit release-related changes, push the workspace branch, open and merge its pull request, push a new version tag, monitor GitHub Actions, and verify the GitHub Release.
 
 Do not expose secret values, move an existing tag, force-push, or bypass branch protection. Stop when a required review, credential, or repository permission needs the user. Require a separate explicit request before replacing assets on an existing release.
 
@@ -26,13 +26,32 @@ gh secret list --app actions
 
 Require the default branch to be `main` and use `origin/main` as the release source. Do not switch or rename the current Conductor workspace branch.
 
-Use an explicitly requested version when provided. Otherwise, read `package.json`. Normalize the tag to `v<version>` and require a valid semantic version. If the requested version differs from `package.json`, update the manifest with:
+Use an explicitly requested version when provided. Otherwise, find the latest published, non-prerelease GitHub Release whose tag is an ancestor of `origin/main`. Require its tag to contain a valid semantic version, then inspect the complete first-parent log and diff from that tag through `origin/main`:
 
 ```sh
-pnpm version <version> --no-git-tag-version
+git log --first-parent --oneline "<baseline-tag>..origin/main"
+git diff "<baseline-tag>..origin/main"
 ```
 
-Include that version change in the release pull request. Do not infer a new version when the package version already has a remote tag. Ask the user which version to use.
+For the first release, when no eligible baseline exists, audit the full history and use the valid, unclaimed version in `package.json`.
+
+Review user-visible behavior, configuration and environment variables, stored data, authentication, defaults, and runtime requirements. Choose the minimum compatible semantic version:
+
+- At `1.0.0` or later, use a major bump for a breaking public contract.
+- Before `1.0.0`, use a minor bump for a breaking public contract.
+- Use a minor bump for backward-compatible functionality.
+- Use a patch bump for backward-compatible fixes only.
+- Do not release tests, documentation, refactors, or release tooling unless they change user-visible behavior or a public contract.
+
+Choose the version without asking when the evidence is clear. Report the baseline, audited range, compatibility findings, and selected version before editing files. Stop if there is no release-worthy change. Ask only when the compatibility impact is genuinely ambiguous.
+
+Normalize the selected tag to `v<version>` and require a valid semantic version. If the selected version differs from `package.json`, update the manifest with:
+
+```sh
+pnpm version <version> --no-git-tag-version --no-git-checks
+```
+
+Use `--no-git-checks` only after confirming that every existing change belongs in the release pull request. Include the version change in that pull request. A remote tag or published release matching the current package version is the release baseline, not a reason to ask for a version. Never select a version that already has a local tag, remote tag, or GitHub Release.
 
 Check local tags, remote tags, and GitHub Releases:
 
@@ -141,8 +160,8 @@ If a check fails, diagnose it. Fix failures caused by release-related changes, r
 Compare the workspace with `origin/main`:
 
 ```sh
-git diff --stat origin/main...
-git diff origin/main...
+git diff --stat origin/main
+git diff origin/main
 git log --oneline origin/main..HEAD
 ```
 
