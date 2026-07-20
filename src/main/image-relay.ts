@@ -6,6 +6,7 @@ export const IMAGE_RELAY_TOKEN_ENDPOINT = "https://fluxmail.ai/api/v1/image-rela
 export const IMAGE_RELAY_ORIGIN = "https://cdn.fluxmail.workers.dev";
 
 const MAX_URLS_PER_REQUEST = 50;
+const MAX_CACHED_URLS = 5_000;
 const relayUrlSchema = z
   .string()
   .url()
@@ -78,6 +79,7 @@ export class HostedImageRelay {
     private readonly accessToken: (forceRefresh?: boolean) => Promise<string>,
     private readonly fetch: RelayFetch,
     private readonly endpoint = IMAGE_RELAY_SIGN_ENDPOINT,
+    private readonly maxCacheEntries = MAX_CACHED_URLS,
   ) {}
 
   async proxy(rawUrls: string[]): Promise<Record<string, string>> {
@@ -86,10 +88,17 @@ export class HostedImageRelay {
     const missing: string[] = [];
     const now = Date.now();
 
+    for (const [url, cached] of this.cache) {
+      if (cached.expiresAt * 1000 <= now + 60_000) this.cache.delete(url);
+    }
+
     for (const url of urls) {
       const cached = this.cache.get(url);
-      if (cached && cached.expiresAt * 1000 > now + 60_000) result[url] = cached.proxyUrl;
-      else missing.push(url);
+      if (cached) {
+        this.cache.delete(url);
+        this.cache.set(url, cached);
+        result[url] = cached.proxyUrl;
+      } else missing.push(url);
     }
 
     if (!missing.length) return result;
@@ -105,12 +114,22 @@ export class HostedImageRelay {
 
       for (const [url, proxyUrl] of Object.entries(signed.requestedUrls)) {
         if (!batch.includes(url)) continue;
+        this.cache.delete(url);
         this.cache.set(url, { proxyUrl, expiresAt: signed.expiresAt });
+        this.trimCache();
         result[url] = proxyUrl;
       }
     }
 
     return result;
+  }
+
+  private trimCache(): void {
+    while (this.cache.size > this.maxCacheEntries) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) return;
+      this.cache.delete(oldest);
+    }
   }
 
   private async sign(

@@ -230,10 +230,12 @@ describe("FluxmailRuntime private image relay license", () => {
   });
 
   it("refreshes a stale lease but does not use the licensing grace period", async () => {
+    const onLicenseChanged = vi.fn();
     const runtime = createRuntime({
       cache: {},
       service: {},
       onCacheChanged: vi.fn(),
+      onLicenseChanged,
     });
     const internals = runtime as unknown as {
       fluxmail: Record<string, unknown>;
@@ -257,6 +259,7 @@ describe("FluxmailRuntime private image relay license", () => {
       "available on Pro, Team, and Enterprise",
     );
     expect(internals.context.licenseController.refreshNow).toHaveBeenCalledOnce();
+    expect(onLicenseChanged).toHaveBeenCalledOnce();
   });
 
   it("notifies the renderer after refreshing an unusable cached lease", async () => {

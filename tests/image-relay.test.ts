@@ -135,6 +135,39 @@ describe("hosted image relay", () => {
     });
   });
 
+  it("removes expired entries and evicts the least recently used signed URLs", async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const accessToken = vi.fn(async () => "relay-access-token");
+    const fetch = vi.fn(async (_input: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { urls: string[] };
+      const expiresAt = Math.floor(now / 1_000) + 120;
+      const requestedUrls = Object.fromEntries(
+        body.urls.map((url) => [
+          url,
+          `https://cdn.fluxmail.workers.dev/?url=${encodeURIComponent(url)}&exp=${expiresAt}&sig=test`,
+        ]),
+      );
+      return Response.json({ signedUrls: requestedUrls, requestedUrls, expiresAt });
+    });
+    const relay = new HostedImageRelay(accessToken, fetch, undefined, 2);
+    const first = "https://images.example/first.png";
+    const second = "https://images.example/second.png";
+    const third = "https://images.example/third.png";
+
+    await relay.proxy([first, second]);
+    await relay.proxy([first]);
+    await relay.proxy([third]);
+    await relay.proxy([second]);
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    now += 61_000;
+    await relay.proxy([first]);
+
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
   it("refreshes rejected access tokens once without falling back to a direct load", async () => {
     const accessToken = vi
       .fn<(forceRefresh?: boolean) => Promise<string>>()

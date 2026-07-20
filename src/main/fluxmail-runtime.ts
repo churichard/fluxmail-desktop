@@ -103,6 +103,7 @@ export class FluxmailRuntime {
       entitlements.inGrace ||
       !PRIVATE_IMAGE_RELAY_PLANS.has(entitlements.plan)
     ) {
+      this.options.onLicenseChanged();
       throw new Error("Private image relay is available on Pro, Team, and Enterprise.");
     }
     this.fluxmail.verifyLease(lease.token, this.fluxmail.licensePublicKeys());
