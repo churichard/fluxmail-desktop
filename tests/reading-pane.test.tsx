@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadingPane } from "../src/renderer/components/ReadingPane";
-import type { ComposeSeed } from "../src/renderer/components/ComposeDialog";
 import type {
   FluxmailDesktopApi,
   MailThread,
@@ -20,7 +20,10 @@ globalThis.ResizeObserver = class ResizeObserver {
   disconnect(): void {}
 } as unknown as typeof ResizeObserver;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("ReadingPane", () => {
   it("loads a new selection while the previous conversation is still loading", async () => {
@@ -46,7 +49,6 @@ describe("ReadingPane", () => {
         labels={[]}
         allowPermanentDelete={false}
         onModify={vi.fn(async () => undefined)}
-        onCompose={vi.fn()}
         onError={vi.fn()}
         onQuickReplyDirtyChange={vi.fn()}
       />,
@@ -87,7 +89,6 @@ describe("ReadingPane", () => {
         labels={[]}
         allowPermanentDelete={false}
         onModify={vi.fn(async () => undefined)}
-        onCompose={vi.fn()}
         onError={vi.fn()}
         onQuickReplyDirtyChange={vi.fn()}
       />,
@@ -132,7 +133,36 @@ describe("ReadingPane", () => {
     expect(onModify).toHaveBeenCalledWith({ type: "delete" });
   });
 
-  it("shows original attachments in the forward composer", async () => {
+  it("hides Reply all when it would have the same recipients as Reply", async () => {
+    const getThread = vi.fn(async () => detail("Direct message", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary());
+
+    await screen.findByText("Direct message");
+
+    expect(screen.queryByRole("button", { name: "Reply all" })).toBeNull();
+  });
+
+  it("offers Reply all when the message has another recipient", async () => {
+    const thread = detail("Group message", "message-1");
+    thread.messages[0]!.to.push({ email: "teammate@example.com" });
+    const getThread = vi.fn(async () => thread);
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary());
+
+    await screen.findByText("Group message");
+    fireEvent.click(screen.getByRole("button", { name: "Reply all" }));
+
+    expect(screen.getByText("Reply to everyone")).toBeTruthy();
+  });
+
+  it("shows the inline forward composer with the original attachments", async () => {
     const message = detail("Forward subject", "message-1").messages[0]!;
     message.attachments = [
       {
@@ -153,29 +183,97 @@ describe("ReadingPane", () => {
       sizeBytes: 128,
     };
     const prepare = vi.fn(async () => [prepared]);
-    const onCompose = vi.fn();
+    const release = vi.fn(async () => undefined);
+    const forward = vi.fn(async () => undefined);
     Object.defineProperty(window, "fluxmail", {
       configurable: true,
       value: {
-        mail: { getThread },
-        attachments: { prepare, release: vi.fn(async () => undefined) },
+        mail: { getThread, forward },
+        attachments: {
+          prepare,
+          release,
+          pick: vi.fn(async () => []),
+        },
       } as unknown as FluxmailDesktopApi,
     });
-    renderPane(summary(), { onCompose });
+    renderPane(summary(), { strict: true });
     await screen.findByText("Forward subject");
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
 
-    await waitFor(() =>
-      expect(onCompose).toHaveBeenCalledWith(
-        expect.objectContaining({ initialAttachments: [prepared] }),
-      ),
-    );
+    expect(await screen.findByRole("textbox", { name: "To" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove report.pdf" })).toBeTruthy();
     expect(prepare).toHaveBeenCalledWith({
       accountId: "account-1",
       messageId: "message-1",
       attachments: message.attachments,
     });
+    expect(release).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "To" }), {
+      target: { value: "friend@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { accountId: "account-1", threadId: "thread-1" },
+          messageId: "message-1",
+          to: [{ email: "friend@example.com" }],
+          attachments: [prepared],
+          includeAttachments: false,
+        }),
+      ),
+    );
+    expect(release).toHaveBeenCalledWith([prepared.token]);
+  });
+
+  it("confirms before replacing a dirty inline composer", async () => {
+    const getThread = vi.fn(async () => detail("Reply subject", "message-1"));
+    const attachment = {
+      token: "reply-attachment",
+      filename: "draft.txt",
+      mimeType: "text/plain",
+      sizeBytes: 32,
+    };
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread },
+        attachments: {
+          pick: vi.fn(async () => [attachment]),
+          release: vi.fn(async () => undefined),
+        },
+      } as unknown as FluxmailDesktopApi,
+    });
+    const confirmDiscard = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPane(summary());
+    await screen.findByText("Reply subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach files" }));
+    await screen.findByRole("button", { name: "Remove draft.txt" });
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+
+    expect(confirmDiscard).toHaveBeenCalledWith("Discard this unsent message?");
+    expect(screen.getByRole("button", { name: "Remove draft.txt" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "To" })).toBeNull();
+
+    confirmDiscard.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    const to = await screen.findByRole("textbox", { name: "To" });
+    fireEvent.change(to, { target: { value: "friend@example.com" } });
+    confirmDiscard.mockReturnValue(false);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect((screen.getByRole("textbox", { name: "To" }) as HTMLInputElement).value).toBe(
+      "friend@example.com",
+    );
+
+    confirmDiscard.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(screen.getByText("Write a reply")).toBeTruthy();
   });
 
   it("closes the quick-reply editor after its contents are discarded", async () => {
@@ -196,7 +294,6 @@ describe("ReadingPane", () => {
         labels={[]}
         allowPermanentDelete={false}
         onModify={vi.fn(async () => undefined)}
-        onCompose={vi.fn()}
         onError={vi.fn()}
         onQuickReplyDirtyChange={vi.fn()}
         quickReplyDiscardVersion={1}
@@ -205,6 +302,24 @@ describe("ReadingPane", () => {
 
     expect(screen.queryByText("Write a reply")).toBeNull();
   });
+
+  it("shows the outbound citation and quoted body when expanding a quick reply", async () => {
+    const getThread = vi.fn(async () => detail("Reply subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const { container } = renderPane(summary());
+    await screen.findByText("Reply subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show quoted message" }));
+
+    expect(screen.getByText(/^On .+ sender@example\.com wrote:$/)).toBeTruthy();
+    expect(container.querySelector(".quick-reply .quoted-reply-body")?.textContent).toBe(
+      "Email body",
+    );
+  });
 });
 
 function renderPane(
@@ -212,24 +327,24 @@ function renderPane(
   options: {
     view?: "inbox" | "trash";
     onModify?: (action: ModifyActionInput) => Promise<void>;
-    onCompose?: (seed: ComposeSeed) => void;
     quickReplyDiscardVersion?: number;
     allowPermanentDelete?: boolean;
+    strict?: boolean;
   } = {},
 ) {
-  return render(
+  const pane = (
     <ReadingPane
       view={options.view ?? "inbox"}
       thread={thread}
       labels={[]}
       allowPermanentDelete={options.allowPermanentDelete ?? false}
       onModify={options.onModify ?? vi.fn(async () => undefined)}
-      onCompose={options.onCompose ?? vi.fn()}
       onError={vi.fn()}
       onQuickReplyDirtyChange={vi.fn()}
       quickReplyDiscardVersion={options.quickReplyDiscardVersion}
-    />,
+    />
   );
+  return render(options.strict ? <StrictMode>{pane}</StrictMode> : pane);
 }
 
 function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {

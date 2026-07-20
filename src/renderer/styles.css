@@ -298,13 +298,20 @@ textarea:focus-visible,
 .sidebar-nav {
   display: flex;
   min-height: 0;
-  overflow-y: auto;
   flex: 1;
   flex-direction: column;
   gap: 3px;
   padding: 0 0 4px;
   overscroll-behavior: contain;
-  overflow-y: overlay;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .sidebar-nav > * {
@@ -825,6 +832,7 @@ textarea:focus-visible,
 }
 
 .thread-list:hover .overlay-scrollbar,
+.sidebar-nav-wrap:hover .overlay-scrollbar,
 .conversation-scroll-shell:hover .overlay-scrollbar,
 .overlay-scrollbar.dragging {
   opacity: 1;
@@ -1637,8 +1645,17 @@ textarea:focus-visible,
 }
 
 .quick-reply .mail-editor {
+  position: relative;
   min-height: 132px;
   padding: 14px 16px;
+}
+
+.inline-compose-fields {
+  padding-top: 4px;
+}
+
+.inline-compose-attachments {
+  border-top: 1px solid var(--hairline-soft);
 }
 
 .quick-reply-footer,
@@ -2011,15 +2028,19 @@ textarea:focus-visible,
   max-height: 240px;
   overflow: auto;
   margin-top: 8px;
-  border-left: 2px solid var(--hairline);
-  padding: 4px 0 4px 12px;
+  padding: 4px 0;
   color: var(--muted);
 }
 
 .quoted-reply-meta {
   margin-bottom: 8px;
-  font-size: 10px;
-  font-weight: 620;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quoted-reply-body {
+  border-left: 2px solid var(--hairline);
+  padding-left: 12px;
 }
 
 .format-buttons button:hover,

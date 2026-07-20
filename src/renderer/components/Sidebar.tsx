@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ChevronDown,
   ChevronsUpDown,
@@ -15,9 +15,9 @@ import {
   Trash2,
 } from "lucide-react";
 import type { AccountInfo, FolderInfo, MailboxView } from "../../shared/contracts";
-import { calculateScrollEdges } from "../scroll-edges";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { IconButton, MenuButton } from "./Controls";
+import { OverlayScrollbar } from "./OverlayScrollbar";
 
 interface SidebarProps {
   accounts: AccountInfo[];
@@ -51,40 +51,16 @@ const SYSTEM_ITEMS: Array<{
 
 export function Sidebar(props: SidebarProps) {
   const [labelsOpen, setLabelsOpen] = useState(false);
-  const [scrollEdges, setScrollEdges] = useState({
-    canScrollUp: false,
-    canScrollDown: false,
-  });
-  const navRef = useRef<HTMLElement>(null);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const handleScrollerRef = useCallback((element: HTMLElement | null) => {
+    setScroller(element);
+  }, []);
   const selectedAccount = props.accounts.find((account) => account.id === props.accountId);
   const customLabels = uniqueLabels(
     props.folders.filter(
       (folder) => !folder.role && (!props.accountId || folder.accountId === props.accountId),
     ),
   );
-  useEffect(() => {
-    const nav = navRef.current;
-    if (!nav) return;
-    const update = () => {
-      const next = calculateScrollEdges(nav.clientHeight, nav.scrollHeight, nav.scrollTop);
-      setScrollEdges((current) =>
-        current.canScrollUp === next.canScrollUp && current.canScrollDown === next.canScrollDown
-          ? current
-          : next,
-      );
-    };
-    update();
-    const resizeObserver = new ResizeObserver(update);
-    const mutationObserver = new MutationObserver(update);
-    resizeObserver.observe(nav);
-    mutationObserver.observe(nav, { childList: true, subtree: true });
-    nav.addEventListener("scroll", update, { passive: true });
-    return () => {
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      nav.removeEventListener("scroll", update);
-    };
-  }, []);
   return (
     <aside className={`sidebar ${props.collapsed ? "collapsed" : ""}`}>
       <div className="sidebar-titlebar">
@@ -134,7 +110,7 @@ export function Sidebar(props: SidebarProps) {
         </MenuButton>
       ) : null}
       <div className="sidebar-nav-wrap">
-        <nav ref={navRef} className="sidebar-nav" aria-label="Mailboxes">
+        <nav ref={handleScrollerRef} className="sidebar-nav" aria-label="Mailboxes">
           {SYSTEM_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = props.activeView === item.view;
@@ -178,12 +154,7 @@ export function Sidebar(props: SidebarProps) {
               ))
             : null}
         </nav>
-        {scrollEdges.canScrollUp ? (
-          <span className="scroll-edge-fade sidebar-fade top" aria-hidden="true" />
-        ) : null}
-        {scrollEdges.canScrollDown ? (
-          <span className="scroll-edge-fade sidebar-fade bottom" aria-hidden="true" />
-        ) : null}
+        <OverlayScrollbar scroller={scroller} fadeClass="sidebar-fade" />
       </div>
       <div className="sidebar-footer">
         <IconButton

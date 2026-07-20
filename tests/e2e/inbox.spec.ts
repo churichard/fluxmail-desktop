@@ -159,6 +159,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const sidebarNav = page.locator(".sidebar-nav");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("flex-shrink", "0");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("height", "36px");
+    await expect(sidebarNav).toHaveCSS("scrollbar-width", "none");
     await sidebarNav.evaluate((element) => {
       let position = 0;
       Object.defineProperties(element, {
@@ -176,6 +177,8 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(page.locator(".sidebar-fade.bottom")).toBeVisible();
     await expect(page.locator(".sidebar-fade.top")).toHaveCount(0);
+    await page.locator(".sidebar-nav-wrap").hover();
+    await expect(page.locator(".sidebar-nav-wrap .overlay-scrollbar")).toHaveCSS("opacity", "1");
     await sidebarNav.evaluate((element) => {
       (element as HTMLElement).scrollTop = 100;
       element.dispatchEvent(new Event("scroll"));
@@ -709,6 +712,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       root.innerHTML = "<p>Welcome to Fluxmail</p>";
     });
 
+    const messageActions = page.locator(".reply-actions");
+    await expect(
+      messageActions.getByRole("button", { name: "Reply", exact: true }),
+    ).toHaveAttribute("aria-keyshortcuts", "R");
+    await expect(messageActions.getByRole("button", { name: "Reply all" })).toHaveCount(0);
+    await expect(messageActions.getByRole("button", { name: "Forward" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "F",
+    );
     await page.getByRole("button", { name: "Reply", exact: true }).click();
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
@@ -716,11 +728,44 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
     ).toHaveAttribute("aria-keyshortcuts", "Meta+U");
+    const replyPlaceholder = page.locator(".quick-reply .mail-editor-placeholder");
+    await expect(replyPlaceholder).toBeVisible();
+    await expect
+      .poll(() =>
+        replyPlaceholder.evaluate((element) =>
+          ((element as HTMLElement).offsetParent as HTMLElement | null)?.classList.contains(
+            "mail-editor",
+          ),
+        ),
+      )
+      .toBe(true);
+    const placeholderOffset = () =>
+      page.locator(".quick-reply .mail-editor").evaluate((editor) => {
+        const placeholder = editor.querySelector<HTMLElement>(".mail-editor-placeholder");
+        if (!placeholder) throw new Error("Reply placeholder is missing");
+        return placeholder.getBoundingClientRect().top - editor.getBoundingClientRect().top;
+      });
+    const placeholderOffsetBeforeScroll = await placeholderOffset();
+    await page.locator(".conversation-scroll").evaluate((element) => {
+      element.scrollTop = Math.max(0, element.scrollTop - 80);
+    });
+    expect(Math.abs((await placeholderOffset()) - placeholderOffsetBeforeScroll)).toBeLessThan(1);
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }),
     ).toBeVisible();
     await page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }).click();
     await expect(page.locator(".quick-reply .quoted-reply-content")).toBeVisible();
+    await expect(page.locator(".quick-reply .quoted-reply-meta")).toHaveText(/^On .+ wrote:$/);
+    await expect(page.locator(".quick-reply .quoted-reply-body")).toBeVisible();
+    await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
+
+    await page.keyboard.press("a");
+    await expect(page.locator(".quick-reply")).toHaveCount(0);
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
+
+    await page.keyboard.press("f");
+    await expect(page.locator(".quick-reply").getByRole("textbox", { name: "To" })).toBeVisible();
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
     await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
