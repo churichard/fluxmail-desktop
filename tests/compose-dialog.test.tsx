@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposeDialog, type ComposeDialogHandle } from "../src/renderer/components/ComposeDialog";
 import type { FluxmailDesktopApi, MailThread } from "../src/shared/contracts";
 
+vi.mock("../src/renderer/components/EmailHtml", () => ({
+  EmailHtml: ({ message }: { message: { id: string } }) => (
+    <div data-message-id={message.id}>Email body</div>
+  ),
+}));
+
 describe("ComposeDialog draft coordination", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -335,6 +341,75 @@ describe("ComposeDialog draft coordination", () => {
       }),
     );
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows the outbound citation and quoted body when expanding a reply", async () => {
+    installApi({ save: vi.fn(), getThread: vi.fn(async () => replyThread()) });
+    const { container } = render(
+      <ComposeDialog
+        seed={{ accountId: "account-1", threadId: "thread-1", subject: "Re: Hello" }}
+        accounts={[
+          {
+            id: "account-1",
+            email: "me@example.com",
+            provider: "gmail",
+            status: "active",
+          },
+        ]}
+        onClose={vi.fn()}
+        onSent={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    await act(async () => Promise.resolve());
+
+    fireEvent.click(screen.getByRole("button", { name: "Show quoted message" }));
+
+    expect(screen.getByText(/^On .+ sender@example\.com wrote:$/)).toBeTruthy();
+    expect(container.querySelector(".compose-quoted .quoted-reply-body")?.textContent).toBe(
+      "Email body",
+    );
+  });
+
+  it("quotes the original message instead of the draft when reopening a saved reply", async () => {
+    const thread = replyThread();
+    thread.messages.push({
+      ...thread.messages[0]!,
+      id: "draft-message",
+      draftId: "draft-1",
+      from: { email: "me@example.com" },
+      to: [{ email: "sender@example.com" }],
+      flags: { read: true, starred: false, draft: true },
+    });
+    installApi({ save: vi.fn(), getThread: vi.fn(async () => thread) });
+    const { container } = render(
+      <ComposeDialog
+        seed={{
+          accountId: "account-1",
+          draftId: "draft-1",
+          threadId: "thread-1",
+          replyToMessageId: "message-1",
+          subject: "Re: Hello",
+        }}
+        accounts={[
+          {
+            id: "account-1",
+            email: "me@example.com",
+            provider: "gmail",
+            status: "active",
+          },
+        ]}
+        onClose={vi.fn()}
+        onSent={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    await act(async () => Promise.resolve());
+
+    fireEvent.click(screen.getByRole("button", { name: "Show quoted message" }));
+
+    expect(container.querySelector('.compose-quoted [data-message-id="message-1"]')).toBeTruthy();
+    expect(container.querySelector('.compose-quoted [data-message-id="draft-message"]')).toBeNull();
   });
 
   it("confirms before closing an edited forward", () => {
