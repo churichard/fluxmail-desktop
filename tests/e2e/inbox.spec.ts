@@ -316,7 +316,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".thread-header")).toHaveCSS("border-bottom-width", "0px");
     await expect(page.getByText("Today", { exact: true })).toBeVisible();
     await expect(page.locator(".thread-row").first().locator(".unread-dot")).toBeVisible();
-    await expect(page.locator(".thread-row").nth(1).locator(".unread-dot")).toHaveCount(0);
+    await expect(
+      page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" }).locator(".unread-dot"),
+    ).toHaveCount(0);
     const listDividerColor = await page
       .locator(".thread-row")
       .first()
@@ -413,9 +415,12 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
         ),
     ).toBe("drag");
     const draftsNav = page.locator(".sidebar .nav-item").filter({ hasText: "Drafts" });
-    await expect(
-      page.locator(".sidebar .nav-item").filter({ hasText: "Inbox" }).locator(".nav-count"),
-    ).toHaveText("1");
+    const inboxNavCount = page
+      .locator(".sidebar .nav-item")
+      .filter({ hasText: "Inbox" })
+      .locator(".nav-count");
+    await expect(inboxNavCount).toHaveText(/^\d+$/);
+    expect(Number(await inboxNavCount.textContent())).toBeGreaterThan(1);
     await expect(draftsNav.locator(".nav-count")).toHaveText("1");
     const inboxCountFits = await page
       .locator(".sidebar .nav-item")
@@ -549,7 +554,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       name: "Clear selection",
     });
     await expect(clearSelection).toHaveAttribute("aria-checked", "true");
-    await expect(page.locator(".row-check.checked")).toHaveCount(2);
+    await expect(page.locator(".selection-count")).toHaveText("60 selected");
     await clearSelection.click();
     await expect(page.locator(".row-check.checked")).toHaveCount(0);
     await expect(
@@ -985,7 +990,7 @@ test("archives from a row and the email iframe without transferring focus", asyn
     await expect(page.locator(".thread-row").first()).toBeVisible();
     await expect(page.locator(".thread-open:focus")).toHaveCount(0);
 
-    const nextThread = page.locator(".thread-row").first();
+    const nextThread = page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" });
     await nextThread.locator(".thread-open").click();
 
     const messageFrame = page.frameLocator('iframe[title="Email message"]');

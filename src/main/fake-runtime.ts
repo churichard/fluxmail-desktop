@@ -18,11 +18,17 @@ import type {
   ThreadSummary,
 } from "../shared/contracts";
 import type { DesktopAnalytics } from "./analytics";
+import {
+  buildDemoMessages,
+  DEMO_ACCOUNT_EMAIL,
+  DEMO_ACCOUNT_ID,
+  DEMO_ACCOUNT_NAME,
+} from "./demo-fixtures";
 
 const account: AccountInfo = {
-  id: "test-account",
-  email: "dev@fluxmail.test",
-  displayName: "Fluxmail Test",
+  id: DEMO_ACCOUNT_ID,
+  email: DEMO_ACCOUNT_EMAIL,
+  displayName: DEMO_ACCOUNT_NAME,
   provider: "gmail",
   status: "active",
   canPermanentlyDelete: false,
@@ -34,7 +40,7 @@ function todayAt(hour: number): string {
   return date.toISOString();
 }
 
-const seedMessages: Message[] = [
+const e2eMessages: Message[] = [
   {
     id: "welcome-message",
     threadId: "welcome-thread",
@@ -43,7 +49,7 @@ const seedMessages: Message[] = [
     from: { name: "Fluxmail Team", email: "team@fluxmail.test" },
     to: [{ email: account.email }],
     subject: "Welcome to Fluxmail",
-    date: todayAt(14),
+    date: todayAt(23),
     snippet: "Your desktop inbox is ready.",
     body: {
       html: '<p>Your desktop inbox is ready.</p><script>window.evil = true</script><img src="https://tracker.invalid/pixel" width="1"><img src="https://t.yesware.com/tt/message-1"><img src = "https://images.invalid/welcome.png" width="320" height="180">',
@@ -59,7 +65,7 @@ const seedMessages: Message[] = [
     from: { name: "Corner Market", email: "receipts@market.test" },
     to: [{ email: account.email }],
     subject: "Receipt for Tuesday",
-    date: todayAt(13),
+    date: todayAt(22),
     snippet: "Thanks for shopping with us.",
     body: { html: "<p>Thanks for shopping with us.</p>" },
     flags: { read: true, starred: true, draft: false },
@@ -82,7 +88,7 @@ const seedMessages: Message[] = [
     to: [{ name: "Sam", email: "sam@example.test" }],
     cc: [{ email: "editor@example.test" }],
     subject: "Launch notes",
-    date: todayAt(12),
+    date: todayAt(21),
     snippet: "The first draft is ready.",
     body: {
       html: "<p>The first <strong>draft</strong> is ready.</p>",
@@ -98,6 +104,11 @@ const seedMessages: Message[] = [
     ],
     flags: { read: true, starred: false, draft: true },
   },
+];
+
+const seedMessages: Message[] = [
+  ...(process.env.FLUXMAIL_DESKTOP_E2E_HEADLESS === "1" ? e2eMessages : []),
+  ...buildDemoMessages(),
 ];
 
 export class FakeFluxmailRuntime {
@@ -141,9 +152,7 @@ export class FakeFluxmailRuntime {
 
   unreadCount(accountIds?: string[]): number {
     if (accountIds?.length && !accountIds.includes(account.id)) return 0;
-    return this.messages.filter(
-      (message) => message.folder?.role === "inbox" && !message.flags.read,
-    ).length;
+    return this.inboxUnreadCount();
   }
 
   async bootstrap(sync: BootstrapState["sync"]): Promise<Omit<BootstrapState, "preferences">> {
@@ -156,16 +165,12 @@ export class FakeFluxmailRuntime {
       },
       accounts: this.accounts(),
       folders: await this.folders(),
-      unreadCount: this.messages.filter(
-        (message) => message.folder?.role === "inbox" && !message.flags.read,
-      ).length,
+      unreadCount: this.inboxUnreadCount(),
       draftCount: this.messages.filter((message) => message.flags.draft).length,
       countsByAccount: this.connected
         ? {
             [account.id]: {
-              unreadCount: this.messages.filter(
-                (message) => message.folder?.role === "inbox" && !message.flags.read,
-              ).length,
+              unreadCount: this.inboxUnreadCount(),
               draftCount: this.messages.filter((message) => message.flags.draft).length,
             },
           }
@@ -191,17 +196,23 @@ export class FakeFluxmailRuntime {
 
   async folders(_force = false): Promise<BootstrapState["folders"]> {
     if (!this.connected) return [];
+    const customLabels = [...new Set(this.messages.flatMap((message) => message.labels ?? []))]
+      .filter(
+        (label) =>
+          label !== "IMPORTANT" && !label.startsWith("CATEGORY_") && !label.startsWith("Fluxmail/"),
+      )
+      .sort((left, right) => left.localeCompare(right));
     return [
       {
         accountId: account.id,
         id: "INBOX",
         name: "Inbox",
         role: "inbox",
-        unreadCount: 1,
+        unreadCount: this.inboxUnreadCount(),
       },
       { accountId: account.id, id: "SENT", name: "Sent", role: "sent" },
       { accountId: account.id, id: "DRAFT", name: "Drafts", role: "drafts" },
-      { accountId: account.id, id: "Receipts", name: "Receipts" },
+      ...customLabels.map((label) => ({ accountId: account.id, id: label, name: label })),
     ];
   }
 
@@ -278,7 +289,7 @@ export class FakeFluxmailRuntime {
         if (action.type === "markUnread") message.flags.read = false;
         if (action.type === "star") message.flags.starred = true;
         if (action.type === "unstar") message.flags.starred = false;
-        if (action.type === "archive")
+        if (action.type === "archive" && message.folder?.role === "inbox")
           message.folder = { id: "ALL", name: "All mail", role: "all" };
         if (action.type === "trash") message.folder = { id: "TRASH", name: "Trash", role: "trash" };
         if (action.type === "untrash")
@@ -420,24 +431,49 @@ export class FakeFluxmailRuntime {
   }
 
   private summaries(): ThreadSummary[] {
-    return this.messages
-      .map((message) => ({
-        id: message.threadId,
-        accountId: account.id,
-        accountEmail: account.email,
-        subject: message.subject,
-        senderName: message.from?.name || message.from?.email || "Unknown sender",
-        senderEmail: message.from?.email || "",
-        snippet: message.snippet || "",
-        date: message.date,
-        unread: !message.flags.read,
-        starred: message.flags.starred,
-        draft: message.flags.draft,
-        hasAttachments: Boolean(message.attachments?.length),
-        messageCount: 1,
-        labels: message.labels ?? [],
-        folderRoles: message.folder?.role ? [message.folder.role] : [],
-      }))
+    const messagesByThread = new Map<string, Message[]>();
+    for (const message of this.messages) {
+      const messages = messagesByThread.get(message.threadId) ?? [];
+      messages.push(message);
+      messagesByThread.set(message.threadId, messages);
+    }
+
+    return [...messagesByThread.entries()]
+      .map(([threadId, threadMessages]): ThreadSummary => {
+        const sortedMessages = [...threadMessages].sort(
+          (left, right) => Date.parse(left.date) - Date.parse(right.date),
+        );
+        const latest = sortedMessages.at(-1)!;
+        return {
+          id: threadId,
+          accountId: account.id,
+          accountEmail: account.email,
+          subject: latest.subject,
+          senderName: latest.from?.name || latest.from?.email || "Unknown sender",
+          senderEmail: latest.from?.email || "",
+          snippet: latest.snippet || "",
+          date: latest.date,
+          unread: sortedMessages.some((message) => !message.flags.read),
+          starred: sortedMessages.some((message) => message.flags.starred),
+          draft: sortedMessages.some((message) => message.flags.draft),
+          hasAttachments: sortedMessages.some((message) => Boolean(message.attachments?.length)),
+          messageCount: sortedMessages.length,
+          labels: [...new Set<string>(sortedMessages.flatMap((message) => message.labels ?? []))],
+          folderRoles: [
+            ...new Set<string>(
+              sortedMessages.flatMap((message) =>
+                message.folder?.role ? [message.folder.role] : [],
+              ),
+            ),
+          ],
+        };
+      })
       .sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+  }
+
+  private inboxUnreadCount(): number {
+    return this.summaries().filter(
+      (thread) => thread.folderRoles.includes("inbox") && thread.unread,
+    ).length;
   }
 }
