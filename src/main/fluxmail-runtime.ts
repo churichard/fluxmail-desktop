@@ -63,12 +63,21 @@ export class FluxmailRuntime {
     if (this.initialized) return;
     process.env.FLUXMAIL_DATA_DIR ??= path.join(homedir(), ".fluxmail");
     this.fluxmail = await import("fluxmail");
-    prepareFluxmailConfiguration(
+    const shouldStoreBundledGoogleConfig = prepareFluxmailConfiguration(
       this.fluxmail,
       __FLUXMAIL_GOOGLE_CLIENT_ID__,
       __FLUXMAIL_GOOGLE_CLIENT_SECRET__,
     );
     this.context = this.fluxmail.createContext();
+    if (
+      shouldStoreBundledGoogleConfig &&
+      this.context.configuration.oauthStatus().google.source === "built-in"
+    ) {
+      this.context.configuration.setGoogle({
+        clientId: __FLUXMAIL_GOOGLE_CLIENT_ID__,
+        clientSecret: __FLUXMAIL_GOOGLE_CLIENT_SECRET__,
+      });
+    }
     this.context.scheduler.start();
     this.context.licenseController.start();
     this.initialized = true;
@@ -264,7 +273,7 @@ export class FluxmailRuntime {
     }
     if (result.outcome === "refreshed") this.imageRelayAccessDeniedByServer = false;
 
-    this.fluxmail.setStoredConfig(this.context.config.dataDir, "FLUXMAIL_LICENSE_KEY", licenseKey);
+    this.context.configuration.setLicenseKey(licenseKey);
     this.context.licenseController.wake();
     return {
       outcome: result.outcome === "refreshed" ? "activated" : "saved_for_retry",
@@ -1015,18 +1024,14 @@ export function shouldUseBundledGoogleConfig(
 
 type FluxmailConfigurationModule = Pick<
   typeof import("fluxmail"),
-  | "IncompatibleStoreError"
-  | "inspectStoreCompatibility"
-  | "readStoredConfig"
-  | "resolveStoreLocation"
-  | "setStoredConfig"
+  "IncompatibleStoreError" | "inspectStoreCompatibility" | "resolveStoreLocation"
 >;
 
 export function prepareFluxmailConfiguration(
   fluxmail: FluxmailConfigurationModule,
   bundledClientId: string,
   bundledClientSecret: string,
-): void {
+): boolean {
   const storeLocation = fluxmail.resolveStoreLocation();
   const compatibility = fluxmail.inspectStoreCompatibility(
     storeLocation.dbPath,
@@ -1034,9 +1039,8 @@ export function prepareFluxmailConfiguration(
   );
   if (!compatibility.compatible) throw new fluxmail.IncompatibleStoreError(compatibility);
 
-  const stored = fluxmail.readStoredConfig(storeLocation.dataDir);
-  const existingClientId = process.env.GOOGLE_CLIENT_ID ?? stored.GOOGLE_CLIENT_ID;
-  const existingClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? stored.GOOGLE_CLIENT_SECRET;
+  const existingClientId = process.env.GOOGLE_CLIENT_ID;
+  const existingClientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (
     !shouldUseBundledGoogleConfig(
       existingClientId,
@@ -1045,10 +1049,13 @@ export function prepareFluxmailConfiguration(
       bundledClientSecret,
     )
   )
-    return;
+    return false;
 
-  fluxmail.setStoredConfig(storeLocation.dataDir, "GOOGLE_CLIENT_ID", bundledClientId);
-  fluxmail.setStoredConfig(storeLocation.dataDir, "GOOGLE_CLIENT_SECRET", bundledClientSecret);
-  process.env.GOOGLE_CLIENT_ID = bundledClientId;
-  process.env.GOOGLE_CLIENT_SECRET = bundledClientSecret;
+  if (existingClientId || existingClientSecret) {
+    process.env.GOOGLE_CLIENT_ID = bundledClientId;
+    process.env.GOOGLE_CLIENT_SECRET = bundledClientSecret;
+    return false;
+  }
+
+  return true;
 }
