@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadingPane } from "../src/renderer/components/ReadingPane";
 import type { ComposeSeed } from "../src/renderer/components/ComposeDialog";
@@ -23,6 +23,50 @@ globalThis.ResizeObserver = class ResizeObserver {
 afterEach(cleanup);
 
 describe("ReadingPane", () => {
+  it("loads a new selection while the previous conversation is still loading", async () => {
+    let resolveFirst!: (thread: MailThread) => void;
+    let resolveSecond!: (thread: MailThread) => void;
+    const getThread = vi.fn(({ threadId }: { threadId: string }) => {
+      return new Promise<MailThread>((resolve) => {
+        if (threadId === "thread-1") resolveFirst = resolve;
+        else resolveSecond = resolve;
+      });
+    });
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const rendered = renderPane(summary());
+    expect(rendered.container.querySelector(".spin")).toBeTruthy();
+
+    rendered.rerender(
+      <ReadingPane
+        view="inbox"
+        thread={summary({ id: "thread-2", subject: "Second subject" })}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onCompose={vi.fn()}
+        onError={vi.fn()}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getThread).toHaveBeenLastCalledWith({
+        accountId: "account-1",
+        threadId: "thread-2",
+      }),
+    );
+    await act(async () => resolveFirst(detail("First loaded subject", "message-1")));
+    expect(screen.queryByText("First loaded subject")).toBeNull();
+    expect(rendered.container.querySelector(".spin")).toBeTruthy();
+
+    await act(async () => resolveSecond(detail("Second loaded subject", "message-2")));
+    await screen.findByText("Second loaded subject");
+    expect(getThread).toHaveBeenCalledTimes(2);
+  });
+
   it("reloads an open conversation when its message count changes", async () => {
     const getThread = vi
       .fn<() => Promise<MailThread>>()

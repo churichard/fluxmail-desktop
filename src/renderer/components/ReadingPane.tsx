@@ -67,14 +67,18 @@ export function ReadingPane({
   onQuickReplyDirtyChange,
   quickReplyDiscardVersion,
 }: Props) {
-  const [detail, setDetail] = useState<MailThread>();
-  const [loading, setLoading] = useState(false);
+  const [loadedThread, setLoadedThread] = useState<{
+    key: string;
+    detail: MailThread;
+  }>();
   const [replying, setReplying] = useState<"reply" | "replyAll">();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const forwardRequest = useRef(0);
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
+  const threadLoadKey = thread ? `${threadIdentity}:${thread.date}:${thread.messageCount}` : "";
   const threadIdentityRef = useRef(threadIdentity);
   threadIdentityRef.current = threadIdentity;
+  const detail = loadedThread?.key === threadLoadKey ? loadedThread.detail : undefined;
   const handleScrollerRef = useCallback((element: HTMLDivElement | null) => {
     setScroller(element);
   }, []);
@@ -114,28 +118,24 @@ export function ReadingPane({
   );
 
   useEffect(() => {
-    setDetail(undefined);
     setReplying(undefined);
     if (!thread) return;
     let canceled = false;
-    setLoading(true);
     void window.fluxmail.mail
       .getThread({ accountId: thread.accountId, threadId: thread.id })
       .then((result) => {
-        if (!canceled) setDetail(result);
+        if (!canceled) setLoadedThread({ key: threadLoadKey, detail: result });
       })
-      .catch((error) =>
-        onError(
-          error instanceof Error ? error.message : "Fluxmail could not open this conversation.",
-        ),
-      )
-      .finally(() => {
-        if (!canceled) setLoading(false);
+      .catch((error) => {
+        if (!canceled)
+          onError(
+            error instanceof Error ? error.message : "Fluxmail could not open this conversation.",
+          );
       });
     return () => {
       canceled = true;
     };
-  }, [onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
+  }, [onError, thread?.accountId, thread?.id, threadLoadKey]);
 
   if (!thread)
     return (
@@ -146,11 +146,10 @@ export function ReadingPane({
         </div>
       </section>
     );
-  if (loading || !detail)
+  if (!detail)
     return (
       <section className="reading-pane empty-reading">
         <LoaderCircle className="spin" size={22} />
-        <p>Opening conversation...</p>
       </section>
     );
   const lastMessage = detail.messages.at(-1);
