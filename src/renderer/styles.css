@@ -1641,6 +1641,14 @@ textarea:focus-visible,
   padding: 14px 16px;
 }
 
+.inline-compose-fields {
+  padding-top: 4px;
+}
+
+.inline-compose-attachments {
+  border-top: 1px solid var(--hairline-soft);
+}
+
 .quick-reply-footer,
 .quick-reply-actions {
   display: flex;

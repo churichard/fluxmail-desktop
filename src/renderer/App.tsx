@@ -19,7 +19,11 @@ import type {
 } from "../shared/contracts";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadListPane } from "./components/ThreadListPane";
-import { ReadingPane } from "./components/ReadingPane";
+import {
+  ReadingPane,
+  type InlineComposerMode,
+  type ReadingPaneHandle,
+} from "./components/ReadingPane";
 import {
   ComposeDialog,
   type ComposeDialogHandle,
@@ -56,6 +60,7 @@ export function App() {
   const [listWidth, setListWidth] = useState(410);
   const searchRef = useRef<HTMLInputElement>(null);
   const composeDialogRef = useRef<ComposeDialogHandle>(null);
+  const readingPaneRef = useRef<ReadingPaneHandle>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
   const openThreadRequest = useRef(0);
@@ -279,14 +284,6 @@ export function App() {
       .trackFeature({ feature: "compose", action: "opened", source: "sidebar" })
       .catch(() => undefined);
   }, [accountId, bootstrap?.accounts, confirmQuickReplyNavigation]);
-
-  const openSeededCompose = useCallback(
-    (seed: ComposeSeed) => {
-      if (!confirmQuickReplyNavigation()) return;
-      setComposeSeed(seed);
-    },
-    [confirmQuickReplyNavigation],
-  );
 
   const changeAccount = useCallback(
     (nextAccountId?: string) => {
@@ -553,8 +550,16 @@ export function App() {
       if (event.key === "#" && deleteAction) void modify(deleteAction, actionTargets);
       if (event.key.toLowerCase() === "s" && selectedThread)
         void modify({ type: selectedThread.starred ? "unstar" : "star" }, [selectedThread]);
-      if (event.key.toLowerCase() === "r" && selectedThread)
-        openSeededCompose(replySeed(selectedThread));
+      const composerShortcut: Partial<Record<string, InlineComposerMode>> = {
+        r: "reply",
+        a: "replyAll",
+        f: "forward",
+      };
+      const composerMode = composerShortcut[event.key.toLowerCase()];
+      if (composerMode && selectedThread) {
+        event.preventDefault();
+        readingPaneRef.current?.openComposer(composerMode);
+      }
       if (!event.shiftKey && event.key.toLowerCase() === "u" && actionTargets?.length)
         void modify(
           {
@@ -582,7 +587,6 @@ export function App() {
     composeSeed,
     modify,
     openCompose,
-    openSeededCompose,
     openThread,
     permanentDeleteAccountIds,
     refreshMail,
@@ -699,6 +703,7 @@ export function App() {
         onChange={setListWidth}
       />
       <ReadingPane
+        ref={readingPaneRef}
         view={submittedSearch ? "search" : view}
         thread={selectedThread}
         labels={availableLabels}
@@ -711,7 +716,6 @@ export function App() {
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
-        onCompose={openSeededCompose}
         onError={setError}
         onQuickReplyDirtyChange={handleQuickReplyDirtyChange}
         quickReplyDiscardVersion={quickReplyDiscardVersion}
@@ -891,7 +895,7 @@ export function permanentDeletePrompt(count: number): string {
 
 export function canCloseQuickReply(
   hasUnsavedReply: boolean,
-  confirmDiscard: () => boolean = () => window.confirm("Discard this unsent reply?"),
+  confirmDiscard: () => boolean = () => window.confirm("Discard this unsent message?"),
 ): boolean {
   return !hasUnsavedReply || confirmDiscard();
 }
