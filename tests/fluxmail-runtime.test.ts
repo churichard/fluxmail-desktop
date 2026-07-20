@@ -114,13 +114,20 @@ describe("FluxmailRuntime license activation", () => {
     internals.fluxmail.setStoredConfig = setStoredConfig;
     internals.fluxmail.getEntitlements = vi.fn(() => ({
       plan: "pro",
+      licensed: true,
+      inGrace: false,
       maxMembers: 1,
       maxAccounts: 5,
     }));
 
     await expect(runtime.activateLicense(` ${licenseKey} `)).resolves.toEqual({
       outcome: "activated",
-      license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+      license: {
+        plan: "pro",
+        maxMembers: 1,
+        maxAccounts: 5,
+        canUsePrivateImageRelay: true,
+      },
     });
     expect(refreshLicense).toHaveBeenCalledWith(expect.anything(), {
       licenseKey,
@@ -185,6 +192,181 @@ describe("FluxmailRuntime license activation", () => {
     await expect(runtime.activateLicense(licenseKey)).rejects.toThrow(
       "managed by FLUXMAIL_LICENSE_KEY",
     );
+  });
+});
+
+describe("FluxmailRuntime private image relay license", () => {
+  it("exposes and returns the signed lease for a current paid plan", async () => {
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+    });
+    const entitlements = {
+      plan: "team",
+      licensed: true,
+      inGrace: false,
+      maxMembers: 5,
+      maxAccounts: 10,
+    };
+    const verifyLease = vi.fn();
+    Object.assign(runtime, {
+      fluxmail: {
+        ...runtimeFluxmailModule(),
+        getEntitlements: vi.fn(() => entitlements),
+        checkLicenseState: vi.fn(() => ({ entitlements })),
+        readLeaseRow: vi.fn(() => ({ token: "signed-license-lease", updatedAt: Date.now() })),
+        verifyLease,
+        licensePublicKeys: vi.fn(() => ["public-key"]),
+      },
+    });
+
+    expect(runtime.license()).toMatchObject({
+      plan: "team",
+      canUsePrivateImageRelay: true,
+    });
+    await expect(runtime.imageRelayLicenseLease()).resolves.toBe("signed-license-lease");
+    expect(verifyLease).toHaveBeenCalledWith("signed-license-lease", ["public-key"]);
+  });
+
+  it("refreshes a stale lease but does not use the licensing grace period", async () => {
+    const onLicenseChanged = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      onLicenseChanged,
+    });
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: { licenseController: { refreshNow: ReturnType<typeof vi.fn> } };
+    };
+    const inGrace = {
+      plan: "pro",
+      licensed: true,
+      inGrace: true,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => inGrace),
+      readLeaseRow: vi.fn(() => ({ token: "expired-lease", updatedAt: Date.now() })),
+    };
+    internals.context.licenseController.refreshNow = vi.fn(async () => undefined);
+
+    await expect(runtime.imageRelayLicenseLease()).rejects.toThrow(
+      "available on Pro, Team, and Enterprise",
+    );
+    expect(internals.context.licenseController.refreshNow).toHaveBeenCalledOnce();
+    expect(onLicenseChanged).toHaveBeenCalledOnce();
+  });
+
+  it("notifies the renderer after refreshing an unusable cached lease", async () => {
+    const onLicenseChanged = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      onLicenseChanged,
+    });
+    const inGrace = {
+      plan: "pro",
+      licensed: true,
+      inGrace: true,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    const current = { ...inGrace, inGrace: false };
+    let entitlements = inGrace;
+    let finishRefresh!: (value: { outcome: "refreshed" }) => void;
+    const refreshNow = vi.fn(
+      () =>
+        new Promise<{ outcome: "refreshed" }>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: {
+        licenseController: {
+          configuredKey(): string;
+          refreshNow: typeof refreshNow;
+        };
+      };
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => entitlements),
+      checkLicenseState: vi.fn(() => ({ entitlements })),
+    };
+    internals.context.licenseController = {
+      configuredKey: () => "configured-license-key",
+      refreshNow,
+    };
+
+    expect(runtime.license().canUsePrivateImageRelay).toBe(false);
+    expect(refreshNow).toHaveBeenCalledOnce();
+    entitlements = current;
+    finishRefresh({ outcome: "refreshed" });
+
+    await vi.waitFor(() => expect(onLicenseChanged).toHaveBeenCalledOnce());
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    expect(refreshNow).toHaveBeenCalledOnce();
+  });
+
+  it("disables relay access after a server denial and restores it after revalidation", async () => {
+    const onLicenseChanged = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      onLicenseChanged,
+    });
+    const entitlements = {
+      plan: "pro",
+      licensed: true,
+      inGrace: false,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    let finishRefresh!: (value: { outcome: "refreshed" }) => void;
+    const refreshNow = vi.fn(
+      () =>
+        new Promise<{ outcome: "refreshed" }>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: {
+        licenseController: {
+          configuredKey(): string;
+          refreshNow: typeof refreshNow;
+        };
+      };
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => entitlements),
+      checkLicenseState: vi.fn(() => ({ entitlements })),
+    };
+    internals.context.licenseController = {
+      configuredKey: () => "configured-license-key",
+      refreshNow,
+    };
+
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    runtime.imageRelayAccessDenied();
+    expect(onLicenseChanged).toHaveBeenCalledOnce();
+    expect(runtime.license().canUsePrivateImageRelay).toBe(false);
+    expect(refreshNow).toHaveBeenCalledOnce();
+
+    finishRefresh({ outcome: "refreshed" });
+
+    await vi.waitFor(() => expect(onLicenseChanged).toHaveBeenCalledTimes(2));
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    expect(refreshNow).toHaveBeenCalledOnce();
   });
 });
 
@@ -1276,6 +1458,7 @@ function createRuntime(input: {
   service: Record<string, ReturnType<typeof vi.fn>>;
   cache: Record<string, ReturnType<typeof vi.fn>>;
   onCacheChanged(): void;
+  onLicenseChanged?(): void;
 }): FluxmailRuntime {
   const cache = {
     putThread: vi.fn(),
@@ -1296,6 +1479,7 @@ function createRuntime(input: {
     })),
     onNewMessages: vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    onLicenseChanged: input.onLicenseChanged ?? vi.fn(),
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1310,7 +1494,12 @@ function createRuntime(input: {
       registry: { listAccounts: () => [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
-      licenseController: { stop: vi.fn(), wake: vi.fn() },
+      licenseController: {
+        stop: vi.fn(),
+        wake: vi.fn(),
+        configuredKey: vi.fn(() => undefined),
+        refreshNow: vi.fn(async () => undefined),
+      },
     },
   });
   return runtime;
@@ -1322,6 +1511,7 @@ function createRuntimeWithCache(input: {
   accounts?: AccountInfo[];
   onCacheChanged(): void;
   onNewMessages?(messages: Message[], account: AccountInfo): void;
+  onLicenseChanged?(): void;
 }): FluxmailRuntime {
   const runtime = new FluxmailRuntime({
     cache: input.cache,
@@ -1337,6 +1527,7 @@ function createRuntimeWithCache(input: {
     })),
     onNewMessages: input.onNewMessages ?? vi.fn(),
     onCacheChanged: input.onCacheChanged,
+    onLicenseChanged: input.onLicenseChanged ?? vi.fn(),
   });
   Object.assign(runtime, {
     fluxmail: runtimeFluxmailModule(),
@@ -1351,7 +1542,12 @@ function createRuntimeWithCache(input: {
       registry: { listAccounts: () => input.accounts ?? [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
-      licenseController: { stop: vi.fn(), wake: vi.fn() },
+      licenseController: {
+        stop: vi.fn(),
+        wake: vi.fn(),
+        configuredKey: vi.fn(() => undefined),
+        refreshNow: vi.fn(async () => undefined),
+      },
     },
   });
   return runtime;
@@ -1388,10 +1584,15 @@ function runtimeFluxmailModule() {
     setStoredConfig: vi.fn(),
     getEntitlements: vi.fn(() => ({
       plan: "personal",
+      licensed: false,
+      inGrace: false,
       maxMembers: 1,
       maxAccounts: 3,
     })),
-    checkLicenseState: vi.fn(() => ({})),
+    checkLicenseState: vi.fn(() => ({ warning: undefined })),
+    readLeaseRow: vi.fn(() => undefined),
+    verifyLease: vi.fn(),
+    licensePublicKeys: vi.fn(() => []),
   };
 }
 

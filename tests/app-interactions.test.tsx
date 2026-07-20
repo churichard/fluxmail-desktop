@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/renderer/App";
 import type {
+  AppEvent,
   BootstrapState,
   FluxmailDesktopApi,
   MailThread,
@@ -114,6 +115,21 @@ afterEach(() => {
 });
 
 describe("App thread navigation", () => {
+  it("reloads bootstrap when the license changes", async () => {
+    const events = installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+    expect(window.fluxmail.bootstrap).toHaveBeenCalledOnce();
+
+    act(() => events.emit({ type: "license-changed" }));
+
+    await waitFor(() => expect(window.fluxmail.bootstrap).toHaveBeenCalledTimes(2));
+  });
+
   it("requests a background refresh when switching away from Inbox", async () => {
     installApi(
       [],
@@ -399,7 +415,7 @@ function installApi(
   threads: ThreadSummary[],
   getThread: (target: { accountId: string; threadId: string }) => Promise<MailThread>,
   options: { threadsAfterModify?: ThreadSummary[] } = {},
-): void {
+): { emit(event: AppEvent): void } {
   const state: BootstrapState = {
     engine: {
       version: "0.3.0",
@@ -423,10 +439,21 @@ function installApi(
     },
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },
-    preferences: { appearance: "light", dockBadge: true, blockRemoteImages: true },
-    license: { plan: "personal", maxMembers: 1, maxAccounts: 3 },
+    preferences: {
+      appearance: "light",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: true,
+    },
+    license: {
+      plan: "personal",
+      maxMembers: 1,
+      maxAccounts: 3,
+      canUsePrivateImageRelay: false,
+    },
   };
   let visibleThreads = threads;
+  let eventListener: ((event: AppEvent) => void) | undefined;
   Object.defineProperty(window, "fluxmail", {
     configurable: true,
     value: {
@@ -457,9 +484,15 @@ function installApi(
         confirmWindowClose: vi.fn(async () => undefined),
         cancelWindowClose: vi.fn(async () => undefined),
       },
-      onEvent: vi.fn(() => () => undefined),
+      onEvent: vi.fn((callback: (event: AppEvent) => void) => {
+        eventListener = callback;
+        return () => {
+          eventListener = undefined;
+        };
+      }),
     } as unknown as FluxmailDesktopApi,
   });
+  return { emit: (event) => eventListener?.(event) };
 }
 
 function thread(id: string, subject: string, draft: boolean): ThreadSummary {

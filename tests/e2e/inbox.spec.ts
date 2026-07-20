@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -7,6 +7,16 @@ import { _electron as electron, expect, test } from "@playwright/test";
 test("uses the desktop bridge for the inbox, secure reading, search, compose, and settings", async () => {
   test.setTimeout(60_000);
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-e2e-"));
+  writeFileSync(
+    path.join(dataDirectory, "desktop-preferences.json"),
+    JSON.stringify({
+      version: 4,
+      appearance: "system",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: false,
+    }),
+  );
   const electronApp = await electron.launch({
     args: [process.cwd()],
     env: {
@@ -861,7 +871,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(
       settings.getByText(
-        "We recommend keeping this on. Turning it off may expose your IP address to email senders.",
+        "If you're not using the private image relay, we recommend keeping this on. Turning it off may expose your IP address to email senders.",
       ),
     ).toBeVisible();
     const blockRemoteImagesCheckbox = settings.getByRole("checkbox", {
@@ -887,9 +897,20 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "aria-checked",
       initialAnalyticsState === "true" ? "false" : "true",
     );
-    await expect(settings.getByText("Personal", { exact: true })).toBeVisible();
+    const imageRelayCheckbox = settings.getByRole("checkbox", {
+      name: "Private image relay",
+    });
+    await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "false");
     await expect(
-      settings.getByText("Includes up to 3 connected mailboxes for one member."),
+      settings.getByText(
+        "Use Fluxmail's private hosted relay when you load remote images. This hides your IP address from the sender.",
+      ),
+    ).toBeVisible();
+    await imageRelayCheckbox.click();
+    await expect(imageRelayCheckbox).toHaveAttribute("aria-checked", "true");
+    await expect(settings.getByText("Pro", { exact: true })).toBeVisible();
+    await expect(
+      settings.getByText("Includes up to 5 connected mailboxes for one member."),
     ).toBeVisible();
     await expect(settings.getByRole("button", { name: "View plans" })).toBeVisible();
     await expect(settings.getByLabel("License key")).toBeHidden();

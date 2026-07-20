@@ -188,11 +188,21 @@ describe("desktop contracts", () => {
     expect(
       licenseActivationResultSchema.parse({
         outcome: "activated",
-        license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+        license: {
+          plan: "pro",
+          maxMembers: 1,
+          maxAccounts: 5,
+          canUsePrivateImageRelay: true,
+        },
       }),
     ).toEqual({
       outcome: "activated",
-      license: { plan: "pro", maxMembers: 1, maxAccounts: 5 },
+      license: {
+        plan: "pro",
+        maxMembers: 1,
+        maxAccounts: 5,
+        canUsePrivateImageRelay: true,
+      },
     });
   });
 

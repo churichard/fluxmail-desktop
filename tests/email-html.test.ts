@@ -11,6 +11,7 @@ import {
 } from "../src/renderer/components/EmailHtml";
 import { TrackingPixelIndicator } from "../src/renderer/components/TrackingPixelIndicator";
 import { convertEmailToDarkMode } from "../src/renderer/email/convert-to-dark-mode";
+import { collectRemoteImageUrls } from "../src/renderer/email/remote-images";
 import {
   blockTrackingPixels,
   TRACKING_RULESET_METADATA,
@@ -87,6 +88,84 @@ describe("email HTML security", () => {
     expect(document).toContain("data:image/png;base64,AAAA");
     expect(document).toContain('src="https://images.example/photo.jpg"');
     expect(document).toContain("img-src data: blob: https:;");
+  });
+
+  it("rewrites remote image sources through the hosted relay", () => {
+    const original = "https://images.example/photo(large).jpg?utm_source=newsletter&size=large";
+    const cleaned = "https://images.example/photo(large).jpg?size=large";
+    const proxied = "https://cdn.fluxmail.workers.dev/?url=image&exp=2000000000&sig=signature";
+    const document = buildEmailDocument(
+      `<picture><source srcset="${original} 2x"><img src="${original}" style="background-image:url('${original}')"></picture>`,
+      {},
+      true,
+      false,
+      { [cleaned]: proxied },
+    );
+
+    expect(document).not.toContain("images.example");
+    expect(document).toContain("cdn.fluxmail.workers.dev");
+    expect(document).toContain("img-src data: blob: https://cdn.fluxmail.workers.dev;");
+    expect(document).not.toContain("img-src data: blob: https:;");
+  });
+
+  it("strips tracking parameters from direct image loads", () => {
+    const document = buildEmailDocument(
+      `<picture>
+         <source srcset="https://images.example/hero.webp?utm_source=email&width=1200 2x">
+         <img
+           src="https://images.example/hero.jpg?mc_eid=recipient&height=600"
+           style="background-image:url('https://images.example/background.jpg?fbclid=click&size=large')"
+         >
+       </picture>`,
+      {},
+      true,
+    );
+
+    expect(document).not.toContain("utm_source");
+    expect(document).not.toContain("mc_eid");
+    expect(document).not.toContain("fbclid");
+    expect(document).toContain("hero.webp?width=1200");
+    expect(document).toContain("hero.jpg?height=600");
+    expect(document).toContain("background.jpg?size=large");
+  });
+
+  it("rewrites string-form image-set candidates through the hosted relay", () => {
+    const standard = "https://images.example/standard.png";
+    const prefixed = "https://images.example/prefixed.png";
+    const omitted = "https://images.example/omitted.png";
+    const standardProxy =
+      "https://cdn.fluxmail.workers.dev/?url=standard&exp=2000000000&sig=signature";
+    const prefixedProxy =
+      "https://cdn.fluxmail.workers.dev/?url=prefixed&exp=2000000000&sig=signature";
+    const html = `<div style='background-image: image-set("${standard}" 1x, "${omitted}" 2x)'></div>
+      <div style="background-image: -webkit-image-set('${prefixed}' 2x)"></div>`;
+
+    expect(collectRemoteImageUrls(html)).toEqual([standard, omitted, prefixed]);
+    const document = buildEmailDocument(html, {}, true, false, {
+      [standard]: standardProxy,
+      [prefixed]: prefixedProxy,
+    });
+
+    expect(document).toContain(standardProxy.replaceAll("&", "&amp;"));
+    expect(document).toContain(prefixedProxy.replaceAll("&", "&amp;"));
+    expect(document).toContain("&quot;data:,&quot; 2x");
+    expect(document).not.toContain("images.example");
+  });
+
+  it("blocks unsigned remote sources when the relay omits them", () => {
+    const document = buildEmailDocument(
+      '<img src="https://allowed.example/image.png"><img src="https://blocked.example/image.png">',
+      {},
+      true,
+      false,
+      {
+        "https://allowed.example/image.png":
+          "https://cdn.fluxmail.workers.dev/?url=allowed&exp=2000000000&sig=signature",
+      },
+    );
+
+    expect(document).toContain("cdn.fluxmail.workers.dev");
+    expect(document).not.toContain("blocked.example");
   });
 
   it("blocks known tracking services even when remote images are allowed", () => {
@@ -191,7 +270,7 @@ describe("email HTML security", () => {
 
     expect(document).toContain('src="https://notmailchimp.com/photo.jpg"');
     expect(document).toContain('src="https://facebook.com/logo.png"');
-    expect(document).toContain('src="https://images.example/photo.jpg?utm_source=newsletter"');
+    expect(document).toContain('src="https://images.example/photo.jpg"');
     expect(document).toContain('src="https://cdn.example.com/e/o/product-hero.jpg"');
     expect(document).toContain('src="https://track.example.com/campaign-hero.jpg"');
   });
@@ -537,6 +616,11 @@ describe("email HTML security", () => {
     ).toBe(true);
     expect(hasRemoteImages('<img src="https://t.yesware.com/t/message-1.gif">')).toBe(false);
     expect(hasRemoteImages('<img src="cid:photo">')).toBe(false);
+    expect(
+      hasRemoteImages(
+        `<div style="background-image:url('https://images.example/photo(large).jpg')"></div>`,
+      ),
+    ).toBe(true);
   });
 
   it("loads remote images automatically when image blocking is off", async () => {
@@ -551,14 +635,18 @@ describe("email HTML security", () => {
       body: { html: '<img src="https://images.example/photo.jpg">' },
       flags: { read: true, starred: false, draft: false },
     };
-    const rendered = render(createElement(EmailHtml, { message, blockRemoteImages: false }));
+    const rendered = render(
+      createElement(EmailHtml, { message, blockRemoteImages: false, imageRelay: false }),
+    );
 
     expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
     expect(screen.getByTitle("Email message").getAttribute("srcdoc")).toContain(
       'src="https://images.example/photo.jpg"',
     );
 
-    rendered.rerender(createElement(EmailHtml, { message, blockRemoteImages: true }));
+    rendered.rerender(
+      createElement(EmailHtml, { message, blockRemoteImages: true, imageRelay: false }),
+    );
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Load remote images" })).toBeTruthy(),

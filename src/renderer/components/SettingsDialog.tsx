@@ -23,6 +23,8 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
     kind: "success" | "error";
     message: string;
   }>();
+  const [imageRelayBusy, setImageRelayBusy] = useState(false);
+  const imageRelayAvailable = state.license.canUsePrivateImageRelay;
   const updateTelemetry = async (enabled: boolean) => {
     const previous = state.telemetry;
     setBusy(true);
@@ -205,6 +207,50 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
         .catch(() => undefined);
     } finally {
       setLicenseBusy(false);
+    }
+  };
+
+  const updateImageRelay = async (enabled: boolean) => {
+    if (imageRelayBusy || enabled === state.preferences.imageRelay) return;
+    const previous = state.preferences.imageRelay;
+    setImageRelayBusy(true);
+    onState((current) =>
+      current
+        ? {
+            ...current,
+            preferences: { ...current.preferences, imageRelay: enabled },
+          }
+        : current,
+    );
+    try {
+      const value = await window.fluxmail.preferences.setImageRelay(enabled);
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, imageRelay: value },
+            }
+          : current,
+      );
+      void window.fluxmail.analytics
+        .trackFeature({
+          feature: "settings",
+          action: enabled ? "enabled" : "disabled",
+          source: "settings",
+        })
+        .catch(() => undefined);
+    } catch (error) {
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, imageRelay: previous },
+            }
+          : current,
+      );
+      onError(error instanceof Error ? error.message : "Could not change the image relay setting.");
+    } finally {
+      setImageRelayBusy(false);
     }
   };
   return (
@@ -436,8 +482,8 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
               <span>
                 <strong>Block remote images by default</strong>
                 <small>
-                  We recommend keeping this on. Turning it off may expose your IP address to email
-                  senders.
+                  If you're not using the private image relay, we recommend keeping this on. Turning
+                  it off may expose your IP address to email senders.
                 </small>
               </span>
               <SelectionCheckbox
@@ -446,6 +492,28 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                 className="settings-checkbox"
                 disabled={blockRemoteImagesBusy}
                 onClick={() => void updateBlockRemoteImages(!state.preferences.blockRemoteImages)}
+              />
+            </div>
+            <div
+              className={`toggle-row${imageRelayAvailable ? "" : " setting-unavailable"}`}
+              aria-disabled={!imageRelayAvailable}
+            >
+              <span>
+                <strong>Private image relay</strong>
+                <small>
+                  {imageRelayAvailable
+                    ? "Use Fluxmail's private hosted relay when you load remote images. This hides your IP address from the sender."
+                    : state.license.warning
+                      ? "Renew your Fluxmail license to use the private image relay."
+                      : "Private image relay is available on Pro, Team, and Enterprise."}
+                </small>
+              </span>
+              <SelectionCheckbox
+                state={state.preferences.imageRelay ? "checked" : "unchecked"}
+                label="Private image relay"
+                className="settings-checkbox"
+                disabled={imageRelayBusy || !imageRelayAvailable}
+                onClick={() => void updateImageRelay(!state.preferences.imageRelay)}
               />
             </div>
             <div className="toggle-row">

@@ -1,32 +1,68 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Image as ImageIcon } from "lucide-react";
-import type { MailMessage } from "../../shared/contracts";
+import { MAX_IMAGE_RELAY_URLS_PER_REQUEST, type MailMessage } from "../../shared/contracts";
 import { parseExternalUrl } from "../../shared/external-url";
 import { convertEmailToDarkMode, removeSenderDarkModeCSS } from "../email/convert-to-dark-mode";
+import { collectRemoteImageUrls, rewriteRemoteImageUrls } from "../email/remote-images";
 import { blockTrackingPixels, type TrackingPixelDetail } from "../email/tracking-pixels";
+
+const EMPTY_IMAGE_URLS: Record<string, string> = {};
 
 export function EmailHtml({
   message,
   blockRemoteImages = true,
+  imageRelay = true,
+  imageRelayAvailable = true,
   onError,
   onTrackingPixelsChange,
 }: {
   message: MailMessage;
   blockRemoteImages?: boolean;
+  imageRelay?: boolean;
+  imageRelayAvailable?: boolean;
   onError?(message: string): void;
   onTrackingPixelsChange?(trackingPixels: TrackingPixelDetail[]): void;
 }) {
-  const [loadImages, setLoadImages] = useState(!blockRemoteImages);
-  const [cidUrls, setCidUrls] = useState<Record<string, string>>({});
+  const [remoteImages, setRemoteImages] = useState<{
+    policyKey: string;
+    status: "blocked" | "loading" | "loaded";
+    relayUrls?: Record<string, string>;
+  }>(() => ({
+    policyKey: remoteImagePolicyKey(message.id, blockRemoteImages, imageRelay, imageRelayAvailable),
+    status: !blockRemoteImages && !imageRelay ? "loaded" : "blocked",
+  }));
+  const [inlineImages, setInlineImages] = useState<{
+    messageId: string;
+    urls: Record<string, string>;
+  }>({ messageId: message.id, urls: {} });
   const [height, setHeight] = useState(120);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
   const clickCleanupRef = useRef<(() => void) | undefined>(undefined);
   const frameResizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
   const darkMode = useResolvedDarkTheme();
-
-  useEffect(() => setLoadImages(!blockRemoteImages), [blockRemoteImages]);
+  const rawHtml = message.body?.html || textToHtml(message.body?.text || "");
+  const policyKey = remoteImagePolicyKey(
+    message.id,
+    blockRemoteImages,
+    imageRelay,
+    imageRelayAvailable,
+  );
+  const currentPolicyKeyRef = useRef(policyKey);
+  currentPolicyKeyRef.current = policyKey;
+  const currentRemoteImages =
+    remoteImages.policyKey === policyKey
+      ? remoteImages
+      : {
+          policyKey,
+          status: !blockRemoteImages && !imageRelay ? ("loaded" as const) : ("blocked" as const),
+        };
+  const loadImages = currentRemoteImages.status === "loaded";
+  const loadingImages = currentRemoteImages.status === "loading";
+  const relayUnavailable = imageRelay && !imageRelayAvailable;
+  const relayUrls = currentRemoteImages.relayUrls;
+  const cidUrls = inlineImages.messageId === message.id ? inlineImages.urls : EMPTY_IMAGE_URLS;
 
   useEffect(
     () => () => {
@@ -39,7 +75,6 @@ export function EmailHtml({
 
   useEffect(() => {
     const inline = (message.attachments ?? []).filter((attachment) => attachment.contentId);
-    setCidUrls({});
     if (!inline.length) return;
     let canceled = false;
     void Promise.allSettled(
@@ -54,26 +89,69 @@ export function EmailHtml({
       }),
     ).then((results) => {
       if (!canceled)
-        setCidUrls(
-          Object.fromEntries(
+        setInlineImages({
+          messageId: message.id,
+          urls: Object.fromEntries(
             results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
           ),
-        );
+        });
     });
     return () => {
       canceled = true;
     };
   }, [message.accountId, message.attachments, message.id]);
 
+  const loadRemoteImages = useCallback(async () => {
+    const requestPolicyKey = policyKey;
+    if (!imageRelay) {
+      setRemoteImages({ policyKey: requestPolicyKey, status: "loaded" });
+      return;
+    }
+    if (!imageRelayAvailable) {
+      setRemoteImages({ policyKey: requestPolicyKey, status: "blocked" });
+      return;
+    }
+    const urls = collectRemoteImageUrls(rawHtml);
+    if (!urls.length) {
+      setRemoteImages({ policyKey: requestPolicyKey, status: "loaded", relayUrls: {} });
+      return;
+    }
+    setRemoteImages({ policyKey: requestPolicyKey, status: "loading" });
+    try {
+      const proxied = await proxyRemoteImageUrls(urls);
+      if (currentPolicyKeyRef.current !== requestPolicyKey) return;
+      setRemoteImages({ policyKey: requestPolicyKey, status: "loaded", relayUrls: proxied });
+    } catch (error) {
+      if (currentPolicyKeyRef.current !== requestPolicyKey) return;
+      setRemoteImages({ policyKey: requestPolicyKey, status: "blocked" });
+      onError?.(
+        error instanceof Error
+          ? error.message
+          : "Fluxmail could not load images through the image relay.",
+      );
+    }
+  }, [imageRelay, imageRelayAvailable, onError, policyKey, rawHtml]);
+
+  useEffect(() => {
+    if (blockRemoteImages) {
+      setRemoteImages((current) =>
+        current.policyKey === policyKey ? current : { policyKey, status: "blocked" },
+      );
+      return;
+    }
+    if (!imageRelay) {
+      setRemoteImages({ policyKey, status: "loaded" });
+      return;
+    }
+    if (!imageRelayAvailable) {
+      setRemoteImages({ policyKey, status: "blocked" });
+      return;
+    }
+    void loadRemoteImages();
+  }, [blockRemoteImages, imageRelay, imageRelayAvailable, loadRemoteImages, policyKey]);
   const rendered = useMemo(
-    () =>
-      buildEmailContent(
-        message.body?.html || textToHtml(message.body?.text || ""),
-        cidUrls,
-        loadImages,
-        darkMode,
-      ),
-    [cidUrls, darkMode, loadImages, message.body?.html, message.body?.text],
+    () => buildEmailContent(rawHtml, cidUrls, loadImages, darkMode, relayUrls),
+    [cidUrls, darkMode, loadImages, rawHtml, relayUrls],
   );
 
   useEffect(
@@ -83,10 +161,18 @@ export function EmailHtml({
 
   return (
     <div className="email-html-wrap">
-      {!loadImages && hasRemoteImages(message.body?.html || "") ? (
-        <button className="load-images" onClick={() => setLoadImages(true)}>
+      {!loadImages && hasRemoteImages(rawHtml) ? (
+        <button
+          className="load-images"
+          disabled={loadingImages || relayUnavailable}
+          onClick={loadRemoteImages}
+        >
           <ImageIcon size={14} />
-          Load remote images
+          {relayUnavailable
+            ? "Image relay unavailable"
+            : loadingImages
+              ? "Loading images..."
+              : "Load remote images"}
         </button>
       ) : null}
       <iframe
@@ -167,8 +253,9 @@ export function buildEmailDocument(
   cidUrls: Record<string, string>,
   loadImages: boolean,
   darkMode = false,
+  relayUrls?: Record<string, string>,
 ): string {
-  return buildEmailContent(rawHtml, cidUrls, loadImages, darkMode).source;
+  return buildEmailContent(rawHtml, cidUrls, loadImages, darkMode, relayUrls).source;
 }
 
 function buildEmailContent(
@@ -176,6 +263,7 @@ function buildEmailContent(
   cidUrls: Record<string, string>,
   loadImages: boolean,
   darkMode = false,
+  relayUrls?: Record<string, string>,
 ): { source: string; trackingPixels: TrackingPixelDetail[] } {
   const clean = sanitizeEmailHtml(rawHtml);
   const themedHtml = darkMode
@@ -204,11 +292,19 @@ function buildEmailContent(
       image.removeAttribute("srcset");
     }
   }
+  if (loadImages) rewriteRemoteImageUrls(document, relayUrls);
   for (const link of document.querySelectorAll("a")) {
     const href = link.getAttribute("href") || "";
     if (!parseExternalUrl(href)) link.removeAttribute("href");
   }
-  const imageSources = loadImages ? "data: blob: https:" : "data: blob:";
+  const relayOrigins = relayUrls
+    ? [...new Set(Object.values(relayUrls).map((value) => new URL(value).origin))].join(" ")
+    : "";
+  const imageSources = loadImages
+    ? relayUrls
+      ? `data: blob: ${relayOrigins}`.trim()
+      : "data: blob: https:"
+    : "data: blob:";
   const csp = `default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; img-src ${imageSources}; font-src data:; connect-src 'none'`;
   const palette = darkMode
     ? {
@@ -294,6 +390,29 @@ function textToHtml(value: string): string {
     (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character]!,
   );
   return `<div style="white-space:pre-wrap">${escaped}</div>`;
+}
+
+function remoteImagePolicyKey(
+  messageId: string,
+  blockRemoteImages: boolean,
+  imageRelay: boolean,
+  imageRelayAvailable: boolean,
+): string {
+  const relayPolicy = imageRelay ? (imageRelayAvailable ? "relay" : "relay-unavailable") : "direct";
+  return `${messageId}:${blockRemoteImages ? "blocked" : "automatic"}:${relayPolicy}`;
+}
+
+async function proxyRemoteImageUrls(urls: string[]): Promise<Record<string, string>> {
+  const proxied: Record<string, string> = {};
+  for (let offset = 0; offset < urls.length; offset += MAX_IMAGE_RELAY_URLS_PER_REQUEST) {
+    Object.assign(
+      proxied,
+      await window.fluxmail.images.proxy(
+        urls.slice(offset, offset + MAX_IMAGE_RELAY_URLS_PER_REQUEST),
+      ),
+    );
+  }
+  return proxied;
 }
 
 export function hasRemoteImages(value: string): boolean {

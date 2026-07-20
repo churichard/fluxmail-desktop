@@ -15,6 +15,8 @@ import {
   draftDeleteInputSchema,
   draftResultSchema,
   featureEventSchema,
+  imageRelayInputSchema,
+  imageRelayResultSchema,
   IPC,
   licenseActivationResultSchema,
   licenseKeySchema,
@@ -86,6 +88,11 @@ const api: FluxmailDesktopApi = {
       invoke(IPC.preferencesDockBadgeSet, enabled, z.boolean(), z.boolean()),
     setBlockRemoteImages: (enabled) =>
       invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
+    setImageRelay: (enabled) =>
+      invoke(IPC.preferencesImageRelaySet, enabled, z.boolean(), z.boolean()),
+  },
+  images: {
+    proxy: (urls) => invoke(IPC.imagesProxy, urls, imageRelayInputSchema, imageRelayResultSchema),
   },
   license: {
     activate: (key) =>

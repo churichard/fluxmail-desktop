@@ -257,6 +257,7 @@ export const licenseStatusSchema = z.object({
   plan: z.string(),
   maxMembers: z.number().int().positive(),
   maxAccounts: z.number().int().positive(),
+  canUsePrivateImageRelay: z.boolean(),
   warning: z.string().optional(),
 });
 
@@ -265,6 +266,21 @@ export const licenseActivationResultSchema = z.object({
   license: licenseStatusSchema,
 });
 export type LicenseActivationResult = z.infer<typeof licenseActivationResultSchema>;
+
+export const MAX_IMAGE_RELAY_URLS_PER_REQUEST = 200;
+export const imageRelayInputSchema = z
+  .array(
+    z
+      .string()
+      .url()
+      .refine((value) => {
+        const protocol = new URL(value).protocol;
+        return protocol === "http:" || protocol === "https:";
+      }),
+  )
+  .min(1)
+  .max(MAX_IMAGE_RELAY_URLS_PER_REQUEST);
+export const imageRelayResultSchema = z.record(z.string().url());
 
 export const bootstrapSchema = z.object({
   engine: z.object({
@@ -289,6 +305,7 @@ export const bootstrapSchema = z.object({
     appearance: appearancePreferenceSchema,
     dockBadge: z.boolean(),
     blockRemoteImages: z.boolean(),
+    imageRelay: z.boolean(),
   }),
   license: licenseStatusSchema,
 });
@@ -348,6 +365,7 @@ export const appEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sync-status"), state: syncStateSchema }),
   z.object({ type: z.literal("cache-changed") }),
   z.object({ type: z.literal("accounts-changed") }),
+  z.object({ type: z.literal("license-changed") }),
   z.object({ type: z.literal("new-mail"), count: z.number().int().positive() }),
   z.object({ type: z.literal("window-close-requested") }),
 ]);
@@ -413,6 +431,10 @@ export interface FluxmailDesktopApi {
     setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
     setDockBadge(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
+    setImageRelay(enabled: boolean): Promise<boolean>;
+  };
+  images: {
+    proxy(urls: z.infer<typeof imageRelayInputSchema>): Promise<Record<string, string>>;
   };
   license: {
     activate(key: string): Promise<LicenseActivationResult>;
@@ -453,6 +475,8 @@ export const IPC = {
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   licenseActivate: "fluxmail:license:activate",
+  preferencesImageRelaySet: "fluxmail:preferences:image-relay:set",
+  imagesProxy: "fluxmail:images:proxy",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",
   systemWindowCloseCancel: "fluxmail:system:window-close-cancel",

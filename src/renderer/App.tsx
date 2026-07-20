@@ -237,7 +237,8 @@ export function App() {
     const unsubscribe = window.fluxmail.onEvent((event: AppEvent) => {
       if (event.type === "sync-status")
         setBootstrap((current) => (current ? { ...current, sync: event.state } : current));
-      if (event.type === "accounts-changed") void loadBootstrap();
+      if (event.type === "accounts-changed" || event.type === "license-changed")
+        void loadBootstrap();
       if (event.type === "window-close-requested") {
         const composeDialog = composeDialogRef.current;
         if (!composeDialog) {
@@ -604,6 +605,7 @@ export function App() {
       />
     );
   }
+  const imageRelayAvailable = bootstrap.license.canUsePrivateImageRelay;
 
   return (
     <div
@@ -704,6 +706,8 @@ export function App() {
           selectedThread && permanentDeleteAccountIds.has(selectedThread.accountId),
         )}
         blockRemoteImages={bootstrap.preferences.blockRemoteImages}
+        imageRelay={bootstrap.preferences.imageRelay}
+        imageRelayAvailable={imageRelayAvailable}
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
@@ -718,6 +722,8 @@ export function App() {
           seed={composeSeed}
           accounts={bootstrap.accounts}
           blockRemoteImages={bootstrap.preferences.blockRemoteImages}
+          imageRelay={bootstrap.preferences.imageRelay}
+          imageRelayAvailable={imageRelayAvailable}
           onClose={() => setComposeSeed(null)}
           onSent={() => {
             setComposeSeed(null);

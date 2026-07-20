@@ -37,6 +37,8 @@ import {
   draftDeleteInputSchema,
   draftResultSchema,
   featureEventSchema,
+  imageRelayInputSchema,
+  imageRelayResultSchema,
   IPC,
   licenseActivationResultSchema,
   licenseKeySchema,
@@ -61,6 +63,7 @@ import { MailCache } from "./cache";
 import { FluxmailRuntime } from "./fluxmail-runtime";
 import { FakeFluxmailRuntime } from "./fake-runtime";
 import { isAllowedFrameUrl } from "./ipc-security";
+import { HostedImageRelay, HostedImageRelayAccess } from "./image-relay";
 import { createLaunchTimer } from "./performance";
 import { DesktopPreferences } from "./preferences";
 
@@ -86,6 +89,8 @@ let runtime: FluxmailRuntime | FakeFluxmailRuntime | null = null;
 let analytics: DesktopAnalytics | null = null;
 let cache: MailCache | null = null;
 let preferences: DesktopPreferences | null = null;
+let imageRelay: HostedImageRelay | null = null;
+let imageRelayAccess: HostedImageRelayAccess | null = null;
 let pollTimer: NodeJS.Timeout | undefined;
 let syncState: SyncState = { status: "idle" };
 let activeMailboxInput: ThreadListInput = { view: "inbox", pageSize: 100 };
@@ -201,9 +206,10 @@ async function createServices(): Promise<void> {
     sendEvent({ type: "cache-changed" });
     updateDockBadge();
   };
+  const onLicenseChanged = () => sendEvent({ type: "license-changed" });
   runtime =
     !app.isPackaged && process.env.FLUXMAIL_DESKTOP_FAKE_MAIL === "1"
-      ? new FakeFluxmailRuntime({ analytics, onCacheChanged })
+      ? new FakeFluxmailRuntime({ analytics, onCacheChanged, onLicenseChanged })
       : new FluxmailRuntime({
           cache,
           analytics,
@@ -211,6 +217,7 @@ async function createServices(): Promise<void> {
           resolveAttachment,
           onNewMessages: showNewMail,
           onCacheChanged,
+          onLicenseChanged,
         });
   await runtime.initialize();
   analytics.captureStarted({
@@ -349,12 +356,14 @@ function registerAppProtocol(): void {
 function registerIpc(): void {
   handle(IPC.bootstrap, z.undefined(), bootstrapSchema, async () => {
     if (startupError) throw startupError;
+    const bootstrap = await requireRuntime().bootstrap(syncState);
     return {
-      ...(await requireRuntime().bootstrap(syncState)),
+      ...bootstrap,
       preferences: {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),
         blockRemoteImages: requirePreferences().blockRemoteImages(),
+        imageRelay: requirePreferences().imageRelay(),
       },
     };
   });
@@ -473,6 +482,12 @@ function registerIpc(): void {
   );
   handle(IPC.licenseActivate, licenseKeySchema, licenseActivationResultSchema, (key) =>
     requireRuntime().activateLicense(key),
+  );
+  handle(IPC.preferencesImageRelaySet, z.boolean(), z.boolean(), (enabled) =>
+    requirePreferences().setImageRelay(enabled),
+  );
+  handle(IPC.imagesProxy, imageRelayInputSchema, imageRelayResultSchema, (urls) =>
+    requireImageRelay().proxy(urls),
   );
   handle(IPC.analyticsFeature, featureEventSchema, z.void(), async (event) =>
     requireAnalytics().captureFeature(event),
@@ -882,4 +897,17 @@ function requireAnalytics(): DesktopAnalytics {
 function requirePreferences(): DesktopPreferences {
   if (!preferences) throw new Error("Fluxmail preferences are not ready.");
   return preferences;
+}
+
+function requireImageRelay(): HostedImageRelay {
+  imageRelayAccess ??= new HostedImageRelayAccess(
+    (forceRefresh) => requireRuntime().imageRelayLicenseLease(forceRefresh),
+    (input, init) => net.fetch(input, init),
+    () => requireRuntime().imageRelayAccessDenied(),
+  );
+  imageRelay ??= new HostedImageRelay(
+    (forceRefresh) => imageRelayAccess!.token(forceRefresh),
+    (input, init) => net.fetch(input, init),
+  );
+  return imageRelay;
 }

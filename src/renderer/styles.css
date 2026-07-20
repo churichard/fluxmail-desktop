@@ -2193,6 +2193,14 @@ textarea:focus-visible,
   background: color-mix(in srgb, var(--panel) 54%, var(--paper));
 }
 
+.toggle-row.setting-unavailable {
+  opacity: 0.58;
+}
+
+.toggle-row.setting-unavailable .settings-checkbox:disabled {
+  opacity: 1;
+}
+
 .toggle-row > span {
   display: flex;
   flex: 1;

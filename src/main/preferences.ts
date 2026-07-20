@@ -20,12 +20,22 @@ const preferencesFileSchema = z.discriminatedUnion("version", [
       blockRemoteImages: z.boolean(),
     })
     .strict(),
+  z
+    .object({
+      version: z.literal(4),
+      appearance: appearancePreferenceSchema,
+      dockBadge: z.boolean(),
+      blockRemoteImages: z.boolean(),
+      imageRelay: z.boolean(),
+    })
+    .strict(),
 ]);
 
 export class DesktopPreferences {
   private appearanceValue: AppearancePreference = "system";
   private dockBadgeValue = true;
   private blockRemoteImagesValue = true;
+  private imageRelayValue = true;
   private readonly filePath: string;
   private mutationQueue: Promise<void> = Promise.resolve();
 
@@ -38,7 +48,9 @@ export class DesktopPreferences {
       const stored = preferencesFileSchema.parse(JSON.parse(await readFile(this.filePath, "utf8")));
       this.appearanceValue = stored.appearance;
       this.dockBadgeValue = stored.version === 1 ? true : stored.dockBadge;
-      this.blockRemoteImagesValue = stored.version === 3 ? stored.blockRemoteImages : true;
+      this.blockRemoteImagesValue =
+        stored.version === 3 || stored.version === 4 ? stored.blockRemoteImages : true;
+      this.imageRelayValue = stored.version === 4 ? stored.imageRelay : true;
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== "ENOENT" &&
@@ -50,6 +62,7 @@ export class DesktopPreferences {
       this.appearanceValue = "system";
       this.dockBadgeValue = true;
       this.blockRemoteImagesValue = true;
+      this.imageRelayValue = true;
     }
     return this.appearanceValue;
   }
@@ -66,10 +79,19 @@ export class DesktopPreferences {
     return this.blockRemoteImagesValue;
   }
 
+  imageRelay(): boolean {
+    return this.imageRelayValue;
+  }
+
   async setAppearance(appearance: AppearancePreference): Promise<AppearancePreference> {
     const value = appearancePreferenceSchema.parse(appearance);
     return this.enqueueMutation(async () => {
-      await this.save(value, this.dockBadgeValue, this.blockRemoteImagesValue);
+      await this.save(
+        value,
+        this.dockBadgeValue,
+        this.blockRemoteImagesValue,
+        this.imageRelayValue,
+      );
       this.appearanceValue = value;
       return value;
     });
@@ -78,7 +100,12 @@ export class DesktopPreferences {
   async setDockBadge(enabled: boolean): Promise<boolean> {
     const value = z.boolean().parse(enabled);
     return this.enqueueMutation(async () => {
-      await this.save(this.appearanceValue, value, this.blockRemoteImagesValue);
+      await this.save(
+        this.appearanceValue,
+        value,
+        this.blockRemoteImagesValue,
+        this.imageRelayValue,
+      );
       this.dockBadgeValue = value;
       return value;
     });
@@ -87,8 +114,22 @@ export class DesktopPreferences {
   async setBlockRemoteImages(enabled: boolean): Promise<boolean> {
     const value = z.boolean().parse(enabled);
     return this.enqueueMutation(async () => {
-      await this.save(this.appearanceValue, this.dockBadgeValue, value);
+      await this.save(this.appearanceValue, this.dockBadgeValue, value, this.imageRelayValue);
       this.blockRemoteImagesValue = value;
+      return value;
+    });
+  }
+
+  async setImageRelay(enabled: boolean): Promise<boolean> {
+    const value = z.boolean().parse(enabled);
+    return this.enqueueMutation(async () => {
+      await this.save(
+        this.appearanceValue,
+        this.dockBadgeValue,
+        this.blockRemoteImagesValue,
+        value,
+      );
+      this.imageRelayValue = value;
       return value;
     });
   }
@@ -106,6 +147,7 @@ export class DesktopPreferences {
     appearance: AppearancePreference,
     dockBadge: boolean,
     blockRemoteImages: boolean,
+    imageRelay: boolean,
   ): Promise<void> {
     const directory = path.dirname(this.filePath);
     const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
@@ -113,10 +155,11 @@ export class DesktopPreferences {
     await writeFile(
       temporaryPath,
       `${JSON.stringify({
-        version: 3,
+        version: 4,
         appearance,
         dockBadge,
         blockRemoteImages,
+        imageRelay,
       })}\n`,
       { encoding: "utf8", mode: 0o600 },
     );

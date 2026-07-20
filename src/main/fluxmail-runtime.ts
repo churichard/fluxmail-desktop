@@ -40,7 +40,10 @@ interface RuntimeOptions {
   resolveAttachment(attachment: ComposeAttachment): Promise<AttachmentInput>;
   onNewMessages(messages: Message[], account: AccountInfo): void;
   onCacheChanged(): void;
+  onLicenseChanged(): void;
 }
+
+const PRIVATE_IMAGE_RELAY_PLANS = new Set(["pro", "team", "enterprise"]);
 
 export class FluxmailRuntime {
   private context!: AppContext;
@@ -49,6 +52,8 @@ export class FluxmailRuntime {
   private cacheGeneration = 0;
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
+  private imageRelayLicenseRefresh?: Promise<void>;
+  private imageRelayAccessDeniedByServer = false;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
 
@@ -82,6 +87,33 @@ export class FluxmailRuntime {
       .map((account) =>
         toAccountInfo(account, this.accountCanPermanentlyDelete(account.id, account.provider)),
       );
+  }
+
+  async imageRelayLicenseLease(forceRefresh = false): Promise<string> {
+    let lease = this.fluxmail.readLeaseRow(this.context.db);
+    let entitlements = this.fluxmail.getEntitlements(this.context.db);
+    if (forceRefresh || !lease || entitlements.inGrace) {
+      await this.context.licenseController.refreshNow();
+      lease = this.fluxmail.readLeaseRow(this.context.db);
+      entitlements = this.fluxmail.getEntitlements(this.context.db);
+    }
+    if (
+      !lease ||
+      !entitlements.licensed ||
+      entitlements.inGrace ||
+      !PRIVATE_IMAGE_RELAY_PLANS.has(entitlements.plan)
+    ) {
+      this.options.onLicenseChanged();
+      throw new Error("Private image relay is available on Pro, Team, and Enterprise.");
+    }
+    this.fluxmail.verifyLease(lease.token, this.fluxmail.licensePublicKeys());
+    return lease.token;
+  }
+
+  imageRelayAccessDenied(): void {
+    if (this.imageRelayAccessDeniedByServer) return;
+    this.imageRelayAccessDeniedByServer = true;
+    this.options.onLicenseChanged();
   }
 
   private accountCanPermanentlyDelete(
@@ -194,12 +226,18 @@ export class FluxmailRuntime {
   }
 
   license(): BootstrapState["license"] {
+    this.refreshImageRelayLicenseInBackground();
     const entitlements = this.fluxmail.getEntitlements(this.context.db);
     const state = this.fluxmail.checkLicenseState(this.context.db);
     return {
       plan: entitlements.plan,
       maxMembers: entitlements.maxMembers,
       maxAccounts: entitlements.maxAccounts,
+      canUsePrivateImageRelay:
+        !this.imageRelayAccessDeniedByServer &&
+        entitlements.licensed &&
+        !entitlements.inGrace &&
+        PRIVATE_IMAGE_RELAY_PLANS.has(entitlements.plan),
       ...(state.warning ? { warning: state.warning } : {}),
     };
   }
@@ -224,6 +262,7 @@ export class FluxmailRuntime {
     if (result.outcome !== "refreshed" && result.outcome !== "outage") {
       throw new Error(licenseActivationError(result.outcome));
     }
+    if (result.outcome === "refreshed") this.imageRelayAccessDeniedByServer = false;
 
     this.fluxmail.setStoredConfig(this.context.config.dataDir, "FLUXMAIL_LICENSE_KEY", licenseKey);
     this.context.licenseController.wake();
@@ -231,6 +270,27 @@ export class FluxmailRuntime {
       outcome: result.outcome === "refreshed" ? "activated" : "saved_for_retry",
       license: this.license(),
     };
+  }
+
+  private refreshImageRelayLicenseInBackground(): void {
+    if (this.imageRelayLicenseRefresh) return;
+    const entitlements = this.fluxmail.getEntitlements(this.context.db);
+    if (entitlements.licensed && !entitlements.inGrace && !this.imageRelayAccessDeniedByServer)
+      return;
+    if (!this.context.licenseController.configuredKey()) return;
+
+    this.imageRelayLicenseRefresh = this.context.licenseController
+      .refreshNow()
+      .then((result) => {
+        if (result?.outcome === "refreshed") {
+          this.imageRelayAccessDeniedByServer = false;
+          this.options.onLicenseChanged();
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.imageRelayLicenseRefresh = undefined;
+      });
   }
 
   async connectGmail(accountId?: string): Promise<AccountInfo> {

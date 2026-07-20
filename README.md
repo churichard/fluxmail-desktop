@@ -26,6 +26,8 @@ If the repository is already cloned, run `git submodule update --init --recursiv
 
 Fluxmail uses the OAuth app bundled with the pinned Fluxmail package by default. To use a different Google OAuth desktop client, copy `.env.example` to `.env` and set `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID` and `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`. Vite injects these overrides into the Electron main bundle only. They are not available to the renderer. The bundled client uses `gmail.modify`, while a custom client requests full Gmail access. Fluxmail shows permanent deletion only after Google grants that scope. Reconnect accounts that were added before the custom client was configured.
 
+Private image relay is available with an active Pro, Team, or Enterprise license. It works with every supported mailbox provider and does not depend on the Google OAuth client. The desktop app exchanges its cached signed license lease for a relay token that lasts up to 24 hours. If the license is unavailable, expired, or in its grace period, Fluxmail leaves remote images blocked instead of loading them directly.
+
 Start the app with:
 
 ```sh
@@ -79,7 +81,7 @@ Releases use the OAuth app bundled with the Fluxmail package. These GitHub secre
 - `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID`
 - `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`
 
-Set both Google secrets or leave both unset.
+Set the Google client ID and client secret together, or leave both unset.
 
 Code signing is optional. A persistent self-signed identity requires these three GitHub secrets:
 

@@ -101,18 +101,30 @@ const seedMessages: Message[] = [
 ];
 
 export class FakeFluxmailRuntime {
+  async imageRelayLicenseLease(_forceRefresh = false): Promise<string> {
+    return "fake-image-relay-license";
+  }
+
+  imageRelayAccessDenied(): void {
+    if (!this.licenseValue.canUsePrivateImageRelay) return;
+    this.licenseValue = { ...this.licenseValue, canUsePrivateImageRelay: false };
+    this.options.onLicenseChanged();
+  }
+
   private connected = true;
   private messages = structuredClone(seedMessages);
   private licenseValue: BootstrapState["license"] = {
-    plan: "personal",
+    plan: "pro",
     maxMembers: 1,
-    maxAccounts: 3,
+    maxAccounts: 5,
+    canUsePrivateImageRelay: true,
   };
 
   constructor(
     private readonly options: {
       analytics: DesktopAnalytics;
       onCacheChanged(): void;
+      onLicenseChanged(): void;
     },
   ) {}
 
@@ -168,7 +180,12 @@ export class FakeFluxmailRuntime {
     if (!LICENSE_KEY_PATTERN.test(rawKey.trim())) {
       throw new Error("That license key does not look right. Check it and try again.");
     }
-    this.licenseValue = { plan: "pro", maxMembers: 1, maxAccounts: 5 };
+    this.licenseValue = {
+      plan: "pro",
+      maxMembers: 1,
+      maxAccounts: 5,
+      canUsePrivateImageRelay: true,
+    };
     return { outcome: "activated", license: this.licenseValue };
   }
 
