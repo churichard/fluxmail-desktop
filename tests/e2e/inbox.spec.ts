@@ -698,6 +698,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       root.innerHTML = "<p>Welcome to Fluxmail</p>";
     });
 
+    const messageActions = page.locator(".reply-actions");
+    await expect(
+      messageActions.getByRole("button", { name: "Reply", exact: true }),
+    ).toHaveAttribute("aria-keyshortcuts", "R");
+    await expect(messageActions.getByRole("button", { name: "Reply all" })).toHaveCount(0);
+    await expect(messageActions.getByRole("button", { name: "Forward" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "F",
+    );
     await page.getByRole("button", { name: "Reply", exact: true }).click();
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
@@ -710,6 +719,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     ).toBeVisible();
     await page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }).click();
     await expect(page.locator(".quick-reply .quoted-reply-content")).toBeVisible();
+    await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
+
+    await page.keyboard.press("a");
+    await expect(page.locator(".quick-reply")).toHaveCount(0);
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
+
+    await page.keyboard.press("f");
+    await expect(page.locator(".quick-reply").getByRole("textbox", { name: "To" })).toBeVisible();
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
     await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();

@@ -54,29 +54,40 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   ),
 }));
 
-vi.mock("../src/renderer/components/ReadingPane", () => ({
-  ReadingPane: ({
-    thread,
-    onModify,
-    onQuickReplyDirtyChange,
-  }: {
-    thread?: ThreadSummary;
-    onModify(action: { type: "star" | "unstar" }): Promise<void>;
-    onQuickReplyDirtyChange(dirty: boolean): void;
-  }) => (
-    <section>
-      {thread ? `Reading ${thread.subject}` : "No conversation"}
-      {thread ? (
-        <>
-          <button onClick={() => onQuickReplyDirtyChange(true)}>Start quick reply</button>
-          <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
-            {thread.starred ? "Unstar conversation" : "Star conversation"}
-          </button>
-        </>
-      ) : null}
-    </section>
-  ),
-}));
+vi.mock("../src/renderer/components/ReadingPane", async () => {
+  const React = await import("react");
+  return {
+    ReadingPane: React.forwardRef(function MockReadingPane(
+      {
+        thread,
+        onModify,
+        onQuickReplyDirtyChange,
+      }: {
+        thread?: ThreadSummary;
+        onModify(action: { type: "star" | "unstar" }): Promise<void>;
+        onQuickReplyDirtyChange(dirty: boolean): void;
+      },
+      ref,
+    ) {
+      const [composerMode, setComposerMode] = React.useState<string>();
+      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode }));
+      return (
+        <section>
+          {thread ? `Reading ${thread.subject}` : "No conversation"}
+          {composerMode ? <span>Inline {composerMode}</span> : null}
+          {thread ? (
+            <>
+              <button onClick={() => onQuickReplyDirtyChange(true)}>Start quick reply</button>
+              <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
+                {thread.starred ? "Unstar conversation" : "Star conversation"}
+              </button>
+            </>
+          ) : null}
+        </section>
+      );
+    }),
+  };
+});
 
 vi.mock("../src/renderer/components/ComposeDialog", async () => {
   const React = await import("react");
@@ -195,7 +206,7 @@ describe("App thread navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start quick reply" }));
     fireEvent.click(screen.getByRole("button", { name: second.subject }));
 
-    expect(confirmDiscard).toHaveBeenCalledWith("Discard this unsent reply?");
+    expect(confirmDiscard).toHaveBeenCalledWith("Discard this unsent message?");
     expect(screen.getByText(`Reading ${first.subject}`)).toBeTruthy();
 
     confirmDiscard.mockReturnValue(true);
@@ -353,11 +364,31 @@ describe("App thread navigation", () => {
 
     const conversation = screen.getByRole("button", { name: current.subject });
     fireEvent.click(conversation);
-    fireEvent.keyDown(conversation, { key: "r" });
+    fireEvent.keyDown(conversation, { key: "c" });
     const composeAction = await screen.findByRole("button", { name: "Compose action" });
     fireEvent.keyDown(composeAction, { key: "#" });
 
     expect(window.fluxmail.mail.modify).not.toHaveBeenCalled();
+  });
+
+  it("opens each message action in the inline composer from its shortcut", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    fireEvent.keyDown(window, { key: "r" });
+    expect(screen.getByText("Inline reply")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "a" });
+    expect(screen.getByText("Inline replyAll")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "f" });
+    expect(screen.getByText("Inline forward")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
   });
 
   it("runs mailbox shortcuts forwarded from the email iframe", async () => {

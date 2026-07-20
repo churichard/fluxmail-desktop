@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   Archive,
   Ellipsis,
@@ -21,9 +21,10 @@ import type {
   MailThread,
   MailboxView,
   ModifyActionInput,
+  ComposeAttachment,
   ThreadSummary,
 } from "../../shared/contracts";
-import type { ComposeSeed } from "./ComposeDialog";
+import { parseAddressField } from "./ComposeDialog";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { EmailHtml } from "./EmailHtml";
 import { TrackingPixelIndicator } from "./TrackingPixelIndicator";
@@ -47,31 +48,46 @@ interface Props {
   imageRelay?: boolean;
   imageRelayAvailable?: boolean;
   onModify(action: ModifyActionInput): Promise<void>;
-  onCompose(seed: ComposeSeed): void;
   onError(message: string): void;
   onQuickReplyDirtyChange(dirty: boolean): void;
   quickReplyDiscardVersion?: number;
 }
 
-export function ReadingPane({
-  view,
-  thread,
-  labels,
-  allowPermanentDelete,
-  blockRemoteImages = true,
-  imageRelay = true,
-  imageRelayAvailable = true,
-  onModify,
-  onCompose,
-  onError,
-  onQuickReplyDirtyChange,
-  quickReplyDiscardVersion,
-}: Props) {
+export type InlineComposerMode = "reply" | "replyAll" | "forward";
+
+export interface ReadingPaneHandle {
+  openComposer(mode: InlineComposerMode): void;
+}
+
+interface InlineComposerState {
+  mode: InlineComposerMode;
+  initialAttachments: ComposeAttachment[];
+}
+
+export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function ReadingPane(
+  {
+    view,
+    thread,
+    labels,
+    allowPermanentDelete,
+    blockRemoteImages = true,
+    imageRelay = true,
+    imageRelayAvailable = true,
+    onModify,
+    onError,
+    onQuickReplyDirtyChange,
+    quickReplyDiscardVersion,
+  },
+  ref,
+) {
   const [detail, setDetail] = useState<MailThread>();
   const [loading, setLoading] = useState(false);
-  const [replying, setReplying] = useState<"reply" | "replyAll">();
+  const [composer, setComposer] = useState<InlineComposerState>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const forwardRequest = useRef(0);
+  const composerRef = useRef<InlineComposerState | undefined>(undefined);
+  const composerDirty = useRef(false);
+  composerRef.current = composer;
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
   const threadIdentityRef = useRef(threadIdentity);
   threadIdentityRef.current = threadIdentity;
@@ -80,17 +96,50 @@ export function ReadingPane({
   }, []);
 
   useEffect(() => {
-    setReplying(undefined);
+    composerDirty.current = false;
+    setComposer(undefined);
   }, [quickReplyDiscardVersion]);
 
-  const openForward = useCallback(
-    async (summary: ThreadSummary, message: MailMessage) => {
+  const canReplaceComposer = useCallback((mode: InlineComposerMode) => {
+    const current = composerRef.current;
+    if (!current) return true;
+    if (current.mode === mode) return false;
+    if (composerDirty.current && !window.confirm("Discard this unsent message?")) return false;
+    composerDirty.current = false;
+    setComposer(undefined);
+    return true;
+  }, []);
+
+  const closeComposer = useCallback(() => {
+    composerDirty.current = false;
+    setComposer(undefined);
+  }, []);
+
+  const handleComposerDirtyChange = useCallback(
+    (dirty: boolean) => {
+      composerDirty.current = dirty;
+      onQuickReplyDirtyChange(dirty);
+    },
+    [onQuickReplyDirtyChange],
+  );
+
+  const openComposer = useCallback(
+    async (mode: InlineComposerMode) => {
+      const message = detail?.messages.at(-1);
+      if (!thread || !message) return;
+      if (mode === "replyAll" && !shouldOfferReplyAll(thread.accountEmail, message)) return;
+      if (!canReplaceComposer(mode)) return;
+      if (mode !== "forward") {
+        forwardRequest.current += 1;
+        setComposer({ mode, initialAttachments: [] });
+        return;
+      }
       const request = ++forwardRequest.current;
-      const identity = `${summary.accountId}:${summary.id}`;
+      const identity = `${thread.accountId}:${thread.id}`;
       try {
         const initialAttachments = message.attachments?.length
           ? await window.fluxmail.attachments.prepare({
-              accountId: summary.accountId,
+              accountId: thread.accountId,
               messageId: message.id,
               attachments: message.attachments,
             })
@@ -102,20 +151,25 @@ export function ReadingPane({
               .catch(() => undefined);
           return;
         }
-        onCompose(forwardSeed(summary, message, initialAttachments));
+        setComposer({ mode, initialAttachments });
       } catch {
         if (request === forwardRequest.current && identity === threadIdentityRef.current) {
           onError("Could not add the original attachments. You can still forward without them.");
-          onCompose(forwardSeed(summary, message, []));
+          setComposer({ mode, initialAttachments: [] });
         }
       }
     },
-    [onCompose, onError],
+    [canReplaceComposer, detail, onError, thread],
   );
+
+  useImperativeHandle(ref, () => ({ openComposer: (mode) => void openComposer(mode) }), [
+    openComposer,
+  ]);
 
   useEffect(() => {
     setDetail(undefined);
-    setReplying(undefined);
+    composerDirty.current = false;
+    setComposer(undefined);
     if (!thread) return;
     let canceled = false;
     setLoading(true);
@@ -154,6 +208,9 @@ export function ReadingPane({
       </section>
     );
   const lastMessage = detail.messages.at(-1);
+  const replyAllAvailable = Boolean(
+    lastMessage && shouldOfferReplyAll(detail.accountEmail, lastMessage),
+  );
   const deleteAction = mailboxDeleteAction(view, allowPermanentDelete);
 
   return (
@@ -252,31 +309,45 @@ export function ReadingPane({
             ))}
           {lastMessage ? (
             <div className="reply-actions">
-              <button onClick={() => setReplying("reply")}>
+              <button
+                aria-keyshortcuts={KEYBOARD_SHORTCUTS.reply.keys}
+                onClick={() => void openComposer("reply")}
+              >
                 <Reply size={16} />
                 Reply
               </button>
-              <button onClick={() => setReplying("replyAll")}>
-                <ReplyAll size={16} />
-                Reply all
-              </button>
-              <button onClick={() => void openForward(thread, lastMessage)}>
+              {replyAllAvailable ? (
+                <button
+                  aria-keyshortcuts={KEYBOARD_SHORTCUTS.replyAll.keys}
+                  onClick={() => void openComposer("replyAll")}
+                >
+                  <ReplyAll size={16} />
+                  Reply all
+                </button>
+              ) : null}
+              <button
+                aria-keyshortcuts={KEYBOARD_SHORTCUTS.forward.keys}
+                onClick={() => void openComposer("forward")}
+              >
                 <Forward size={16} />
                 Forward
               </button>
             </div>
           ) : null}
-          {replying && lastMessage ? (
-            <QuickReply
+          {composer && lastMessage ? (
+            <InlineComposer
+              key={composer.mode}
               accountId={thread.accountId}
+              threadId={thread.id}
               message={lastMessage}
-              replyAll={replying === "replyAll"}
+              mode={composer.mode}
+              initialAttachments={composer.initialAttachments}
               imageRelay={imageRelay}
               imageRelayAvailable={imageRelayAvailable}
-              onCancel={() => setReplying(undefined)}
-              onSent={() => setReplying(undefined)}
+              onCancel={closeComposer}
+              onSent={closeComposer}
               onError={onError}
-              onDirtyChange={onQuickReplyDirtyChange}
+              onDirtyChange={handleComposerDirtyChange}
               blockRemoteImages={blockRemoteImages}
             />
           ) : null}
@@ -285,7 +356,7 @@ export function ReadingPane({
       </div>
     </section>
   );
-}
+});
 
 function MessageCard({
   message,
@@ -386,10 +457,12 @@ function MessageCard({
   );
 }
 
-function QuickReply({
+function InlineComposer({
   accountId,
+  threadId,
   message,
-  replyAll,
+  mode,
+  initialAttachments,
   imageRelay,
   imageRelayAvailable,
   onCancel,
@@ -399,8 +472,10 @@ function QuickReply({
   blockRemoteImages,
 }: {
   accountId: string;
+  threadId: string;
   message: MailMessage;
-  replyAll: boolean;
+  mode: InlineComposerMode;
+  initialAttachments: ComposeAttachment[];
   imageRelay: boolean;
   imageRelayAvailable: boolean;
   onCancel(): void;
@@ -409,37 +484,116 @@ function QuickReply({
   onDirtyChange(dirty: boolean): void;
   blockRemoteImages: boolean;
 }) {
+  const forwarding = mode === "forward";
+  const initialSubject = forwarding
+    ? message.subject.toLowerCase().startsWith("fwd:")
+      ? message.subject
+      : `Fwd: ${message.subject}`
+    : message.subject.toLowerCase().startsWith("re:")
+      ? message.subject
+      : `Re: ${message.subject}`;
+  const [to, setTo] = useState("");
+  const [cc, setCc] = useState("");
+  const [bcc, setBcc] = useState("");
+  const [showCc, setShowCc] = useState(false);
+  const [showBcc, setShowBcc] = useState(false);
+  const [subject, setSubject] = useState(initialSubject);
   const [html, setHtml] = useState("<p></p>");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [attachments, setAttachments] = useState(initialAttachments);
+  const [attachmentsChanged, setAttachmentsChanged] = useState(false);
+  const attachmentTokens = useRef(
+    new Set(initialAttachments.map((attachment) => attachment.token)),
+  );
+  const attachmentsReleased = useRef(false);
+  const releaseTimer = useRef<number | undefined>(undefined);
+  const ccRef = useRef<HTMLInputElement>(null);
+  const bccRef = useRef<HTMLInputElement>(null);
   const editor = useMailEditor({
-    autoFocus: true,
+    autoFocus: !forwarding,
     onChange: (value) => {
       setHtml(value.html);
       setText(value.text);
-      onDirtyChange(Boolean(value.text.trim()));
     },
   });
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+
+  const releaseAttachments = useCallback(() => {
+    if (attachmentsReleased.current) return;
+    attachmentsReleased.current = true;
+    const tokens = [...attachmentTokens.current];
+    for (let index = 0; index < tokens.length; index += 20)
+      void window.fluxmail.attachments
+        .release(tokens.slice(index, index + 20))
+        .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    onDirtyChange(
+      Boolean(
+        text.trim() ||
+        attachmentsChanged ||
+        (forwarding && (to.trim() || cc.trim() || bcc.trim() || subject !== initialSubject)),
+      ),
+    );
+  }, [attachmentsChanged, bcc, cc, forwarding, initialSubject, onDirtyChange, subject, text, to]);
+
+  useEffect(() => {
+    window.clearTimeout(releaseTimer.current);
+    return () => {
+      onDirtyChange(false);
+      releaseTimer.current = window.setTimeout(releaseAttachments, 0);
+    };
+  }, [onDirtyChange, releaseAttachments]);
+
   const send = async () => {
-    if (!text.trim()) return;
+    const toField = parseAddressField(to);
+    const ccField = parseAddressField(cc);
+    const bccField = parseAddressField(bcc);
+    if (forwarding && (toField.invalid || ccField.invalid || bccField.invalid)) {
+      onError("Check the recipient addresses and try again.");
+      return;
+    }
+    if (
+      (!forwarding && !text.trim()) ||
+      (forwarding &&
+        !toField.addresses.length &&
+        !ccField.addresses.length &&
+        !bccField.addresses.length)
+    )
+      return;
     setSending(true);
     try {
-      await window.fluxmail.drafts.send({
-        accountId,
-        to: [],
-        subject: message.subject.toLowerCase().startsWith("re:")
-          ? message.subject
-          : `Re: ${message.subject}`,
-        text,
-        html,
-        replyToMessageId: message.id,
-        replyAll,
-      });
+      if (forwarding) {
+        await window.fluxmail.mail.forward({
+          target: { accountId, threadId },
+          messageId: message.id,
+          to: toField.addresses,
+          cc: ccField.addresses,
+          bcc: bccField.addresses,
+          subject,
+          text,
+          html,
+          attachments,
+          includeAttachments: false,
+        });
+      } else {
+        await window.fluxmail.drafts.send({
+          accountId,
+          to: [],
+          subject,
+          text,
+          html,
+          replyToMessageId: message.id,
+          replyAll: mode === "replyAll",
+          attachments,
+        });
+      }
+      releaseAttachments();
       onSent();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Fluxmail could not send the reply.");
+      onError(error instanceof Error ? error.message : "Fluxmail could not send this message.");
     } finally {
       setSending(false);
     }
@@ -455,10 +609,80 @@ function QuickReply({
         }
       }}
     >
+      {forwarding ? (
+        <div className="compose-fields inline-compose-fields">
+          <label className="recipient-row">
+            <span>To</span>
+            <input
+              aria-label="To"
+              autoFocus
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+              placeholder="name@example.com"
+            />
+            <span className="recipient-field-actions">
+              {!showCc ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCc(true);
+                    window.requestAnimationFrame(() => ccRef.current?.focus());
+                  }}
+                >
+                  Cc
+                </button>
+              ) : null}
+              {!showBcc ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBcc(true);
+                    window.requestAnimationFrame(() => bccRef.current?.focus());
+                  }}
+                >
+                  Bcc
+                </button>
+              ) : null}
+            </span>
+          </label>
+          {showCc ? (
+            <label className="recipient-row">
+              <span>Cc</span>
+              <input
+                ref={ccRef}
+                aria-label="Cc"
+                value={cc}
+                onChange={(event) => setCc(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {showBcc ? (
+            <label className="recipient-row">
+              <span>Bcc</span>
+              <input
+                ref={bccRef}
+                aria-label="Bcc"
+                value={bcc}
+                onChange={(event) => setBcc(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <label>
+            <span>Subject</span>
+            <input
+              aria-label="Subject"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
       <MailEditorContent
         editor={editor}
         empty={!text.trim()}
-        placeholder={replyAll ? "Reply to everyone" : "Write a reply"}
+        placeholder={
+          forwarding ? "Add a message" : mode === "replyAll" ? "Reply to everyone" : "Write a reply"
+        }
       />
       <div className="quoted-reply">
         <IconButton
@@ -484,15 +708,64 @@ function QuickReply({
           </div>
         ) : null}
       </div>
+      {attachments.length ? (
+        <div className="compose-attachments inline-compose-attachments">
+          {attachments.map((attachment) => (
+            <span key={attachment.token}>
+              <Paperclip size={13} />
+              {attachment.filename}
+              <button
+                aria-label={`Remove ${attachment.filename}`}
+                onClick={() => {
+                  setAttachmentsChanged(true);
+                  setAttachments((current) =>
+                    current.filter((item) => item.token !== attachment.token),
+                  );
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="quick-reply-footer">
-        <MailEditorToolbar editor={editor} />
+        <MailEditorToolbar
+          editor={editor}
+          onAttach={() =>
+            void window.fluxmail.attachments
+              .pick()
+              .then((picked) => {
+                if (!picked.length) return;
+                if (attachments.length + picked.length > 20) {
+                  void window.fluxmail.attachments.release(
+                    picked.map((attachment) => attachment.token),
+                  );
+                  onError("You can attach up to 20 files to a message.");
+                  return;
+                }
+                for (const attachment of picked) attachmentTokens.current.add(attachment.token);
+                setAttachmentsChanged(true);
+                setAttachments((current) => [...current, ...picked]);
+              })
+              .catch((error) =>
+                onError(
+                  error instanceof Error ? error.message : "Fluxmail could not attach these files.",
+                ),
+              )
+          }
+        />
         <div className="quick-reply-actions">
           <button className="text-button" onClick={onCancel}>
             Cancel
           </button>
           <button
             className="primary-button"
-            disabled={sending || !text.trim()}
+            disabled={
+              sending ||
+              (!forwarding && !text.trim()) ||
+              (forwarding && !to.trim() && !cc.trim() && !bcc.trim())
+            }
             onClick={() => void send()}
           >
             {sending ? "Sending..." : "Send"}
@@ -507,24 +780,36 @@ function formatRecipients(recipients: Array<{ name?: string; email: string }>): 
   return recipients.map((recipient) => recipient.name || recipient.email).join(", ") || "me";
 }
 
+export function shouldOfferReplyAll(accountEmail: string, message: MailMessage): boolean {
+  const ownAddress = normalizeAddress(accountEmail);
+  const replyTargets = message.replyTo?.length
+    ? message.replyTo
+    : message.from
+      ? [message.from]
+      : [];
+  const replyRecipients = uniqueAddresses(replyTargets).filter((address) => address !== ownAddress);
+  const normalRecipients = new Set(
+    replyRecipients.length ? replyRecipients : uniqueAddresses(message.to),
+  );
+  const replyAllRecipients = uniqueAddresses([
+    ...replyTargets,
+    ...message.to,
+    ...(message.cc ?? []),
+  ]).filter((address) => address !== ownAddress);
+  if (!replyAllRecipients.length) replyAllRecipients.push(ownAddress);
+  return replyAllRecipients.some((address) => !normalRecipients.has(address));
+}
+
+function uniqueAddresses(addresses: Array<{ email: string }>): string[] {
+  return [...new Set(addresses.map((address) => normalizeAddress(address.email)).filter(Boolean))];
+}
+
+function normalizeAddress(address: string): string {
+  return address.trim().toLowerCase();
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function forwardSeed(
-  thread: ThreadSummary,
-  message: MailMessage,
-  initialAttachments: ComposeSeed["initialAttachments"],
-): ComposeSeed {
-  return {
-    accountId: thread.accountId,
-    subject: thread.subject.toLowerCase().startsWith("fwd:")
-      ? thread.subject
-      : `Fwd: ${thread.subject}`,
-    forwardMessageId: message.id,
-    threadId: thread.id,
-    initialAttachments,
-  };
 }
