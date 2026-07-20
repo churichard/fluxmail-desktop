@@ -29,6 +29,7 @@ export class HostedImageRelayAccess {
   constructor(
     private readonly licenseLease: (forceRefresh?: boolean) => Promise<string>,
     private readonly fetch: RelayFetch,
+    private readonly onAccessDenied: () => void = () => undefined,
     private readonly endpoint = IMAGE_RELAY_TOKEN_ENDPOINT,
   ) {}
 
@@ -51,6 +52,7 @@ export class HostedImageRelayAccess {
   private async fetchToken(forceRefresh: boolean): Promise<string> {
     let response = await this.exchange(forceRefresh);
     if (response.status === 401 && !forceRefresh) response = await this.exchange(true);
+    if (response.status === 403) this.onAccessDenied();
     if (!response.ok) throw relayAccessError(response.status);
 
     const access = accessTokenResponseSchema.parse(await response.json());

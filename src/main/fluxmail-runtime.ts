@@ -53,6 +53,7 @@ export class FluxmailRuntime {
   private viewRefreshGeneration = 0;
   private googleOAuthAttempt?: Promise<Awaited<ReturnType<typeof runGoogleOAuth>>>;
   private imageRelayLicenseRefresh?: Promise<void>;
+  private imageRelayAccessDeniedByServer = false;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
 
@@ -106,6 +107,12 @@ export class FluxmailRuntime {
     }
     this.fluxmail.verifyLease(lease.token, this.fluxmail.licensePublicKeys());
     return lease.token;
+  }
+
+  imageRelayAccessDenied(): void {
+    if (this.imageRelayAccessDeniedByServer) return;
+    this.imageRelayAccessDeniedByServer = true;
+    this.options.onLicenseChanged();
   }
 
   private accountCanPermanentlyDelete(
@@ -226,6 +233,7 @@ export class FluxmailRuntime {
       maxMembers: entitlements.maxMembers,
       maxAccounts: entitlements.maxAccounts,
       canUsePrivateImageRelay:
+        !this.imageRelayAccessDeniedByServer &&
         entitlements.licensed &&
         !entitlements.inGrace &&
         PRIVATE_IMAGE_RELAY_PLANS.has(entitlements.plan),
@@ -253,6 +261,7 @@ export class FluxmailRuntime {
     if (result.outcome !== "refreshed" && result.outcome !== "outage") {
       throw new Error(licenseActivationError(result.outcome));
     }
+    if (result.outcome === "refreshed") this.imageRelayAccessDeniedByServer = false;
 
     this.fluxmail.setStoredConfig(this.context.config.dataDir, "FLUXMAIL_LICENSE_KEY", licenseKey);
     this.context.licenseController.wake();
@@ -265,13 +274,17 @@ export class FluxmailRuntime {
   private refreshImageRelayLicenseInBackground(): void {
     if (this.imageRelayLicenseRefresh) return;
     const entitlements = this.fluxmail.getEntitlements(this.context.db);
-    if (entitlements.licensed && !entitlements.inGrace) return;
+    if (entitlements.licensed && !entitlements.inGrace && !this.imageRelayAccessDeniedByServer)
+      return;
     if (!this.context.licenseController.configuredKey()) return;
 
     this.imageRelayLicenseRefresh = this.context.licenseController
       .refreshNow()
       .then((result) => {
-        if (result?.outcome === "refreshed") this.options.onLicenseChanged();
+        if (result?.outcome === "refreshed") {
+          this.imageRelayAccessDeniedByServer = false;
+          this.options.onLicenseChanged();
+        }
       })
       .catch(() => undefined)
       .finally(() => {

@@ -209,7 +209,7 @@ async function createServices(): Promise<void> {
   const onLicenseChanged = () => sendEvent({ type: "license-changed" });
   runtime =
     !app.isPackaged && process.env.FLUXMAIL_DESKTOP_FAKE_MAIL === "1"
-      ? new FakeFluxmailRuntime({ analytics, onCacheChanged })
+      ? new FakeFluxmailRuntime({ analytics, onCacheChanged, onLicenseChanged })
       : new FluxmailRuntime({
           cache,
           analytics,
@@ -903,6 +903,7 @@ function requireImageRelay(): HostedImageRelay {
   imageRelayAccess ??= new HostedImageRelayAccess(
     (forceRefresh) => requireRuntime().imageRelayLicenseLease(forceRefresh),
     (input, init) => net.fetch(input, init),
+    () => requireRuntime().imageRelayAccessDenied(),
   );
   imageRelay ??= new HostedImageRelay(
     (forceRefresh) => imageRelayAccess!.token(forceRefresh),

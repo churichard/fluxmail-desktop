@@ -311,6 +311,60 @@ describe("FluxmailRuntime private image relay license", () => {
     expect(runtime.license().canUsePrivateImageRelay).toBe(true);
     expect(refreshNow).toHaveBeenCalledOnce();
   });
+
+  it("disables relay access after a server denial and restores it after revalidation", async () => {
+    const onLicenseChanged = vi.fn();
+    const runtime = createRuntime({
+      cache: {},
+      service: {},
+      onCacheChanged: vi.fn(),
+      onLicenseChanged,
+    });
+    const entitlements = {
+      plan: "pro",
+      licensed: true,
+      inGrace: false,
+      maxMembers: 1,
+      maxAccounts: 5,
+    };
+    let finishRefresh!: (value: { outcome: "refreshed" }) => void;
+    const refreshNow = vi.fn(
+      () =>
+        new Promise<{ outcome: "refreshed" }>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const internals = runtime as unknown as {
+      fluxmail: Record<string, unknown>;
+      context: {
+        licenseController: {
+          configuredKey(): string;
+          refreshNow: typeof refreshNow;
+        };
+      };
+    };
+    internals.fluxmail = {
+      ...runtimeFluxmailModule(),
+      getEntitlements: vi.fn(() => entitlements),
+      checkLicenseState: vi.fn(() => ({ entitlements })),
+    };
+    internals.context.licenseController = {
+      configuredKey: () => "configured-license-key",
+      refreshNow,
+    };
+
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    runtime.imageRelayAccessDenied();
+    expect(onLicenseChanged).toHaveBeenCalledOnce();
+    expect(runtime.license().canUsePrivateImageRelay).toBe(false);
+    expect(refreshNow).toHaveBeenCalledOnce();
+
+    finishRefresh({ outcome: "refreshed" });
+
+    await vi.waitFor(() => expect(onLicenseChanged).toHaveBeenCalledTimes(2));
+    expect(runtime.license().canUsePrivateImageRelay).toBe(true);
+    expect(refreshNow).toHaveBeenCalledOnce();
+  });
 });
 
 describe("FluxmailRuntime thread loading", () => {

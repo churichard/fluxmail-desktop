@@ -105,6 +105,12 @@ export class FakeFluxmailRuntime {
     return "fake-image-relay-license";
   }
 
+  imageRelayAccessDenied(): void {
+    if (!this.licenseValue.canUsePrivateImageRelay) return;
+    this.licenseValue = { ...this.licenseValue, canUsePrivateImageRelay: false };
+    this.options.onLicenseChanged();
+  }
+
   private connected = true;
   private messages = structuredClone(seedMessages);
   private licenseValue: BootstrapState["license"] = {
@@ -118,6 +124,7 @@ export class FakeFluxmailRuntime {
     private readonly options: {
       analytics: DesktopAnalytics;
       onCacheChanged(): void;
+      onLicenseChanged(): void;
     },
   ) {}
 

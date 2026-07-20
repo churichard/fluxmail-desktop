@@ -88,14 +88,17 @@ describe("hosted image relay", () => {
   });
 
   it("explains when the current plan is not eligible", async () => {
+    const onAccessDenied = vi.fn();
     const access = new HostedImageRelayAccess(
       async () => "personal-license-lease",
       async () => new Response(null, { status: 403 }),
+      onAccessDenied,
     );
 
     await expect(access.token()).rejects.toThrow(
       "Private image relay is available on Pro, Team, and Enterprise.",
     );
+    expect(onAccessDenied).toHaveBeenCalledOnce();
   });
 
   it("authenticates, batches, and caches signed relay URLs", async () => {
