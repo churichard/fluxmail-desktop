@@ -81,10 +81,8 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   },
   ref,
 ) {
-  const [loadedThread, setLoadedThread] = useState<{
-    key: string;
-    detail: MailThread;
-  }>();
+  const [detail, setDetail] = useState<MailThread>();
+  const [loading, setLoading] = useState(false);
   const [composer, setComposer] = useState<InlineComposerState>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const forwardRequest = useRef(0);
@@ -92,10 +90,8 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   const composerDirty = useRef(false);
   composerRef.current = composer;
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
-  const threadLoadKey = thread ? `${threadIdentity}:${thread.date}:${thread.messageCount}` : "";
   const threadIdentityRef = useRef(threadIdentity);
   threadIdentityRef.current = threadIdentity;
-  const detail = loadedThread?.key === threadLoadKey ? loadedThread.detail : undefined;
   const handleScrollerRef = useCallback((element: HTMLDivElement | null) => {
     setScroller(element);
   }, []);
@@ -172,25 +168,29 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   ]);
 
   useEffect(() => {
+    setDetail(undefined);
     composerDirty.current = false;
     setComposer(undefined);
     if (!thread) return;
     let canceled = false;
+    setLoading(true);
     void window.fluxmail.mail
       .getThread({ accountId: thread.accountId, threadId: thread.id })
       .then((result) => {
-        if (!canceled) setLoadedThread({ key: threadLoadKey, detail: result });
+        if (!canceled) setDetail(result);
       })
-      .catch((error) => {
-        if (!canceled)
-          onError(
-            error instanceof Error ? error.message : "Fluxmail could not open this conversation.",
-          );
+      .catch((error) =>
+        onError(
+          error instanceof Error ? error.message : "Fluxmail could not open this conversation.",
+        ),
+      )
+      .finally(() => {
+        if (!canceled) setLoading(false);
       });
     return () => {
       canceled = true;
     };
-  }, [onError, thread?.accountId, thread?.id, threadLoadKey]);
+  }, [onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
 
   if (!thread)
     return (
@@ -201,7 +201,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         </div>
       </section>
     );
-  if (!detail)
+  if (loading || !detail)
     return (
       <section className="reading-pane empty-reading">
         <LoaderCircle className="spin" size={22} />
