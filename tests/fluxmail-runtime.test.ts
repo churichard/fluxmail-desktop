@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "@fluxmail/core";
-import { encryptString, IncompatibleStoreError, type StoreCompatibility } from "fluxmail";
+import Database from "better-sqlite3";
+import {
+  encryptString,
+  IncompatibleStoreError,
+  inspectStoreCompatibility,
+  MAX_SUPPORTED_STORE_FORMAT,
+  type StoreCompatibility,
+} from "fluxmail";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAnalytics } from "../src/main/analytics";
 import { MailCache } from "../src/main/cache";
@@ -98,7 +105,10 @@ describe("FluxmailRuntime license activation", () => {
     const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
     const internals = runtime as unknown as {
       fluxmail: ReturnType<typeof runtimeFluxmailModule>;
-      context: { licenseController: { wake: ReturnType<typeof vi.fn> } };
+      context: {
+        configuration: { setLicenseKey: ReturnType<typeof vi.fn> };
+        licenseController: { wake: ReturnType<typeof vi.fn> };
+      };
     };
     const refreshLicense = vi.fn(async () => ({
       outcome: "refreshed" as const,
@@ -109,9 +119,7 @@ describe("FluxmailRuntime license activation", () => {
         expiresAt: "2026-08-01T00:00:00.000Z",
       },
     }));
-    const setStoredConfig = vi.fn();
     internals.fluxmail.refreshLicense = refreshLicense;
-    internals.fluxmail.setStoredConfig = setStoredConfig;
     internals.fluxmail.getEntitlements = vi.fn(() => ({
       plan: "pro",
       licensed: true,
@@ -134,11 +142,7 @@ describe("FluxmailRuntime license activation", () => {
       serverUrl: "https://license.test",
       dataDir: "/tmp/fluxmail",
     });
-    expect(setStoredConfig).toHaveBeenCalledWith(
-      "/tmp/fluxmail",
-      "FLUXMAIL_LICENSE_KEY",
-      licenseKey,
-    );
+    expect(internals.context.configuration.setLicenseKey).toHaveBeenCalledWith(licenseKey);
     expect(internals.context.licenseController.wake).toHaveBeenCalledOnce();
   });
 
@@ -146,21 +150,22 @@ describe("FluxmailRuntime license activation", () => {
     const runtime = createRuntime({ cache: {}, service: {}, onCacheChanged: vi.fn() });
     const internals = runtime as unknown as {
       fluxmail: ReturnType<typeof runtimeFluxmailModule>;
-      context: { licenseController: { wake: ReturnType<typeof vi.fn> } };
+      context: {
+        configuration: { setLicenseKey: ReturnType<typeof vi.fn> };
+        licenseController: { wake: ReturnType<typeof vi.fn> };
+      };
     };
-    const setStoredConfig = vi.fn();
     internals.fluxmail.refreshLicense = vi.fn(async () => ({
       outcome: "outage" as const,
       message: "offline",
       cachedLeaseActive: false,
     }));
-    internals.fluxmail.setStoredConfig = setStoredConfig;
 
     await expect(runtime.activateLicense(licenseKey)).resolves.toMatchObject({
       outcome: "saved_for_retry",
       license: { plan: "personal" },
     });
-    expect(setStoredConfig).toHaveBeenCalledOnce();
+    expect(internals.context.configuration.setLicenseKey).toHaveBeenCalledOnce();
     expect(internals.context.licenseController.wake).toHaveBeenCalledOnce();
   });
 
@@ -170,6 +175,7 @@ describe("FluxmailRuntime license activation", () => {
       fluxmail: ReturnType<typeof runtimeFluxmailModule>;
       context: {
         config: { licenseKeyFromEnvironment?: boolean };
+        configuration: { setLicenseKey: ReturnType<typeof vi.fn> };
         licenseController: { wake: ReturnType<typeof vi.fn> };
       };
     };
@@ -185,7 +191,7 @@ describe("FluxmailRuntime license activation", () => {
     await expect(runtime.activateLicense(licenseKey)).rejects.toThrow(
       "active on another Fluxmail instance",
     );
-    expect(internals.fluxmail.setStoredConfig).not.toHaveBeenCalled();
+    expect(internals.context.configuration.setLicenseKey).not.toHaveBeenCalled();
     expect(internals.context.licenseController.wake).not.toHaveBeenCalled();
 
     internals.context.config.licenseKeyFromEnvironment = true;
@@ -1364,8 +1370,6 @@ describe("FluxmailRuntime OAuth configuration", () => {
       compatible: false,
       requiresMigration: false,
     };
-    const readStoredConfig = vi.fn(() => ({}));
-    const setStoredConfig = vi.fn();
     class TestIncompatibleStoreError extends Error {
       readonly code = "incompatible_store";
 
@@ -1380,8 +1384,6 @@ describe("FluxmailRuntime OAuth configuration", () => {
       })),
       inspectStoreCompatibility: vi.fn(() => compatibility),
       IncompatibleStoreError: TestIncompatibleStoreError,
-      readStoredConfig,
-      setStoredConfig,
     };
 
     expect(() =>
@@ -1391,8 +1393,6 @@ describe("FluxmailRuntime OAuth configuration", () => {
         "bundled-secret",
       ),
     ).toThrow(TestIncompatibleStoreError);
-    expect(readStoredConfig).not.toHaveBeenCalled();
-    expect(setStoredConfig).not.toHaveBeenCalled();
   });
 
   it("uses the bundled pair when the existing configuration is incomplete", () => {
@@ -1413,6 +1413,24 @@ describe("FluxmailRuntime OAuth configuration", () => {
 });
 
 describe("FluxmailRuntime store compatibility", () => {
+  it("accepts a store that has already been upgraded to format 2", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "fluxmail-format-two-"));
+    directories.push(directory);
+    const dbPath = path.join(directory, "fluxmail.db");
+    const sqlite = new Database(dbPath);
+    sqlite.pragma("user_version = 2");
+    sqlite.close();
+
+    const fluxmail = {
+      resolveStoreLocation: vi.fn(() => ({ dataDir: directory, dbPath })),
+      inspectStoreCompatibility,
+      IncompatibleStoreError,
+    };
+
+    expect(MAX_SUPPORTED_STORE_FORMAT).toBeGreaterThanOrEqual(2);
+    expect(prepareFluxmailConfiguration(fluxmail, "", "")).toBe(false);
+  });
+
   it("blocks bootstrap and mutations if another process upgrades the store", async () => {
     const createDraft = vi.fn();
     const runtime = createRuntime({
@@ -1491,6 +1509,7 @@ function createRuntime(input: {
         licenseServerUrl: "https://license.test",
         maxAttachmentBytes: 25 * 1024 * 1024,
       },
+      configuration: { setLicenseKey: vi.fn() },
       registry: { listAccounts: () => [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
@@ -1539,6 +1558,7 @@ function createRuntimeWithCache(input: {
         licenseServerUrl: "https://license.test",
         maxAttachmentBytes: 25 * 1024 * 1024,
       },
+      configuration: { setLicenseKey: vi.fn() },
       registry: { listAccounts: () => input.accounts ?? [account] },
       service: input.service,
       scheduler: { stop: vi.fn() },
@@ -1581,7 +1601,6 @@ function runtimeFluxmailModule() {
     IncompatibleStoreError,
     LICENSE_KEY_PATTERN: /^fluxmail_lic_[0-9a-f]{40}$/,
     refreshLicense: vi.fn(),
-    setStoredConfig: vi.fn(),
     getEntitlements: vi.fn(() => ({
       plan: "personal",
       licensed: false,

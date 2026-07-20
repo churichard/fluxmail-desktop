@@ -4,6 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { _electron as electron, expect, test } from "@playwright/test";
 
+const mockKeychainArgument = "--use-mock-keychain";
+
 test("uses the desktop bridge for the inbox, secure reading, search, compose, and settings", async () => {
   test.setTimeout(60_000);
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-e2e-"));
@@ -18,7 +20,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     }),
   );
   const electronApp = await electron.launch({
-    args: [process.cwd()],
+    args: [mockKeychainArgument, process.cwd()],
     env: {
       ...process.env,
       FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
@@ -960,7 +962,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
 test("archives from a row and the email iframe without transferring focus", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
   const electronApp = await electron.launch({
-    args: [process.cwd()],
+    args: [mockKeychainArgument, process.cwd()],
     env: {
       ...process.env,
       FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
@@ -1001,7 +1003,7 @@ test("archives from a row and the email iframe without transferring focus", asyn
 test("opens DevTools at the bottom without changing window drag regions", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-devtools-e2e-"));
   const electronApp = await electron.launch({
-    args: [process.cwd()],
+    args: [mockKeychainArgument, process.cwd()],
     env: {
       ...process.env,
       FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
@@ -1047,7 +1049,7 @@ test("opens DevTools at the bottom without changing window drag regions", async 
 test("saves a draft before closing the window", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-window-close-e2e-"));
   const electronApp = await electron.launch({
-    args: [process.cwd()],
+    args: [mockKeychainArgument, process.cwd()],
     env: {
       ...process.env,
       FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
@@ -1091,15 +1093,19 @@ test("starts the packaged app with the bundled Fluxmail service", async () => {
     `out/Fluxmail-darwin-${process.arch}`,
     "Fluxmail.app/Contents/MacOS/Fluxmail",
   );
-  const child = spawn(executable, [`--user-data-dir=${path.join(dataDirectory, "user-data")}`], {
-    env: {
-      ...process.env,
-      FLUXMAIL_DESKTOP_E2E_HEADLESS: "1",
-      FLUXMAIL_DATA_DIR: path.join(dataDirectory, ".fluxmail"),
-      FLUXMAIL_TELEMETRY: "0",
+  const child = spawn(
+    executable,
+    [mockKeychainArgument, `--user-data-dir=${path.join(dataDirectory, "user-data")}`],
+    {
+      env: {
+        ...process.env,
+        FLUXMAIL_DESKTOP_E2E_HEADLESS: "1",
+        FLUXMAIL_DATA_DIR: path.join(dataDirectory, ".fluxmail"),
+        FLUXMAIL_TELEMETRY: "0",
+      },
+      stdio: "pipe",
     },
-    stdio: "pipe",
-  });
+  );
 
   try {
     const status = await Promise.race([
