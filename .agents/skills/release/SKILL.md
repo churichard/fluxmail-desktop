@@ -116,9 +116,13 @@ For a self-signed build, set `APPLE_SIGNING_IDENTITY`, set `identityValidation: 
 
 ## 3. Prepare the release notes
 
-Write the notes in [Common Changelog](https://common-changelog.org/) format before publishing:
+Keep release notes in the tracked root `CHANGELOG.md`. Move the user-visible changes for the release from `Unreleased` into a dated version entry and update the `Unreleased` comparison link. Follow [Common Changelog](https://common-changelog.org/):
 
 ```markdown
+# Changelog
+
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v<version>...HEAD)
+
 ## [<version>](<release-url>) - YYYY-MM-DD
 
 _<Signing and notarization notice, when needed>_
@@ -132,7 +136,13 @@ Include only changes that users can observe. Omit refactors, implementation deta
 
 Use only relevant Common Changelog sections, in this order: `Changed`, `Added`, `Removed`, and `Fixed`. Write each change as one self-describing line that starts with a present-tense imperative verb. Put linked pull requests or commits at the end of the same line. Sort changes by importance.
 
-Use at most one single-sentence notice before the change groups. Do not add `Contributors`, `New contributors`, or similar credit sections. Do not use GitHub's generated notes as the final release body. Save the prepared body under `.context/` so it can be passed to `gh release create --notes-file` or `gh release edit --notes-file`.
+Use at most one single-sentence notice before the change groups. Do not add `Contributors`, `New contributors`, or similar credit sections. Do not use GitHub's generated notes as the final release body. Render the exact GitHub Release body from the committed changelog entry:
+
+```sh
+pnpm release:notes "<version>"
+```
+
+Require this command to succeed. The release workflow reads the same entry from the tagged commit and validates its signing notice against the configured signing mode.
 
 For an ad hoc-signed release, include this notice:
 
@@ -154,6 +164,7 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm release:notes "<version>"
 pnpm test:e2e
 pnpm make
 ```
@@ -175,7 +186,7 @@ git diff --check
 
 Require every reported change to have been created by this release workflow and to belong in the release pull request. If any other change appears, stop and report it.
 
-If the workflow created release-related changes:
+If the workflow created release-related changes, including the version update and `CHANGELOG.md` entry:
 
 1. Stage only the intended files.
 2. Commit with a concise message that describes the change.
@@ -205,7 +216,7 @@ After the complete changelog is written, the full local preflight passes, the wo
 Include:
 
 - The selected version and its user-visible compatibility reasoning.
-- The complete changelog body exactly as it will appear on GitHub, including the signing notice.
+- The complete output of `pnpm release:notes "<version>"` exactly as it will appear on GitHub, including the signing notice.
 - A concise list of audited changes excluded because users cannot observe them.
 - The pull request URL, a concise summary of its committed diff, and its check results.
 - The proposed tag and signing mode.
@@ -217,7 +228,7 @@ Approval expires if the version, changelog, pull request diff, or signing mode c
 
 ## 7. Merge the approved release
 
-After approval, confirm that the pull request diff and head SHA still match the approval packet and that all required checks still pass. Merge with the repository's allowed method. Prefer squash merge for this repository and do not delete the workspace branch.
+After approval, confirm that the pull request diff, head SHA, and rendered changelog entry still match the approval packet and that all required checks still pass. Merge with the repository's allowed method. Prefer squash merge for this repository and do not delete the workspace branch.
 
 Use `gh pr view` and `gh pr merge --squash` as appropriate. If branch protection requires human review, report the pull request URL and wait instead of bypassing it.
 
@@ -240,7 +251,7 @@ git rev-list -n 1 "<tag>"
 git push origin "<tag>"
 ```
 
-The tag push is the release event. The workflow at `.github/workflows/release.yml` builds Apple Silicon and Intel artifacts and publishes the matching GitHub Release.
+The tag push is the release event. The workflow at `.github/workflows/release.yml` builds Apple Silicon and Intel artifacts, renders the release notes from the tagged `CHANGELOG.md`, and publishes the matching GitHub Release.
 
 ## 9. Monitor the release workflow
 
@@ -256,12 +267,14 @@ If the run fails, inspect it with `gh run view <run-id> --log-failed`. Rerun fai
 
 If the workflow cannot run because of billing, quota, or a service outage, and the user authorizes a manual release, follow [manual publishing and release repair](references/manual-publishing.md). A manual release must meet the same architecture, signing, packaging, notes, and verification requirements as the workflow.
 
-## 10. Normalize and verify the published release
+## 10. Verify the published release
 
-Replace generated release notes with the prepared Common Changelog body:
+Render the expected notes from the release commit and read the published body:
 
 ```sh
-gh release edit "<tag>" --notes-file ".context/<notes-file>.md"
+expected_notes=$(pnpm --silent release:notes "<version>")
+published_notes=$(gh release view "<tag>" --json body --jq .body)
+test "$published_notes" = "$expected_notes"
 gh release view "<tag>" \
   --json tagName,url,isDraft,isPrerelease,body,assets
 ```
@@ -270,7 +283,7 @@ Confirm:
 
 - The tag matches the requested version and still resolves to the recorded release SHA.
 - The release is published, not a draft or prerelease.
-- The body follows Common Changelog and has no contributor sections.
+- The body exactly matches the committed Common Changelog entry and has no contributor sections.
 - There are two DMGs and two ZIPs.
 - Both `arm64` and `x64` artifacts are present.
 - Every asset has a nonzero size and an uploaded state.

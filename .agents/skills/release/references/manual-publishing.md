@@ -19,7 +19,7 @@ Require the complete local release preflight to pass. Do not use manual publishi
 
 Build from the exact recorded release SHA. Require a clean separation between release changes and unrelated user work. Confirm the tag resolves to that SHA before publishing.
 
-Prepare the Common Changelog notes described in the main skill. Confirm the signing mode before building:
+Prepare and commit the Common Changelog entry described in the main skill. Confirm the signing mode before building:
 
 - Use Developer ID signing, hardened runtime, and notarization when all Apple credentials are configured.
 - Use the persistent Fluxmail self-signed certificate without hardened runtime or notarization when only the signing credentials are configured.
@@ -129,16 +129,20 @@ Do not publish instructions to strip quarantine as the release fix. Removing qua
 
 ## Publish a new release manually
 
-Confirm the remote tag and its peeled commit one final time. Create the release with the four verified files and the prepared notes:
+Confirm the remote tag and its peeled commit one final time. Render the committed changelog entry to a temporary file, then create the release with the four verified files:
 
 ```sh
+notes_path=$(mktemp)
+trap 'rm -f "$notes_path"' EXIT
+pnpm release:notes "<version>" > "$notes_path"
+
 gh release create "<tag>" \
   out/make/Fluxmail-<version>-arm64.dmg \
   out/make/Fluxmail-<version>-x64.dmg \
   out/make/zip/darwin/arm64/Fluxmail-darwin-arm64-<version>.zip \
   out/make/zip/darwin/x64/Fluxmail-darwin-x64-<version>.zip \
   --verify-tag \
-  --notes-file ".context/<notes-file>.md"
+  --notes-file "$notes_path"
 ```
 
 Do not use `--generate-notes`. It does not produce the required Common Changelog body and may add contributor sections.
@@ -152,7 +156,7 @@ Before replacement:
 1. Record the local tag commit, remote tag object, and remote peeled commit.
 2. Read the release body and asset metadata.
 3. Verify the four local replacements and their canonical filenames.
-4. Prepare the updated Common Changelog notes, including the correct signing notice.
+4. Prepare and commit the updated Common Changelog entry, including the correct signing notice.
 
 Replace all four architecture artifacts together so the release has one consistent signing and packaging policy:
 
@@ -164,7 +168,10 @@ gh release upload "<tag>" \
   out/make/zip/darwin/x64/Fluxmail-darwin-x64-<version>.zip \
   --clobber
 
-gh release edit "<tag>" --notes-file ".context/<notes-file>.md"
+notes_path=$(mktemp)
+trap 'rm -f "$notes_path"' EXIT
+pnpm release:notes "<version>" > "$notes_path"
+gh release edit "<tag>" --notes-file "$notes_path"
 ```
 
 ## Verify GitHub after publishing
@@ -176,6 +183,6 @@ gh release view "<tag>" \
   --json tagName,url,isDraft,isPrerelease,body,assets
 ```
 
-Compare each GitHub `assets[].digest` value with the local SHA-256 value. Confirm the body contains the Common Changelog notes and correct signing warning.
+Compare each GitHub `assets[].digest` value with the local SHA-256 value. Confirm the body exactly matches `pnpm release:notes "<version>"`.
 
 Read the remote tag object and peeled commit again. For replacement releases, compare them with the values recorded before `--clobber`. Stop and report any mismatch.
