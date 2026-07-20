@@ -27,6 +27,11 @@ import { MailCache } from "./cache";
 import { DesktopAnalytics, type MailOperation, type SyncTrigger } from "./analytics";
 import { toEmailQuery } from "./mail-mapping";
 import {
+  buildQuotedReplyBody,
+  normalizeContentId,
+  referencedInlineContentIds,
+} from "./quoted-reply";
+import {
   googleCredentialsAllowPermanentDelete,
   googleOAuthClientAllowsPermanentDelete,
   googleOAuthScopes,
@@ -592,7 +597,7 @@ export class FluxmailRuntime {
         const draft = await this.context.service.updateDraft(
           input.accountId,
           input.draftId,
-          await this.toSendInput(input),
+          await this.toSendInput(input, true),
         );
         this.options.cache.putMessages(account, [draft], {
           invalidateBodies: true,
@@ -602,7 +607,10 @@ export class FluxmailRuntime {
         });
         this.options.cache.deleteDraft(account, input.draftId);
       } else {
-        result = await this.context.service.send(input.accountId, await this.toSendInput(input));
+        result = await this.context.service.send(
+          input.accountId,
+          await this.toSendInput(input, true),
+        );
       }
       try {
         const thread = await this.context.service.getThread(input.accountId, result.threadId);
@@ -867,21 +875,60 @@ export class FluxmailRuntime {
     return account;
   }
 
-  private async toSendInput(input: ComposeInput): Promise<SendInput> {
-    const attachments = input.attachments?.length
+  private async toSendInput(input: ComposeInput, includeQuotedReply = false): Promise<SendInput> {
+    let attachments = input.attachments?.length
       ? await Promise.all(
           input.attachments.map((attachment) => this.options.resolveAttachment(attachment)),
         )
       : undefined;
+    let body: NonNullable<SendInput["body"]> = {
+      ...(input.text ? { text: input.text } : {}),
+      ...(input.html ? { html: input.html } : {}),
+    };
+    if (includeQuotedReply && input.replyToMessageId) {
+      const original = await this.context.service.getMessage(
+        input.accountId,
+        input.replyToMessageId,
+      );
+      body = buildQuotedReplyBody(body, original);
+      const referencedContentIds = referencedInlineContentIds(body.html);
+      const existingContentIds = new Set(
+        attachments?.flatMap((attachment) =>
+          attachment.contentId ? [normalizeContentId(attachment.contentId)] : [],
+        ),
+      );
+      const quotedAttachments = await Promise.all(
+        (original.attachments ?? [])
+          .filter(
+            (attachment) =>
+              attachment.contentId &&
+              referencedContentIds.has(normalizeContentId(attachment.contentId)) &&
+              !existingContentIds.has(normalizeContentId(attachment.contentId)),
+          )
+          .map(async (attachment) => {
+            const result = await this.context.service.getAttachment(
+              input.accountId,
+              original.id,
+              attachment.id,
+              this.context.config.maxAttachmentBytes,
+            );
+            return {
+              filename: result.meta.filename,
+              mimeType: result.meta.mimeType,
+              content: result.content.toString("base64"),
+              contentId: attachment.contentId,
+              disposition: "inline" as const,
+            } satisfies AttachmentInput;
+          }),
+      );
+      if (quotedAttachments.length) attachments = [...(attachments ?? []), ...quotedAttachments];
+    }
     return {
       to: input.to,
       ...(input.cc?.length ? { cc: input.cc } : {}),
       ...(input.bcc?.length ? { bcc: input.bcc } : {}),
       subject: input.subject,
-      body: {
-        ...(input.text ? { text: input.text } : {}),
-        ...(input.html ? { html: input.html } : {}),
-      },
+      body,
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
       ...(input.replyAll ? { replyAll: true } : {}),
       ...(attachments?.length ? { attachments } : {}),

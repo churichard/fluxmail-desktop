@@ -92,15 +92,26 @@ vi.mock("../src/renderer/components/ReadingPane", async () => {
 vi.mock("../src/renderer/components/ComposeDialog", async () => {
   const React = await import("react");
   return {
-    ComposeDialog: React.forwardRef(({ seed }: { seed: { subject?: string } }, ref) => {
-      React.useImperativeHandle(ref, () => ({ close: async () => true }));
-      return (
-        <section role="dialog" aria-label="Compose">
-          {seed.subject}
-          <button>Compose action</button>
-        </section>
-      );
-    }),
+    ComposeDialog: React.forwardRef(
+      (
+        {
+          seed,
+        }: {
+          seed: { subject?: string; threadId?: string; replyToMessageId?: string };
+        },
+        ref,
+      ) => {
+        React.useImperativeHandle(ref, () => ({ close: async () => true }));
+        return (
+          <section role="dialog" aria-label="Compose">
+            {seed.subject}
+            <span data-testid="compose-thread-id">{seed.threadId}</span>
+            <span data-testid="compose-reply-target">{seed.replyToMessageId}</span>
+            <button>Compose action</button>
+          </section>
+        );
+      },
+    ),
   };
 });
 
@@ -188,6 +199,54 @@ describe("App thread navigation", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText(`Reading ${regular.subject}`)).toBeTruthy();
+  });
+
+  it("opens a conversation when its stale draft flag has no matching draft", async () => {
+    const staleDraft = {
+      ...thread("thread-1", "Reply conversation", true),
+      folderRoles: ["inbox", "drafts"],
+    };
+    installApi(
+      [staleDraft],
+      vi.fn(async () => mailThread(staleDraft)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: staleDraft.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: staleDraft.subject }));
+
+    await screen.findByText(`Reading ${staleDraft.subject}`);
+    expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("restores the reply target when reopening a saved reply draft", async () => {
+    const savedReply = thread("thread-1", "Saved reply", true);
+    const detail = mailThread(savedReply);
+    const original = { ...detail.messages[0]!, id: "original-message" };
+    detail.messages = [
+      original,
+      {
+        ...original,
+        id: "draft-message",
+        draftId: "draft-1",
+        from: { email: "me@example.com" },
+        to: [{ email: "sender@example.com" }],
+        flags: { read: true, starred: false, draft: true },
+      },
+    ];
+    installApi(
+      [savedReply],
+      vi.fn(async () => detail),
+    );
+    installMatchMedia();
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: savedReply.subject }));
+
+    expect((await screen.findByTestId("compose-thread-id")).textContent).toBe(savedReply.id);
+    expect(screen.getByTestId("compose-reply-target").textContent).toBe(original.id);
   });
 
   it("keeps an unsent quick reply when thread navigation is canceled", async () => {

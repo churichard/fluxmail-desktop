@@ -259,6 +259,24 @@ describe("ReadingPane", () => {
 
     expect(screen.queryByText("Write a reply")).toBeNull();
   });
+
+  it("shows the outbound citation and quoted body when expanding a quick reply", async () => {
+    const getThread = vi.fn(async () => detail("Reply subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const { container } = renderPane(summary());
+    await screen.findByText("Reply subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show quoted message" }));
+
+    expect(screen.getByText(/^On .+ sender@example\.com wrote:$/)).toBeTruthy();
+    expect(container.querySelector(".quick-reply .quoted-reply-body")?.textContent).toBe(
+      "Email body",
+    );
+  });
 });
 
 function renderPane(

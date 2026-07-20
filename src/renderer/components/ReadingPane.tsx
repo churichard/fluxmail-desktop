@@ -38,6 +38,7 @@ import {
   mailboxMoveLabel,
 } from "../mail-actions";
 import type { TrackingPixelDetail } from "../email/tracking-pixels";
+import { quotedReplyCitation } from "../../shared/quoted-reply";
 
 interface Props {
   view: MailboxView;
@@ -695,16 +696,16 @@ function InlineComposer({
         </IconButton>
         {quoteOpen ? (
           <div className="quoted-reply-content">
-            <div className="quoted-reply-meta">
-              {message.from?.name || message.from?.email || "Previous message"}
+            <div className="quoted-reply-meta">{quotedReplyCitation(message)}</div>
+            <div className="quoted-reply-body">
+              <EmailHtml
+                message={message}
+                blockRemoteImages={blockRemoteImages}
+                imageRelay={imageRelay}
+                imageRelayAvailable={imageRelayAvailable}
+                onError={onError}
+              />
             </div>
-            <EmailHtml
-              message={message}
-              blockRemoteImages={blockRemoteImages}
-              imageRelay={imageRelay}
-              imageRelayAvailable={imageRelayAvailable}
-              onError={onError}
-            />
           </div>
         ) : null}
       </div>

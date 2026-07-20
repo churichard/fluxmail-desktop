@@ -17,6 +17,7 @@ import {
 import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEditor";
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
+import { quotedReplyCitation } from "../../shared/quoted-reply";
 
 export interface ComposeSeed {
   accountId: string;
@@ -131,7 +132,9 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     void window.fluxmail.mail
       .getThread({ accountId: seed.accountId, threadId: seed.threadId })
       .then((thread) => {
-        const message = thread.messages.at(-1);
+        const message = seed.replyToMessageId
+          ? thread.messages.find((candidate) => candidate.id === seed.replyToMessageId)
+          : [...thread.messages].reverse().find((candidate) => !candidate.flags.draft);
         if (!message || canceled) return;
         setQuotedMessage(message);
         if (!seed.forwardMessageId) {
@@ -149,7 +152,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     return () => {
       canceled = true;
     };
-  }, [onError, seed.accountId, seed.forwardMessageId, seed.threadId]);
+  }, [onError, seed.accountId, seed.forwardMessageId, seed.replyToMessageId, seed.threadId]);
 
   const toField = useMemo(() => parseAddressField(to), [to]);
   const ccField = useMemo(() => parseAddressField(cc), [cc]);
@@ -531,16 +534,16 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
             </IconButton>
             {quoteOpen ? (
               <div className="quoted-reply-content">
-                <div className="quoted-reply-meta">
-                  {quotedMessage.from?.name || quotedMessage.from?.email || "Previous message"}
+                <div className="quoted-reply-meta">{quotedReplyCitation(quotedMessage)}</div>
+                <div className="quoted-reply-body">
+                  <EmailHtml
+                    message={quotedMessage}
+                    blockRemoteImages={blockRemoteImages}
+                    imageRelay={imageRelay}
+                    imageRelayAvailable={imageRelayAvailable}
+                    onError={onError}
+                  />
                 </div>
-                <EmailHtml
-                  message={quotedMessage}
-                  blockRemoteImages={blockRemoteImages}
-                  imageRelay={imageRelay}
-                  imageRelayAvailable={imageRelayAvailable}
-                  onError={onError}
-                />
               </div>
             ) : null}
           </div>

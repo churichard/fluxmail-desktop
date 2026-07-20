@@ -424,6 +424,7 @@ export function App() {
         thread.draft || !selectedThread || threadKey(selectedThread) !== threadKey(thread);
       if (changesThread && !confirmQuickReplyNavigation()) return;
       const request = ++openThreadRequest.current;
+      let threadToOpen = thread;
       if (thread.draft) {
         try {
           const detail = await window.fluxmail.mail.getThread({
@@ -432,72 +433,89 @@ export function App() {
           });
           if (request !== openThreadRequest.current) return;
           const draft = [...detail.messages].reverse().find((message) => message.flags.draft);
-          if (!draft?.draftId) throw new Error("Fluxmail could not find this draft.");
-          const attachments = draft.attachments?.length
-            ? await window.fluxmail.attachments.prepare({
-                accountId: thread.accountId,
-                messageId: draft.id,
-                attachments: draft.attachments,
-              })
-            : [];
-          if (request !== openThreadRequest.current) {
-            if (attachments.length)
-              void window.fluxmail.attachments
-                .release(attachments.map((attachment) => attachment.token))
-                .catch(() => undefined);
+          if (!draft?.draftId) {
+            threadToOpen = { ...thread, draft: false };
+            setThreads((current) =>
+              current.map((candidate) =>
+                threadKey(candidate) === threadKey(thread)
+                  ? { ...candidate, draft: false }
+                  : candidate,
+              ),
+            );
+          } else {
+            const replyTarget = [...detail.messages]
+              .reverse()
+              .find((message) => !message.flags.draft);
+            const attachments = draft.attachments?.length
+              ? await window.fluxmail.attachments.prepare({
+                  accountId: thread.accountId,
+                  messageId: draft.id,
+                  attachments: draft.attachments,
+                })
+              : [];
+            if (request !== openThreadRequest.current) {
+              if (attachments.length)
+                void window.fluxmail.attachments
+                  .release(attachments.map((attachment) => attachment.token))
+                  .catch(() => undefined);
+              return;
+            }
+            setComposeSeed({
+              accountId: thread.accountId,
+              draftId: draft.draftId,
+              to: formatAddresses(draft.to),
+              cc: formatAddresses(draft.cc),
+              bcc: formatAddresses(draft.bcc),
+              subject: draft.subject,
+              initialHtml: draft.body?.html,
+              initialText: draft.body?.text,
+              ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
+              initialAttachments: attachments,
+            });
             return;
           }
-          setComposeSeed({
-            accountId: thread.accountId,
-            draftId: draft.draftId,
-            to: formatAddresses(draft.to),
-            cc: formatAddresses(draft.cc),
-            bcc: formatAddresses(draft.bcc),
-            subject: draft.subject,
-            initialHtml: draft.body?.html,
-            initialText: draft.body?.text,
-            initialAttachments: attachments,
-          });
         } catch (caught) {
           if (request === openThreadRequest.current) setError(errorMessage(caught));
+          return;
         }
-        return;
       }
-      const openedThread = thread.unread ? { ...thread, unread: false } : thread;
+      const openedThread = threadToOpen.unread ? { ...threadToOpen, unread: false } : threadToOpen;
       setSelectedThread(openedThread);
-      if (!thread.unread) return;
+      if (!threadToOpen.unread) return;
 
       setThreads((current) =>
         current.map((candidate) =>
-          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
+          threadKey(candidate) === threadKey(threadToOpen)
+            ? { ...candidate, unread: false }
+            : candidate,
         ),
       );
-      if (thread.folderRoles.includes("inbox")) {
+      if (threadToOpen.folderRoles.includes("inbox")) {
         setBootstrap((current) =>
-          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
+          current ? adjustUnreadCount(current, threadToOpen.accountId, -1) : current,
         );
       }
       void window.fluxmail.mail
         .modify({
-          targets: [{ accountId: thread.accountId, threadId: thread.id }],
+          targets: [{ accountId: threadToOpen.accountId, threadId: threadToOpen.id }],
           action: { type: "markRead" },
         })
         .catch((caught) => {
           setThreads((current) =>
             current.map((candidate) =>
-              threadKey(candidate) === threadKey(thread)
+              threadKey(candidate) === threadKey(threadToOpen)
                 ? { ...candidate, unread: true }
                 : candidate,
             ),
           );
           setSelectedThread((current) =>
-            current && threadKey(current) === threadKey(thread)
+            current && threadKey(current) === threadKey(threadToOpen)
               ? { ...current, unread: true }
               : current,
           );
-          if (thread.folderRoles.includes("inbox")) {
+          if (threadToOpen.folderRoles.includes("inbox")) {
             setBootstrap((current) =>
-              current ? adjustUnreadCount(current, thread.accountId, 1) : current,
+              current ? adjustUnreadCount(current, threadToOpen.accountId, 1) : current,
             );
           }
           setError(errorMessage(caught));
