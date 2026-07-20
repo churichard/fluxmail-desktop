@@ -37,8 +37,17 @@ const BLOCK_TAGS = new Set([
   "ul",
 ]);
 const HIDDEN_TAGS = new Set(["head", "script", "style", "template"]);
+const QUOTED_REPLY_CLASSES = new Set([
+  "gmail_quote",
+  "gmail_quote_container",
+  "moz-cite-prefix",
+  "protonmail_quote",
+  "yahoo_quoted",
+]);
+const QUOTED_REPLY_IDS = new Set(["divrplyfwdmsg"]);
 
 export function buildQuotedReplyBody(reply: MessageBody, original: Message): MessageBody {
+  if (containsQuotedReply(reply)) return { ...reply };
   const citation = quotedReplyCitation(original);
   const body: MessageBody = {};
 
@@ -59,6 +68,13 @@ export function buildQuotedReplyBody(reply: MessageBody, original: Message): Mes
   }
 
   return body;
+}
+
+export function containsQuotedReply(body: MessageBody): boolean {
+  return Boolean(
+    (body.html && htmlContainsQuotedReply(body.html)) ||
+    (body.text && plainTextContainsQuotedReply(body.text)),
+  );
 }
 
 export function referencedInlineContentIds(html: string | undefined): Set<string> {
@@ -115,6 +131,38 @@ function htmlToPlainText(html: string): string {
     .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function htmlContainsQuotedReply(html: string): boolean {
+  let hasBlockquote = false;
+  const visit = (node: DefaultTreeAdapterTypes.Node): boolean => {
+    if ("attrs" in node) {
+      const attributes = new Map(
+        node.attrs.map((attribute) => [attribute.name.toLowerCase(), attribute.value]),
+      );
+      const classes = attributes.get("class")?.toLowerCase().split(/\s+/) ?? [];
+      if (classes.some((className) => QUOTED_REPLY_CLASSES.has(className))) return true;
+      const id = attributes.get("id")?.toLowerCase();
+      if (id && QUOTED_REPLY_IDS.has(id)) return true;
+      if (node.tagName === "blockquote") hasBlockquote = true;
+      if (node.tagName === "blockquote" && attributes.get("type")?.toLowerCase() === "cite") {
+        return true;
+      }
+    }
+    return "childNodes" in node && node.childNodes.some(visit);
+  };
+
+  return (
+    visit(parseFragment(html)) ||
+    (hasBlockquote && /(?:^|\n)On [^\n]+ wrote:/i.test(htmlToPlainText(html)))
+  );
+}
+
+function plainTextContainsQuotedReply(text: string): boolean {
+  return (
+    /(?:^|\n)On [^\n]+ wrote:\s*\n(?:>[^\n]*(?:\n|$))+/i.test(text) ||
+    /(?:^|\n)-{2,}\s*Original Message\s*-{2,}(?:\n|$)/i.test(text)
+  );
 }
 
 function cleanQuotedHtml(html: string): string {

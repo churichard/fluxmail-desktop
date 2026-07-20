@@ -1,6 +1,10 @@
 import type { Message } from "@fluxmail/core";
 import { describe, expect, it } from "vitest";
-import { buildQuotedReplyBody, referencedInlineContentIds } from "../src/main/quoted-reply";
+import {
+  buildQuotedReplyBody,
+  containsQuotedReply,
+  referencedInlineContentIds,
+} from "../src/main/quoted-reply";
 import { quotedReplyCitation } from "../src/shared/quoted-reply";
 
 const original: Message = {
@@ -41,6 +45,31 @@ describe("quoted reply serialization", () => {
     );
     expect(result.html).toContain("<div></div>");
     expect(result.html).not.toContain("<div><br></div>");
+  });
+
+  it("does not append quote history more than once", () => {
+    const first = buildQuotedReplyBody({ text: "My reply", html: "<p>My reply</p>" }, original);
+    const second = buildQuotedReplyBody(first, original);
+    const textOnly = buildQuotedReplyBody({ text: "My text reply" }, original);
+
+    expect(second).toEqual(first);
+    expect(second.html?.match(/gmail_quote_container/g)).toHaveLength(1);
+    expect(second.text?.match(/On .+ wrote:/g)).toHaveLength(1);
+    expect(buildQuotedReplyBody(textOnly, original)).toEqual(textOnly);
+  });
+
+  it.each([
+    '<div id="divRplyFwdMsg">Outlook history</div>',
+    '<blockquote type="cite">Apple Mail history</blockquote>',
+    '<div class="moz-cite-prefix">Thunderbird history</div>',
+    '<div class="yahoo_quoted">Yahoo history</div>',
+    '<div class="protonmail_quote">Proton history</div>',
+    "<p>On Wed, Dec 10, 2025 Jane wrote:</p><blockquote><p>Normalized history</p></blockquote>",
+  ])("recognizes existing provider quote markup", (html) => {
+    const reply = { text: "Reply with existing history", html };
+
+    expect(containsQuotedReply(reply)).toBe(true);
+    expect(buildQuotedReplyBody(reply, original)).toEqual(reply);
   });
 
   it("escapes plain text when the original has no HTML body", () => {
