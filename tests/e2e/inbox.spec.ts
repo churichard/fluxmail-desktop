@@ -159,6 +159,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const sidebarNav = page.locator(".sidebar-nav");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("flex-shrink", "0");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("height", "36px");
+    await expect(sidebarNav).toHaveCSS("scrollbar-width", "none");
     await sidebarNav.evaluate((element) => {
       let position = 0;
       Object.defineProperties(element, {
@@ -176,6 +177,8 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(page.locator(".sidebar-fade.bottom")).toBeVisible();
     await expect(page.locator(".sidebar-fade.top")).toHaveCount(0);
+    await page.locator(".sidebar-nav-wrap").hover();
+    await expect(page.locator(".sidebar-nav-wrap .overlay-scrollbar")).toHaveCSS("opacity", "1");
     await sidebarNav.evaluate((element) => {
       (element as HTMLElement).scrollTop = 100;
       element.dispatchEvent(new Event("scroll"));
