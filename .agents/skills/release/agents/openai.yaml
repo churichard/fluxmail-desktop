@@ -1,4 +1,4 @@
 interface:
   display_name: "Release"
-  short_description: "Validate, build, publish, and repair releases"
-  default_prompt: "Use $release to choose the next Fluxmail Desktop version, validate it, build it, and publish it."
+  short_description: "Prepare, approve, publish, and repair releases"
+  default_prompt: "Use $release to choose the next Fluxmail Desktop version from user-visible changes, validate it, and request approval with the complete changelog before publishing."

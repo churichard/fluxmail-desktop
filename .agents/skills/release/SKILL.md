@@ -5,7 +5,7 @@ description: Cut, publish, repair, or replace a Fluxmail Desktop GitHub release 
 
 # Release
 
-Choose the release version from the changes since the latest published release unless the user supplies a version. Update the root `package.json` when the selected version differs. Treat an invocation of this skill as authorization to run checks, commit release-related changes, push the workspace branch, open and merge its pull request, push a new version tag, monitor GitHub Actions, and verify the GitHub Release.
+Choose the release version only from user-visible changes since the latest published release unless the user supplies a version. Update the root `package.json` when the selected version differs. Treat an invocation of this skill as authorization to inspect the release, edit release files, run checks, commit the prepared changes, push the workspace branch, open or update its pull request, and monitor pull request checks. It does not authorize merging the release pull request, pushing a version tag, or publishing a GitHub Release. Request explicit approval with the complete written changelog before any of those actions.
 
 Do not expose secret values, move an existing tag, force-push, or bypass branch protection. Stop when a required review, credential, or repository permission needs the user. Require a separate explicit request before replacing assets on an existing release.
 
@@ -15,6 +15,7 @@ Run these checks before changing anything:
 
 ```sh
 git status --short --branch
+git status --porcelain=v1 --untracked-files=all
 git remote -v
 git fetch origin --prune --tags
 git log -1 --oneline --decorate
@@ -23,6 +24,8 @@ node -p "require('./package.json').version"
 gh repo view --json nameWithOwner,defaultBranchRef,url
 gh secret list --app actions
 ```
+
+Require the porcelain status command to return no output before continuing. Treat staged changes, unstaged changes, untracked files, and dirty submodules as blockers. Stop and report the affected paths. Do not stash, discard, commit, or include pre-existing work in the release. After this check passes, only edits made by the release workflow may dirty the worktree.
 
 Require the default branch to be `main` and use `origin/main` as the release source. Do not switch or rename the current Conductor workspace branch.
 
@@ -35,23 +38,25 @@ git diff "<baseline-tag>..origin/main"
 
 For the first release, when no eligible baseline exists, audit the full history and use the valid, unclaimed version in `package.json`.
 
-Review user-visible behavior, configuration and environment variables, stored data, authentication, defaults, and runtime requirements. Choose the minimum compatible semantic version:
+Review behavior that users can observe while installing, configuring, or using Fluxmail. Treat a change as release-worthy only when it changes that experience. Ignore internal refactors, tests, internal documentation, CI and release tooling, dependency churn, and code-only changes that leave user-visible behavior unchanged. Do not infer user impact from the size or complexity of an implementation.
+
+Choose the minimum compatible semantic version from the user-visible changes:
 
 - At `1.0.0` or later, use a major bump for a breaking public contract.
 - Before `1.0.0`, use a minor bump for a breaking public contract.
 - Use a minor bump for backward-compatible functionality.
 - Use a patch bump for backward-compatible fixes only.
-- Do not release tests, documentation, refactors, or release tooling unless they change user-visible behavior or a public contract.
+- Ignore public contract changes that no supported user workflow or integration can observe.
 
-Choose the version without asking when the evidence is clear. Report the baseline, audited range, compatibility findings, and selected version before editing files. Stop if there is no release-worthy change. Ask only when the compatibility impact is genuinely ambiguous.
+Choose the version without asking when the evidence is clear. Report the baseline, audited range, user-visible compatibility findings, excluded internal work, and selected version before editing files. Stop if there is no user-visible change to release. Ask only when the compatibility impact is genuinely ambiguous.
 
 Normalize the selected tag to `v<version>` and require a valid semantic version. If the selected version differs from `package.json`, update the manifest with:
 
 ```sh
-pnpm version <version> --no-git-tag-version --no-git-checks
+pnpm version <version> --no-git-tag-version
 ```
 
-Use `--no-git-checks` only after confirming that every existing change belongs in the release pull request. Include the version change in that pull request. A remote tag or published release matching the current package version is the release baseline, not a reason to ask for a version. Never select a version that already has a local tag, remote tag, or GitHub Release.
+Include the version change in the release pull request. A remote tag or published release matching the current package version is the release baseline, not a reason to ask for a version. Never select a version that already has a local tag, remote tag, or GitHub Release.
 
 Check local tags, remote tags, and GitHub Releases:
 
@@ -123,7 +128,9 @@ _<Signing and notarization notice, when needed>_
 - Describe a user-visible change ([#123](<pull-request-url>))
 ```
 
-Use only relevant Common Changelog sections, in this order: `Changed`, `Added`, `Removed`, and `Fixed`. Write each change as one self-describing line that starts with a present-tense imperative verb. Put linked pull requests or commits at the end of the same line. Sort changes by importance and keep the summary focused on user-visible impact.
+Include only changes that users can observe. Omit refactors, implementation details, tests, internal documentation, CI work, release tooling, and dependency or code-only changes with no user-visible effect. Describe what changes for the user, not how the code changed. If a changelog entry cannot state a concrete user-facing effect, omit it.
+
+Use only relevant Common Changelog sections, in this order: `Changed`, `Added`, `Removed`, and `Fixed`. Write each change as one self-describing line that starts with a present-tense imperative verb. Put linked pull requests or commits at the end of the same line. Sort changes by importance.
 
 Use at most one single-sentence notice before the change groups. Do not add `Contributors`, `New contributors`, or similar credit sections. Do not use GitHub's generated notes as the final release body. Save the prepared body under `.context/` so it can be passed to `gh release create --notes-file` or `gh release edit --notes-file`.
 
@@ -155,29 +162,64 @@ Run `pnpm test:e2e` because every release affects the packaged Electron applicat
 
 If a check fails, diagnose it. Fix failures caused by release-related changes, rerun the narrow check, then rerun the full preflight. Do not absorb unrelated user changes into the release.
 
-## 5. Merge release-related changes
+## 5. Prepare the release pull request
 
-Compare the workspace with `origin/main`:
+Review the changes made by the release workflow before committing them:
 
 ```sh
-git diff --stat origin/main
-git diff origin/main
+git status --short
+git diff --stat HEAD
+git diff HEAD
+git diff --check
+```
+
+Require every reported change to have been created by this release workflow and to belong in the release pull request. If any other change appears, stop and report it.
+
+If the workflow created release-related changes:
+
+1. Stage only the intended files.
+2. Commit with a concise message that describes the change.
+
+After committing, run `git status --porcelain=v1 --untracked-files=all` again and require no output. Stop and report anything left in the worktree. Then compare the committed pull request content from the merge base:
+
+```sh
+git diff --stat origin/main...HEAD
+git diff origin/main...HEAD
 git log --oneline origin/main..HEAD
 ```
 
-If the workspace contains release-related changes that are not on `origin/main`:
+If the branch contains release-related changes that are not on `origin/main`:
 
-1. Review the diff and preserve unrelated user work.
-2. Stage only the intended files.
-3. Commit with a concise message that describes the change.
-4. Push the current branch without renaming it.
-5. Create or reuse a pull request targeting `main`.
-6. Watch all pull request checks to completion.
-7. Merge with the repository's allowed merge method. Prefer squash merge for this repository and do not delete the workspace branch.
+1. Push the current branch without renaming it.
+2. Create or reuse a pull request targeting `main`.
+3. Watch all pull request checks to completion.
 
-Use `gh pr status`, `gh pr view`, `gh pr checks --watch`, and `gh pr merge --squash` as appropriate. If branch protection requires human review, report the pull request URL and wait for approval instead of bypassing it.
+Use `gh pr status`, `gh pr view`, and `gh pr checks --watch` as appropriate. Do not merge the pull request in this step. If branch protection requires human review, report the pull request URL and wait instead of bypassing it.
 
-If the workspace has unrelated dirty changes that cannot be separated safely, stop and identify the files. Do not stash, discard, or commit them.
+If pull request checks cannot run because of billing, quota, or a service outage, confirm that the jobs did not start and that the full local preflight passed. Carry the local fallback as a separate request in the approval packet. Do not treat an infrastructure failure as a passing check.
+
+## 6. Request publication approval
+
+After the complete changelog is written, the full local preflight passes, the worktree is clean, and all pull request checks pass, present an approval packet. If pull request checks were blocked by a confirmed infrastructure failure, present the packet only after the full local preflight passes and identify the proposed local fallback.
+
+Include:
+
+- The selected version and its user-visible compatibility reasoning.
+- The complete changelog body exactly as it will appear on GitHub, including the signing notice.
+- A concise list of audited changes excluded because users cannot observe them.
+- The pull request URL, a concise summary of its committed diff, and its check results.
+- The proposed tag and signing mode.
+- Any request to substitute local checks or local publishing for unavailable GitHub Actions.
+
+Paste the complete changelog into the approval request instead of linking only to the file. Ask the user to approve or reject that exact release. Do not merge the pull request, push the tag, dispatch a release workflow, create a GitHub Release, or upload assets before clear approval. A new invocation of this skill is not publication approval. Treat a direct response such as `approve` as authorization to merge and publish the reviewed release.
+
+Approval expires if the version, changelog, pull request diff, or signing mode changes. Present the revised approval packet and ask again before continuing.
+
+## 7. Merge the approved release
+
+After approval, confirm that the pull request diff and head SHA still match the approval packet and that all required checks still pass. Merge with the repository's allowed method. Prefer squash merge for this repository and do not delete the workspace branch.
+
+Use `gh pr view` and `gh pr merge --squash` as appropriate. If branch protection requires human review, report the pull request URL and wait instead of bypassing it.
 
 After merging, fetch `origin/main` again. Wait for the `CI` workflow on the exact release commit to pass. Record the full release SHA:
 
@@ -186,9 +228,9 @@ git fetch origin --prune --tags
 release_sha=$(git rev-parse origin/main)
 ```
 
-Do not tag a commit while its main-branch CI run is pending or failing because of code or tests. If GitHub Actions cannot run because of billing, quota, or a service outage, distinguish that infrastructure failure from a test failure. After the complete local preflight passes, ask for explicit authorization to substitute local CI and publish manually. Follow [manual publishing and release repair](references/manual-publishing.md) only after the user approves that fallback.
+Do not tag a commit while its main-branch CI run is pending or failing because of code or tests. If GitHub Actions cannot run because of billing, quota, or a service outage, distinguish that infrastructure failure from a test failure. After the complete local preflight passes, ask for explicit authorization to substitute local CI and publish manually unless the approved release packet already named that fallback. Follow [manual publishing and release repair](references/manual-publishing.md) only after the user approves that fallback.
 
-## 6. Create the release tag
+## 8. Create the release tag
 
 Create an annotated tag on the recorded `origin/main` SHA, then verify it before pushing:
 
@@ -200,7 +242,7 @@ git push origin "<tag>"
 
 The tag push is the release event. The workflow at `.github/workflows/release.yml` builds Apple Silicon and Intel artifacts and publishes the matching GitHub Release.
 
-## 7. Monitor the release workflow
+## 9. Monitor the release workflow
 
 Find the `Release` workflow run for both the target tag and recorded SHA. Do not assume the newest run belongs to this release. Watch it until completion:
 
@@ -214,7 +256,7 @@ If the run fails, inspect it with `gh run view <run-id> --log-failed`. Rerun fai
 
 If the workflow cannot run because of billing, quota, or a service outage, and the user authorizes a manual release, follow [manual publishing and release repair](references/manual-publishing.md). A manual release must meet the same architecture, signing, packaging, notes, and verification requirements as the workflow.
 
-## 8. Normalize and verify the published release
+## 10. Normalize and verify the published release
 
 Replace generated release notes with the prepared Common Changelog body:
 
