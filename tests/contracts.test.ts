@@ -92,10 +92,65 @@ describe("desktop contracts", () => {
     });
     expect(
       toEmailQuery(threadListInputSchema.parse({ view: "search", query: "from:team" })),
-    ).toEqual({ text: "from:team" });
+    ).toEqual({ expression: { type: "field", field: "from", value: "team" } });
     expect(toEmailQuery(threadListInputSchema.parse({ view: "label", label: "Projects" }))).toEqual(
       { folder: "Projects" },
     );
+  });
+
+  it("preserves search boolean operators and lowers provider-wide filters", () => {
+    expect(
+      toEmailQuery(
+        threadListInputSchema.parse({
+          view: "search",
+          query: "(from:amy OR from:david) is:unread -has:attachment after:2026-07-01",
+        }),
+      ),
+    ).toEqual({
+      read: false,
+      hasAttachment: false,
+      after: "2026-07-01T00:00:00.000Z",
+      expression: {
+        type: "or",
+        operands: [
+          { type: "field", field: "from", value: "amy" },
+          { type: "field", field: "from", value: "david" },
+        ],
+      },
+    });
+  });
+
+  it("resolves account filters independently for each provider request", () => {
+    const input = threadListInputSchema.parse({
+      view: "search",
+      query: "account:personal OR subject:shared",
+    });
+    expect(
+      toEmailQuery(input, {
+        id: "personal-account",
+        email: "me@example.com",
+        displayName: "Personal",
+        provider: "gmail",
+        status: "active",
+      }),
+    ).toEqual({});
+    expect(
+      toEmailQuery(input, {
+        id: "work-account",
+        email: "me@company.example",
+        displayName: "Work",
+        provider: "outlook",
+        status: "active",
+      }),
+    ).toEqual({ expression: { type: "field", field: "subject", value: "shared" } });
+    expect(
+      toEmailQuery(threadListInputSchema.parse({ view: "search", query: "account:missing" }), {
+        id: "work-account",
+        email: "me@company.example",
+        provider: "outlook",
+        status: "active",
+      }),
+    ).toEqual({ expression: { type: "none" } });
   });
 
   it("accepts cache-first mailbox refresh requests", () => {

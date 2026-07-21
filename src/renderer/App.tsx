@@ -111,6 +111,10 @@ export function App() {
     ],
     [accountId, bootstrap?.folders],
   );
+  const availableSearchAccounts = useMemo(
+    () => (bootstrap?.accounts ?? []).filter((account) => !accountId || account.id === accountId),
+    [accountId, bootstrap?.accounts],
+  );
 
   const loadBootstrap = useCallback(async () => {
     try {
@@ -680,6 +684,7 @@ export function App() {
         searchRef={searchRef}
         sync={bootstrap.sync}
         labels={availableLabels}
+        accounts={availableSearchAccounts}
         permanentDeleteAccountIds={permanentDeleteAccountIds}
         sidebarCollapsed={sidebarCollapsed}
         onSearchText={setSearchText}
