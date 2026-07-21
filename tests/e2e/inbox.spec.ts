@@ -594,6 +594,16 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }),
     ).toHaveCSS("-webkit-app-region", "no-drag");
     await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
+    await page
+      .locator(".thread-row")
+      .nth(1)
+      .click({ position: { x: 4, y: 4 } });
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday");
+    await page
+      .locator(".thread-row")
+      .first()
+      .click({ position: { x: 4, y: 4 } });
+    await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
     await expect(page.locator(".conversation-scroll")).toHaveCSS("padding-top", "14px");
     await expect(page.locator(".conversation-title")).toHaveCSS("margin-bottom", "12px");
     await page.locator(".conversation-title").hover();

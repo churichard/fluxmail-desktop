@@ -281,7 +281,7 @@ export function ThreadListPane(props: Props) {
   );
 }
 
-function ThreadRow({
+export function ThreadRow({
   thread,
   active,
   checked,
@@ -305,7 +305,10 @@ function ThreadRow({
   onStar(): void;
 }) {
   return (
-    <div className={`thread-row ${active ? "active" : ""} ${thread.unread ? "unread" : ""}`}>
+    <div
+      className={`thread-row ${active ? "active" : ""} ${thread.unread ? "unread" : ""}`}
+      onClick={onOpen}
+    >
       <SelectionCheckbox
         state={checked ? "checked" : "unchecked"}
         label={checked ? "Deselect conversation" : "Select conversation"}
@@ -315,7 +318,7 @@ function ThreadRow({
           onCheck();
         }}
       />
-      <button className="thread-open" onClick={onOpen}>
+      <button className="thread-open">
         <div className="thread-content">
           <div className="thread-topline">
             {thread.unread ? <span className="unread-dot" aria-hidden="true" /> : null}
