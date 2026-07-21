@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { AttachmentInput, Message, ModifyAction } from "@fluxmail/core";
+import type { AttachmentInput, Message, ModifyAction, Thread } from "@fluxmail/core";
 import { isEmailError } from "@fluxmail/core";
 import {
   buildForwardBody,
@@ -17,7 +18,9 @@ import type {
   ComposeInput,
   FolderInfo,
   LicenseActivationResult,
+  MailModifyResult,
   MailThread,
+  MailUndoResult,
   MailboxView,
   ModifyActionInput,
   ThreadListInput,
@@ -56,6 +59,9 @@ export class FluxmailRuntime {
   private imageRelayAccessDeniedByServer = false;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
+  private readonly providerMutationQueues = new Map<string, Promise<void>>();
+  private latestUndo?: { token: string; snapshots: Array<{ accountId: string; thread: Thread }> };
+  private undoableMutationSequence = 0;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -428,43 +434,61 @@ export class FluxmailRuntime {
   }
 
   async modify(
-    targets: Array<{ accountId: string; threadId: string }>,
+    rawTargets: Array<{ accountId: string; threadId: string }>,
     action: ModifyActionInput,
-  ): Promise<void> {
+    undoable = true,
+  ): Promise<MailModifyResult> {
+    const targets = uniqueThreadTargets(rawTargets);
+    let mutationId: string | undefined;
     this.cacheGeneration += 1;
     try {
+      const canUndo = undoable && action.type !== "delete" && action.type !== "discardDraft";
+      const undoableMutation = canUndo ? ++this.undoableMutationSequence : undefined;
+      const targetKeys = new Set(targets.map((target) => threadTargetKey(target)));
+      const supersedesCurrentUndo = this.latestUndo?.snapshots.some((snapshot) =>
+        targetKeys.has(
+          threadTargetKey({ accountId: snapshot.accountId, threadId: snapshot.thread.id }),
+        ),
+      );
+      if (canUndo || supersedesCurrentUndo) this.latestUndo = undefined;
       if (action.type === "discardDraft") {
         await this.discardDrafts(targets);
-        return;
+        return {};
       }
-      await this.measure("modify", async () => {
-        const completeThreads = await Promise.all(
-          targets.map(async (target) => {
-            const account = this.requireAccount(target.accountId);
-            const thread = await this.context.service.getThread(target.accountId, target.threadId);
-            this.options.cache.putThread(account, thread);
-            return { target, thread };
-          }),
+      const currentMutationId = `modify-${randomUUID()}`;
+      mutationId = currentMutationId;
+      const snapshots = targets.map((target) => ({
+        target,
+        row: this.options.cache.snapshotThread(target.accountId, target.threadId),
+      }));
+      this.options.cache.claimMutation(currentMutationId, targets);
+      for (const target of targets)
+        this.options.cache.applyActionIfOwned(
+          target.accountId,
+          target.threadId,
+          action,
+          currentMutationId,
         );
-        const snapshots = targets.map((target) => ({
-          target,
-          row: this.options.cache.snapshotThread(target.accountId, target.threadId),
-        }));
-        const groups = new Map<string, Set<string>>();
-        for (const { target, thread } of completeThreads) {
-          const ids = groups.get(target.accountId) ?? new Set<string>();
-          for (const message of thread.messages) ids.add(message.id);
-          groups.set(target.accountId, ids);
-        }
-        for (const target of targets)
-          this.options.cache.applyAction(target.accountId, target.threadId, action);
-        this.options.onCacheChanged();
-        const groupEntries = [...groups];
+      this.options.onCacheChanged();
+      return await this.measure("modify", async () => {
+        const groupEntries = groupThreadTargetsByAccount(targets);
         const mutationResults = await Promise.allSettled(
-          groupEntries.map(async ([accountId, ids]) => {
-            await this.context.service.modify(accountId, [...ids], toModifyAction(action));
-            return accountId;
-          }),
+          groupEntries.map(([accountId, accountTargets]) =>
+            this.enqueueProviderMutation(accountId, async () => {
+              const threads = await Promise.all(
+                accountTargets.map((target) =>
+                  this.context.service.getThread(target.accountId, target.threadId),
+                ),
+              );
+              const messageIds = [
+                ...new Set(
+                  threads.flatMap((thread) => thread.messages.map((message) => message.id)),
+                ),
+              ];
+              await this.context.service.modify(accountId, messageIds, toModifyAction(action));
+              return { accountId, threads };
+            }),
+          ),
         );
         const failedAccountIds = new Set(
           mutationResults.flatMap((result, index) =>
@@ -475,23 +499,33 @@ export class FluxmailRuntime {
           snapshots
             .filter((snapshot) => failedAccountIds.has(snapshot.target.accountId))
             .map(async (snapshot) => {
+              if (
+                !this.options.cache.ownsMutation(
+                  snapshot.target.accountId,
+                  snapshot.target.threadId,
+                  currentMutationId,
+                )
+              )
+                return;
               try {
                 const thread = await this.context.service.getThread(
                   snapshot.target.accountId,
                   snapshot.target.threadId,
                 );
-                this.options.cache.putThread(
+                this.options.cache.putThreadIfOwned(
                   this.requireAccount(snapshot.target.accountId),
                   thread,
+                  currentMutationId,
                 );
               } catch (error) {
                 if (isEmailError(error) && error.code === "not_found") {
-                  this.options.cache.finalizeDelete(
+                  this.options.cache.finalizeDeleteIfOwned(
                     snapshot.target.accountId,
                     snapshot.target.threadId,
+                    currentMutationId,
                   );
                 } else if (snapshot.row) {
-                  this.options.cache.restoreThread(snapshot.row);
+                  this.options.cache.restoreThreadIfOwned(snapshot.row, currentMutationId);
                 }
               }
             }),
@@ -501,7 +535,11 @@ export class FluxmailRuntime {
         );
         if (action.type === "delete") {
           for (const target of successfulTargets)
-            this.options.cache.finalizeDelete(target.accountId, target.threadId);
+            this.options.cache.finalizeDeleteIfOwned(
+              target.accountId,
+              target.threadId,
+              currentMutationId,
+            );
         } else {
           await Promise.allSettled(
             successfulTargets.map(async (target) => {
@@ -509,7 +547,11 @@ export class FluxmailRuntime {
                 target.accountId,
                 target.threadId,
               );
-              this.options.cache.putThread(this.requireAccount(target.accountId), thread);
+              this.options.cache.putThreadIfOwned(
+                this.requireAccount(target.accountId),
+                thread,
+                currentMutationId,
+              );
             }),
           );
         }
@@ -517,9 +559,129 @@ export class FluxmailRuntime {
         this.options.onCacheChanged();
         const failure = mutationResults.find((result) => result.status === "rejected");
         if (failure?.status === "rejected") throw failure.reason;
-        return { value: undefined };
+        const undoSnapshots = mutationResults.flatMap((result) =>
+          result.status === "fulfilled"
+            ? result.value.threads.flatMap((thread) =>
+                this.options.cache.ownsMutation(
+                  result.value.accountId,
+                  thread.id,
+                  currentMutationId,
+                )
+                  ? [{ accountId: result.value.accountId, thread }]
+                  : [],
+              )
+            : [],
+        );
+        const value: MailModifyResult = {};
+        if (undoableMutation === this.undoableMutationSequence && undoSnapshots.length) {
+          const token = `undo-${randomUUID()}`;
+          this.latestUndo = { token, snapshots: undoSnapshots };
+          value.undoToken = token;
+        }
+        return { value };
       });
     } finally {
+      if (mutationId) this.options.cache.releaseMutation(mutationId, targets);
+      this.cacheGeneration += 1;
+    }
+  }
+
+  async undo(token: string): Promise<MailUndoResult> {
+    const entry = this.latestUndo;
+    if (!entry || entry.token !== token) return { undone: false };
+    this.latestUndo = undefined;
+
+    const targets = entry.snapshots.map(({ accountId, thread }) => ({
+      accountId,
+      threadId: thread.id,
+    }));
+    const mutationId = `undo-${randomUUID()}`;
+    const rollbackRows = targets.map((target) => ({
+      target,
+      row: this.options.cache.snapshotThread(target.accountId, target.threadId),
+    }));
+    this.cacheGeneration += 1;
+    this.options.cache.claimMutation(mutationId, targets);
+    for (const snapshot of entry.snapshots) {
+      this.options.cache.putThreadIfOwned(
+        this.requireAccount(snapshot.accountId),
+        snapshot.thread,
+        mutationId,
+      );
+    }
+    this.options.onCacheChanged();
+
+    try {
+      return await this.measure("modify", async () => {
+        const snapshotGroups = groupSnapshotsByAccount(entry.snapshots);
+        const results = await Promise.allSettled(
+          snapshotGroups.map(([accountId, snapshots]) =>
+            this.enqueueProviderMutation(accountId, async () => {
+              const currentThreads = await Promise.all(
+                snapshots.map(({ thread }) => this.context.service.getThread(accountId, thread.id)),
+              );
+              const operations = buildSnapshotRestoreOperations(
+                currentThreads,
+                snapshots,
+                this.requireAccount(accountId).provider,
+              );
+              for (const operation of operations) {
+                await this.context.service.modify(
+                  accountId,
+                  operation.messageIds,
+                  operation.action,
+                );
+              }
+              return accountId;
+            }),
+          ),
+        );
+        const failedAccountIds = new Set(
+          results.flatMap((result, index) =>
+            result.status === "rejected" ? [snapshotGroups[index]![0]] : [],
+          ),
+        );
+
+        await Promise.all(
+          targets.map(async (target) => {
+            if (!this.options.cache.ownsMutation(target.accountId, target.threadId, mutationId))
+              return;
+            try {
+              const thread = await this.context.service.getThread(
+                target.accountId,
+                target.threadId,
+              );
+              this.options.cache.putThreadIfOwned(
+                this.requireAccount(target.accountId),
+                thread,
+                mutationId,
+              );
+            } catch (error) {
+              const rollback = rollbackRows.find(
+                (candidate) =>
+                  candidate.target.accountId === target.accountId &&
+                  candidate.target.threadId === target.threadId,
+              );
+              if (failedAccountIds.has(target.accountId) && rollback?.row) {
+                this.options.cache.restoreThreadIfOwned(rollback.row, mutationId);
+              } else if (isEmailError(error) && error.code === "not_found") {
+                this.options.cache.finalizeDeleteIfOwned(
+                  target.accountId,
+                  target.threadId,
+                  mutationId,
+                );
+              }
+            }
+          }),
+        );
+        await this.folders(true).catch(() => []);
+        this.options.onCacheChanged();
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+        return { value: { undone: true } };
+      });
+    } finally {
+      this.options.cache.releaseMutation(mutationId, targets);
       this.cacheGeneration += 1;
     }
   }
@@ -914,6 +1076,21 @@ export class FluxmailRuntime {
     }
   }
 
+  private enqueueProviderMutation<T>(accountId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.providerMutationQueues.get(accountId) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(work);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.providerMutationQueues.set(accountId, tail);
+    void tail.then(() => {
+      if (this.providerMutationQueues.get(accountId) === tail)
+        this.providerMutationQueues.delete(accountId);
+    });
+    return result;
+  }
+
   private assertStoreCompatible(): StoreCompatibility {
     const compatibility = this.fluxmail.inspectStoreCompatibility(
       this.context.config.dbPath,
@@ -974,6 +1151,132 @@ function toAccountInfo(
     status: account.status,
     canPermanentlyDelete,
   };
+}
+
+function uniqueThreadTargets(
+  targets: Array<{ accountId: string; threadId: string }>,
+): Array<{ accountId: string; threadId: string }> {
+  return [...new Map(targets.map((target) => [threadTargetKey(target), target])).values()];
+}
+
+function threadTargetKey(target: { accountId: string; threadId: string }): string {
+  return `${target.accountId}\u0000${target.threadId}`;
+}
+
+function groupThreadTargetsByAccount(
+  targets: Array<{ accountId: string; threadId: string }>,
+): Array<[string, Array<{ accountId: string; threadId: string }>]> {
+  const groups = new Map<string, Array<{ accountId: string; threadId: string }>>();
+  for (const target of targets) {
+    const group = groups.get(target.accountId) ?? [];
+    group.push(target);
+    groups.set(target.accountId, group);
+  }
+  return [...groups];
+}
+
+function groupSnapshotsByAccount(
+  snapshots: Array<{ accountId: string; thread: Thread }>,
+): Array<[string, Array<{ accountId: string; thread: Thread }>]> {
+  const groups = new Map<string, Array<{ accountId: string; thread: Thread }>>();
+  for (const snapshot of snapshots) {
+    const group = groups.get(snapshot.accountId) ?? [];
+    group.push(snapshot);
+    groups.set(snapshot.accountId, group);
+  }
+  return [...groups];
+}
+
+function buildSnapshotRestoreOperations(
+  currentThreads: Thread[],
+  snapshots: Array<{ accountId: string; thread: Thread }>,
+  provider: AccountInfo["provider"],
+): Array<{ messageIds: string[]; action: ModifyAction }> {
+  const operations = new Map<string, { messageIds: Set<string>; action: ModifyAction }>();
+  const add = (messageId: string, action: ModifyAction) => {
+    const key = JSON.stringify(action);
+    const operation = operations.get(key) ?? { messageIds: new Set<string>(), action };
+    operation.messageIds.add(messageId);
+    operations.set(key, operation);
+  };
+
+  const snapshotsByThreadId = new Map(
+    snapshots.map((snapshot) => [snapshot.thread.id, snapshot.thread]),
+  );
+  for (const currentThread of currentThreads) {
+    const snapshot = snapshotsByThreadId.get(currentThread.id);
+    if (!snapshot) continue;
+    const originalByMessageId = new Map(snapshot.messages.map((message) => [message.id, message]));
+    for (const current of currentThread.messages) {
+      const original = originalByMessageId.get(current.id);
+      if (!original) continue;
+      if (current.flags.read !== original.flags.read)
+        add(current.id, original.flags.read ? "markRead" : "markUnread");
+      if (current.flags.starred !== original.flags.starred)
+        add(current.id, original.flags.starred ? "star" : "unstar");
+
+      const currentLabels = restorableLabels(current.labels, provider);
+      const originalLabels = restorableLabels(original.labels, provider);
+      const labelsToAdd = [...originalLabels].filter((label) => !currentLabels.has(label)).sort();
+      const labelsToRemove = [...currentLabels]
+        .filter((label) => !originalLabels.has(label))
+        .sort();
+      if (labelsToAdd.length) add(current.id, { addLabels: labelsToAdd });
+      if (labelsToRemove.length) add(current.id, { removeLabels: labelsToRemove });
+
+      if (folderKey(current.folder) !== folderKey(original.folder)) {
+        for (const action of restoreFolderActions(current.folder, original.folder))
+          add(current.id, action);
+      }
+    }
+  }
+  return [...operations.values()].map(({ messageIds, action }) => ({
+    messageIds: [...messageIds],
+    action,
+  }));
+}
+
+const GMAIL_SYSTEM_LABELS = new Set([
+  "chat",
+  "draft",
+  "drafts",
+  "important",
+  "inbox",
+  "sent",
+  "spam",
+  "starred",
+  "trash",
+  "unread",
+]);
+
+function restorableLabels(
+  labels: string[] | undefined,
+  provider: AccountInfo["provider"],
+): Set<string> {
+  return new Set(
+    (labels ?? []).filter(
+      (label) => provider !== "gmail" || !GMAIL_SYSTEM_LABELS.has(label.toLowerCase()),
+    ),
+  );
+}
+
+function folderKey(folder: Message["folder"]): string {
+  if (!folder) return "archive";
+  return (folder.role ?? folder.id ?? folder.name).toLowerCase();
+}
+
+function restoreFolderActions(
+  current: Message["folder"],
+  original: Message["folder"],
+): ModifyAction[] {
+  const desired = folderKey(original);
+  if (folderKey(current) === "trash" && desired !== "trash") {
+    if (desired === "inbox") return ["untrash"];
+    return ["untrash", ...restoreFolderActions(undefined, original)];
+  }
+  if (desired === "trash") return ["trash"];
+  if (desired === "archive" || desired === "all") return ["archive"];
+  return [{ move: original?.id ?? original?.role ?? original?.name ?? desired }];
 }
 
 function toModifyAction(action: ModifyActionInput): ModifyAction {

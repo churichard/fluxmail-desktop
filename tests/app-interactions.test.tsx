@@ -233,8 +233,8 @@ describe("App thread navigation", () => {
       starred: true,
     };
     let finishModify!: () => void;
-    const pendingModify = new Promise<void>((resolve) => {
-      finishModify = resolve;
+    const pendingModify = new Promise<{ undoToken?: string }>((resolve) => {
+      finishModify = () => resolve({});
     });
     installApi(
       [inbox],
@@ -266,8 +266,8 @@ describe("App thread navigation", () => {
     const first = thread("thread-1", "First conversation", false);
     const second = thread("thread-2", "Second conversation", false);
     let finishArchive!: () => void;
-    const pendingArchive = new Promise<void>((resolve) => {
-      finishArchive = resolve;
+    const pendingArchive = new Promise<{ undoToken?: string }>((resolve) => {
+      finishArchive = () => resolve({});
     });
     installApi(
       [first, second],
@@ -293,8 +293,8 @@ describe("App thread navigation", () => {
   it("keeps a thread opened in another mailbox selected when an archive finishes", async () => {
     const current = thread("thread-1", "Current conversation", false);
     let finishArchive!: () => void;
-    const pendingArchive = new Promise<void>((resolve) => {
-      finishArchive = resolve;
+    const pendingArchive = new Promise<{ undoToken?: string }>((resolve) => {
+      finishArchive = () => resolve({});
     });
     installApi(
       [current],
@@ -319,8 +319,8 @@ describe("App thread navigation", () => {
   it("updates a thread opened in another mailbox when a star finishes", async () => {
     const current = thread("thread-1", "Current conversation", false);
     let finishStar!: () => void;
-    const pendingStar = new Promise<void>((resolve) => {
-      finishStar = resolve;
+    const pendingStar = new Promise<{ undoToken?: string }>((resolve) => {
+      finishStar = () => resolve({});
     });
     installApi(
       [current],
@@ -339,6 +339,69 @@ describe("App thread navigation", () => {
     await act(async () => finishStar());
 
     expect(screen.getByRole("button", { name: "Unstar conversation" })).toBeTruthy();
+  });
+
+  it("offers one-click undo after a conversation action", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.undo).toHaveBeenCalledWith({ token: "undo-1" }),
+    );
+    expect(screen.getByText("Action undone")).toBeTruthy();
+  });
+
+  it("runs the latest undo with Cmd+Z outside an editor", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.undo).toHaveBeenCalledWith({ token: "undo-1" }),
+    );
+  });
+
+  it("clears undo when opening the same unread conversation marks it read", async () => {
+    const current = { ...thread("thread-1", "Current conversation", false), unread: true };
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify)
+      .mockResolvedValueOnce({ undoToken: "undo-1" })
+      .mockResolvedValueOnce({});
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    await waitFor(() => expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    expect(window.fluxmail.mail.undo).not.toHaveBeenCalled();
   });
 
   it("does not run mailbox shortcuts from compose controls", async () => {
@@ -472,7 +535,9 @@ function installApi(
         getThread,
         modify: vi.fn(async () => {
           if (options.threadsAfterModify) visibleThreads = options.threadsAfterModify;
+          return {};
         }),
+        undo: vi.fn(async () => ({ undone: true })),
       },
       attachments: {
         prepare: vi.fn(async () => []),

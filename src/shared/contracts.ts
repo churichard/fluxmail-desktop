@@ -156,7 +156,17 @@ export type ModifyActionInput = z.infer<typeof modifyActionSchema>;
 export const mailModifyInputSchema = z.object({
   targets: z.array(threadTargetSchema).min(1),
   action: modifyActionSchema,
+  undoable: z.boolean().optional(),
 });
+
+export const mailModifyResultSchema = z.object({
+  undoToken: z.string().optional(),
+});
+export type MailModifyResult = z.infer<typeof mailModifyResultSchema>;
+
+export const mailUndoInputSchema = z.object({ token: z.string() });
+export const mailUndoResultSchema = z.object({ undone: z.boolean() });
+export type MailUndoResult = z.infer<typeof mailUndoResultSchema>;
 
 export const composeAttachmentSchema = z.object({
   token: z.string(),
@@ -386,7 +396,9 @@ export interface FluxmailDesktopApi {
     modify(input: {
       targets: Array<z.infer<typeof threadTargetSchema>>;
       action: ModifyActionInput;
-    }): Promise<void>;
+      undoable?: boolean;
+    }): Promise<MailModifyResult>;
+    undo(input: z.infer<typeof mailUndoInputSchema>): Promise<MailUndoResult>;
     forward(input: {
       target: z.infer<typeof threadTargetSchema>;
       messageId: string;
@@ -459,6 +471,7 @@ export const IPC = {
   mailSearch: "fluxmail:mail:search",
   mailThread: "fluxmail:mail:thread",
   mailModify: "fluxmail:mail:modify",
+  mailUndo: "fluxmail:mail:undo",
   mailForward: "fluxmail:mail:forward",
   draftSave: "fluxmail:draft:save",
   draftDelete: "fluxmail:draft:delete",

@@ -116,6 +116,12 @@ export class MailCache {
         account_id TEXT PRIMARY KEY,
         initialized_at INTEGER NOT NULL
       );
+      CREATE TEMP TABLE IF NOT EXISTS thread_mutation_owners (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        mutation_id TEXT NOT NULL,
+        PRIMARY KEY (account_id, thread_id)
+      );
     `);
     const storedVersion = Number(
       (
@@ -470,8 +476,58 @@ export class MailCache {
       .get(accountId, threadId) as CachedThreadRow | undefined;
   }
 
+  claimMutation(mutationId: string, targets: Array<{ accountId: string; threadId: string }>): void {
+    const claim = this.db.prepare(
+      `INSERT INTO thread_mutation_owners(account_id, thread_id, mutation_id)
+       VALUES (?, ?, ?)
+       ON CONFLICT(account_id, thread_id) DO UPDATE SET mutation_id = excluded.mutation_id`,
+    );
+    this.db.transaction(() => {
+      for (const target of targets) claim.run(target.accountId, target.threadId, mutationId);
+    })();
+  }
+
+  ownsMutation(accountId: string, threadId: string, mutationId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          `SELECT 1 FROM thread_mutation_owners
+           WHERE account_id = ? AND thread_id = ? AND mutation_id = ?`,
+        )
+        .get(accountId, threadId, mutationId),
+    );
+  }
+
+  releaseMutation(
+    mutationId: string,
+    targets: Array<{ accountId: string; threadId: string }>,
+  ): void {
+    const release = this.db.prepare(
+      `DELETE FROM thread_mutation_owners
+       WHERE account_id = ? AND thread_id = ? AND mutation_id = ?`,
+    );
+    this.db.transaction(() => {
+      for (const target of targets) release.run(target.accountId, target.threadId, mutationId);
+    })();
+  }
+
   restoreThread(row: CachedThreadRow): void {
     this.writeThread(row);
+  }
+
+  restoreThreadIfOwned(row: CachedThreadRow, mutationId: string): boolean {
+    if (!this.ownsMutation(row.account_id, row.thread_id, mutationId)) return false;
+    this.writeThread(row);
+    return true;
+  }
+
+  putThreadIfOwned(
+    account: AccountInfo,
+    thread: Thread,
+    mutationId: string,
+  ): MailThread | undefined {
+    if (!this.ownsMutation(account.id, thread.id, mutationId)) return undefined;
+    return this.putThread(account, thread);
   }
 
   applyAction(accountId: string, threadId: string, action: ModifyActionInput): void {
@@ -500,8 +556,25 @@ export class MailCache {
     if (action.type === "delete") this.hideThread(accountId, threadId);
   }
 
+  applyActionIfOwned(
+    accountId: string,
+    threadId: string,
+    action: ModifyActionInput,
+    mutationId: string,
+  ): boolean {
+    if (!this.ownsMutation(accountId, threadId, mutationId)) return false;
+    this.applyAction(accountId, threadId, action);
+    return true;
+  }
+
   finalizeDelete(accountId: string, threadId: string): void {
     this.deleteThread(accountId, threadId);
+  }
+
+  finalizeDeleteIfOwned(accountId: string, threadId: string, mutationId: string): boolean {
+    if (!this.ownsMutation(accountId, threadId, mutationId)) return false;
+    this.deleteThread(accountId, threadId);
+    return true;
   }
 
   deleteDraft(account: AccountInfo, draftId: string): void {

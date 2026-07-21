@@ -50,6 +50,7 @@ export function App() {
   const [quickReplyDiscardVersion, setQuickReplyDiscardVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [actionNotice, setActionNotice] = useState<string>();
   const [startupError, setStartupError] = useState<AppError>();
   const [sidebarWidth, setSidebarWidth] = useState(228);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -60,6 +61,8 @@ export function App() {
   const listRequest = useRef(0);
   const openThreadRequest = useRef(0);
   const quickReplyDirty = useRef(false);
+  const latestUndo = useRef<{ token: string; targetKeys: Set<string> } | undefined>(undefined);
+  const modifySequence = useRef(0);
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
   const mailboxContextRef = useRef(mailboxContext);
@@ -335,12 +338,36 @@ export function App() {
       .catch(() => undefined);
   }, [confirmQuickReplyNavigation, searchText, submittedSearch]);
 
+  const undoLatest = useCallback(async () => {
+    const entry = latestUndo.current;
+    if (!entry) return;
+    latestUndo.current = undefined;
+    setActionNotice(undefined);
+    try {
+      const result = await window.fluxmail.mail.undo({ token: entry.token });
+      if (!result.undone) return;
+      setActionNotice("Action undone");
+      await Promise.all([
+        loadBootstrap(),
+        loadThreads({ quiet: true, preservePages: true, preserveSelection: true }),
+      ]);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }, [loadBootstrap, loadThreads]);
+
   const modify = useCallback(
     async (action: ModifyActionInput, explicit?: ThreadSummary[]) => {
       const targets = explicit ?? threads.filter((thread) => selection.has(threadKey(thread)));
       if (!targets.length) return;
       if (action.type === "delete") {
         if (!window.confirm(permanentDeletePrompt(targets.length))) return;
+      }
+      const canUndo = action.type !== "delete" && action.type !== "discardDraft";
+      const request = canUndo ? ++modifySequence.current : modifySequence.current;
+      if (canUndo) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
       }
       const optimisticRemoval = shouldOptimisticallyRemoveFromView(
         submittedSearch ? "search" : view,
@@ -374,13 +401,17 @@ export function App() {
         );
       }
       try {
-        await window.fluxmail.mail.modify({
+        const result = await window.fluxmail.mail.modify({
           targets: targets.map((thread) => ({
             accountId: thread.accountId,
             threadId: thread.id,
           })),
           action,
         });
+        if (result.undoToken && request === modifySequence.current) {
+          latestUndo.current = { token: result.undoToken, targetKeys };
+          setActionNotice(actionSuccessMessage(action, targets.length));
+        }
         if (!optimisticRemoval && mailboxContext === mailboxContextRef.current)
           setSelection(new Set());
         setSelectedThread((current) => {
@@ -480,10 +511,15 @@ export function App() {
           current ? adjustUnreadCount(current, thread.accountId, -1) : current,
         );
       }
+      if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
+      }
       void window.fluxmail.mail
         .modify({
           targets: [{ accountId: thread.accountId, threadId: thread.id }],
           action: { type: "markRead" },
+          undoable: false,
         })
         .catch((caught) => {
           setThreads((current) =>
@@ -527,6 +563,11 @@ export function App() {
         return;
       }
       if (editing) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void undoLatest();
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "[") {
         event.preventDefault();
@@ -591,6 +632,7 @@ export function App() {
     settingsOpen,
     submittedSearch,
     threads,
+    undoLatest,
     view,
   ]);
 
@@ -747,6 +789,18 @@ export function App() {
             ×
           </button>
         </div>
+      ) : actionNotice ? (
+        <div className="toast" role="status">
+          <span>{actionNotice}</span>
+          {latestUndo.current ? (
+            <button className="toast-action" onClick={() => void undoLatest()}>
+              Undo
+            </button>
+          ) : null}
+          <button onClick={() => setActionNotice(undefined)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -877,6 +931,25 @@ export function shouldClearSelectedThread(view: MailboxView, action: ModifyActio
   return (
     shouldOptimisticallyRemoveFromView(view, action) || ["trash", "delete"].includes(action.type)
   );
+}
+
+export function actionSuccessMessage(action: ModifyActionInput, count: number): string {
+  const conversation = count === 1 ? "Conversation" : `${count} conversations`;
+  if (action.type === "markRead")
+    return count === 1 ? "Marked as read" : `${conversation} marked as read`;
+  if (action.type === "markUnread")
+    return count === 1 ? "Marked as unread" : `${conversation} marked as unread`;
+  if (action.type === "star") return count === 1 ? "Starred" : `${conversation} starred`;
+  if (action.type === "unstar") return count === 1 ? "Unstarred" : `${conversation} unstarred`;
+  if (action.type === "archive") return count === 1 ? "Archived" : `${conversation} archived`;
+  if (action.type === "trash")
+    return count === 1 ? "Moved to Trash" : `${conversation} moved to Trash`;
+  if (action.type === "untrash")
+    return count === 1 ? "Moved to Inbox" : `${conversation} moved to Inbox`;
+  if (action.type === "move") return count === 1 ? "Conversation moved" : `${conversation} moved`;
+  if (action.type === "addLabels" || action.type === "removeLabels")
+    return count === 1 ? "Labels updated" : `Labels updated for ${conversation.toLowerCase()}`;
+  return count === 1 ? "Conversation updated" : `${conversation} updated`;
 }
 
 export function shouldForceProviderSearchAfterMutation(query: string): boolean {

@@ -985,7 +985,13 @@ test("archives from a row and the email iframe without transferring focus", asyn
     await expect(page.locator(".thread-row").first()).toBeVisible();
     await expect(page.locator(".thread-open:focus")).toHaveCount(0);
 
-    const nextThread = page.locator(".thread-row").first();
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByText("Action undone")).toBeVisible();
+    await expect(
+      page.locator(".thread-row").filter({ hasText: "Welcome to Fluxmail" }),
+    ).toBeVisible();
+
+    const nextThread = page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" });
     await nextThread.locator(".thread-open").click();
 
     const messageFrame = page.frameLocator('iframe[title="Email message"]');

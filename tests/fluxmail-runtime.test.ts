@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Message } from "@fluxmail/core";
+import type { Message, ModifyAction } from "@fluxmail/core";
 import Database from "better-sqlite3";
 import {
   encryptString,
@@ -854,6 +854,213 @@ describe("FluxmailRuntime thread loading", () => {
 });
 
 describe("FluxmailRuntime conversation mutations", () => {
+  it("does not let an older failed mutation roll back a newer action", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    cache.putMessages(account, [structuredClone(remote)]);
+    let rejectOlder!: (error: Error) => void;
+    let finishNewer!: () => void;
+    const olderProviderCall = new Promise<void>((_resolve, reject) => {
+      rejectOlder = reject;
+    });
+    const newerProviderCall = new Promise<void>((resolve) => {
+      finishNewer = resolve;
+    });
+    const modify = vi
+      .fn()
+      .mockImplementationOnce(() => olderProviderCall)
+      .mockImplementationOnce(async () => {
+        remote.flags.starred = true;
+        await newerProviderCall;
+      });
+    const getThread = vi.fn(async () => ({
+      id: remote.threadId,
+      subject: remote.subject,
+      messages: [structuredClone(remote)],
+    }));
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: { getThread, modify },
+      onCacheChanged: vi.fn(),
+    });
+
+    const older = runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "markRead",
+    });
+    await vi.waitFor(() => expect(modify).toHaveBeenCalledTimes(1));
+    const newer = runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "star",
+    });
+
+    expect(cache.snapshotThread(account.id, remote.threadId)).toMatchObject({
+      unread: 0,
+      starred: 1,
+    });
+    rejectOlder(new Error("The older action failed"));
+    await expect(older).rejects.toThrow("The older action failed");
+    await vi.waitFor(() => expect(modify).toHaveBeenCalledTimes(2));
+
+    expect(cache.snapshotThread(account.id, remote.threadId)).toMatchObject({
+      unread: 0,
+      starred: 1,
+    });
+    finishNewer();
+    await newer;
+
+    expect(cache.snapshotThread(account.id, remote.threadId)).toMatchObject({
+      unread: 1,
+      starred: 1,
+    });
+    expect(getThread).toHaveBeenCalledTimes(3);
+  });
+
+  it("undoes only the most recent action and consumes its token", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const modify = vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+      if (action === "star") remote.flags.starred = true;
+      if (action === "unstar") remote.flags.starred = false;
+      if (action === "markRead") remote.flags.read = true;
+      if (action === "markUnread") remote.flags.read = false;
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const first = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "star",
+    });
+    const second = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "markRead",
+    });
+
+    expect(first.undoToken).toBeTruthy();
+    expect(second.undoToken).toBeTruthy();
+    await expect(runtime.undo(first.undoToken!)).resolves.toEqual({ undone: false });
+    await expect(runtime.undo(second.undoToken!)).resolves.toEqual({ undone: true });
+    await expect(runtime.undo(second.undoToken!)).resolves.toEqual({ undone: false });
+    expect(remote.flags).toMatchObject({ read: false, starred: true });
+    expect(cache.snapshotThread(account.id, remote.threadId)).toMatchObject({
+      unread: 1,
+      starred: 1,
+    });
+    expect(modify.mock.calls.map((call) => call[2])).toEqual(["star", "markRead", "markUnread"]);
+  });
+
+  it("restores Gmail flags without modifying their system labels", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({
+      id: "message-1",
+      threadId: "thread-1",
+      labels: ["INBOX", "UNREAD"],
+    });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const modify = vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+      if (action === "markRead") {
+        remote.flags.read = true;
+        remote.labels = ["INBOX"];
+      }
+      if (action === "markUnread") {
+        remote.flags.read = false;
+        remote.labels = ["INBOX", "UNREAD"];
+      }
+      if (typeof action === "object") throw new Error("Gmail rejected a system-label change");
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "markRead",
+    });
+
+    await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: true });
+    expect(modify.mock.calls.map((call) => call[2])).toEqual(["markRead", "markUnread"]);
+  });
+
+  it("keeps the latest requested undo when account mutations finish out of order", async () => {
+    const secondAccount: AccountInfo = {
+      id: "account-2",
+      email: "other@example.com",
+      provider: "outlook",
+      status: "active",
+      canPermanentlyDelete: false,
+    };
+    const cache = createCache();
+    const firstRemote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    const secondRemote = inboxMessage({
+      id: "message-2",
+      threadId: "thread-2",
+      accountId: secondAccount.id,
+    });
+    cache.putMessages(account, [structuredClone(firstRemote)]);
+    cache.putMessages(secondAccount, [structuredClone(secondRemote)]);
+    let finishFirst!: () => void;
+    const firstProviderCall = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const modify = vi.fn(
+      async (accountId: string, _ids: string[], action: ModifyAction): Promise<void> => {
+        if (accountId === account.id) {
+          await firstProviderCall;
+          if (action === "markRead") firstRemote.flags.read = true;
+          return;
+        }
+        if (action === "star") secondRemote.flags.starred = true;
+        if (action === "unstar") secondRemote.flags.starred = false;
+      },
+    );
+    const getThread = vi.fn(async (accountId: string, threadId: string) => {
+      const remote = accountId === account.id ? firstRemote : secondRemote;
+      expect(threadId).toBe(remote.threadId);
+      return {
+        id: remote.threadId,
+        subject: remote.subject,
+        messages: [structuredClone(remote)],
+      };
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: { getThread, modify },
+      accounts: [account, secondAccount],
+      onCacheChanged: vi.fn(),
+    });
+
+    const first = runtime.modify([{ accountId: account.id, threadId: firstRemote.threadId }], {
+      type: "markRead",
+    });
+    await vi.waitFor(() => expect(modify).toHaveBeenCalledTimes(1));
+    const second = await runtime.modify(
+      [{ accountId: secondAccount.id, threadId: secondRemote.threadId }],
+      { type: "star" },
+    );
+    expect(second.undoToken).toBeTruthy();
+
+    finishFirst();
+    await expect(first).resolves.toEqual({});
+    await expect(runtime.undo(second.undoToken!)).resolves.toEqual({ undone: true });
+    expect(secondRemote.flags.starred).toBe(false);
+  });
+
   it("does not let an older sync page overwrite a completed mutation", async () => {
     const cache = createCache();
     const unread = inboxMessage({ id: "message-1", threadId: "thread-1" });

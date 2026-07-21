@@ -412,6 +412,31 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("allows only the latest mutation owner to change or restore a thread", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [message({ id: "m1", threadId: "thread-a" })]);
+    const original = cache.snapshotThread(primary.id, "thread-a")!;
+    const target = { accountId: primary.id, threadId: "thread-a" };
+
+    cache.claimMutation("older", [target]);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "markRead" }, "older")).toBe(
+      true,
+    );
+    cache.claimMutation("newer", [target]);
+
+    expect(cache.restoreThreadIfOwned(original, "older")).toBe(false);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "star" }, "older")).toBe(false);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "star" }, "newer")).toBe(true);
+    cache.releaseMutation("older", [target]);
+
+    expect(cache.ownsMutation(primary.id, "thread-a", "newer")).toBe(true);
+    expect(cache.snapshotThread(primary.id, "thread-a")).toMatchObject({
+      unread: 0,
+      starred: 1,
+    });
+    cache.close();
+  });
+
   it("removes cached messages missing from an authoritative thread response", () => {
     const cache = createCache();
     const first = message({ id: "m1", threadId: "thread-a" });

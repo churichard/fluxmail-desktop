@@ -11,7 +11,9 @@ import type {
   BootstrapState,
   ComposeInput,
   LicenseActivationResult,
+  MailModifyResult,
   MailThread,
+  MailUndoResult,
   ModifyActionInput,
   ThreadListInput,
   ThreadPage,
@@ -113,6 +115,8 @@ export class FakeFluxmailRuntime {
 
   private connected = true;
   private messages = structuredClone(seedMessages);
+  private latestUndo?: { token: string; messages: Message[] };
+  private mutationSequence = 0;
   private licenseValue: BootstrapState["license"] = {
     plan: "pro",
     maxMembers: 1,
@@ -260,7 +264,14 @@ export class FakeFluxmailRuntime {
     };
   }
 
-  async modify(targets: Array<{ threadId: string }>, action: ModifyActionInput): Promise<void> {
+  async modify(
+    targets: Array<{ threadId: string }>,
+    action: ModifyActionInput,
+    undoable = true,
+  ): Promise<MailModifyResult> {
+    const canUndo = undoable && action.type !== "delete" && action.type !== "discardDraft";
+    if (canUndo) this.latestUndo = undefined;
+    const previousMessages = canUndo ? structuredClone(this.messages) : undefined;
     if (action.type === "archive") {
       const delay = Number(process.env.FLUXMAIL_DESKTOP_FAKE_ARCHIVE_DELAY_MS ?? 0);
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
@@ -295,6 +306,19 @@ export class FakeFluxmailRuntime {
       }
     }
     this.options.onCacheChanged();
+    if (!previousMessages) return {};
+    const token = `fake-undo-${++this.mutationSequence}`;
+    this.latestUndo = { token, messages: previousMessages };
+    return { undoToken: token };
+  }
+
+  async undo(token: string): Promise<MailUndoResult> {
+    if (!this.latestUndo || this.latestUndo.token !== token) return { undone: false };
+    const entry = this.latestUndo;
+    this.latestUndo = undefined;
+    this.messages = entry.messages;
+    this.options.onCacheChanged();
+    return { undone: true };
   }
 
   async saveDraft(input: ComposeInput): Promise<{ draftId: string; messageId: string }> {
