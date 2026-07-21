@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Message } from "@fluxmail/core";
+import type { EmailQuery, Message } from "@fluxmail/core";
 import Database from "better-sqlite3";
 import {
   encryptString,
@@ -428,7 +428,7 @@ describe("FluxmailRuntime thread loading", () => {
   });
 
   it("keeps provider search results that do not match cached summary text", async () => {
-    const listMessages = vi.fn(async () => ({
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({
       items: [
         inboxMessage({
           id: "attachment",
@@ -454,6 +454,87 @@ describe("FluxmailRuntime thread loading", () => {
     const cachedResult = await runtime.listThreads(input);
     expect(cachedResult.items.map((item) => item.id)).toEqual(["attachment-thread"]);
     expect(listMessages).toHaveBeenCalledOnce();
+    expect(listMessages.mock.calls[0]?.[1]).toEqual({ hasAttachment: true });
+  });
+
+  it("sends boolean search trees to the provider", async () => {
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({ items: [] }));
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.listThreads(
+      {
+        view: "search",
+        query: "from:amy OR (to:david AND NOT subject:status)",
+        pageSize: 100,
+      },
+      true,
+    );
+
+    expect(listMessages.mock.calls[0]?.[1]).toEqual({
+      expression: {
+        type: "or",
+        operands: [
+          { type: "field", field: "from", value: "amy" },
+          {
+            type: "and",
+            operands: [
+              { type: "field", field: "to", value: "david" },
+              {
+                type: "not",
+                operand: { type: "field", field: "subject", value: "status" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("skips providers excluded by account search filters", async () => {
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({ items: [] }));
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.listThreads(
+      { view: "search", query: "account:missing", pageSize: 100 },
+      true,
+    );
+
+    expect(result.items).toEqual([]);
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not let an excluded account hide the matching account's provider failure", async () => {
+    const personalAccount: AccountInfo = { ...account, displayName: "Personal" };
+    const workAccount: AccountInfo = {
+      id: "account-2",
+      email: "me@company.example",
+      displayName: "Work",
+      provider: "outlook",
+      status: "active",
+    };
+    const listMessages = vi.fn(async (_accountId: string) => {
+      throw new Error("Provider unavailable");
+    });
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      accounts: [personalAccount, workAccount],
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    await expect(
+      runtime.listThreads({ view: "search", query: "account:personal", pageSize: 100 }, true),
+    ).rejects.toThrow("Provider unavailable");
+    expect(listMessages).toHaveBeenCalledOnce();
+    expect(listMessages.mock.calls[0]?.[0]).toBe(personalAccount.id);
   });
 
   it("keeps cached threads when a forced refresh fails", async () => {

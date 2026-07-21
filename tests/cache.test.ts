@@ -301,6 +301,134 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("evaluates structured searches locally until provider results are initialized", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({
+        id: "matching",
+        threadId: "matching-thread",
+        from: { name: "Amy", email: "amy@example.com" },
+        to: [{ email: "finance@example.com" }],
+        subject: "Quarterly plan",
+        labels: ["Work"],
+        attachments: [
+          {
+            id: "attachment",
+            filename: "forecast.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 128,
+          },
+        ],
+      }),
+      message({
+        id: "excluded",
+        threadId: "excluded-thread",
+        from: { name: "Amy", email: "amy@example.com" },
+        subject: "Quarterly plan",
+        labels: ["Spam"],
+      }),
+      message({
+        id: "split-sender",
+        threadId: "split-thread",
+        from: { name: "Amy", email: "amy@example.com" },
+      }),
+      message({
+        id: "split-attachment",
+        threadId: "split-thread",
+        from: { name: "Bob", email: "bob@example.com" },
+        attachments: [
+          {
+            id: "split-file",
+            filename: "forecast.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 64,
+          },
+        ],
+      }),
+    ]);
+    const input = {
+      view: "search" as const,
+      query:
+        "(from:amy@example.com OR to:finance@example.com) has:attachment -label:spam filename:forecast.pdf",
+      resultSetKey: "search::structured",
+      offset: 0,
+      limit: 20,
+    };
+
+    expect(cache.listThreads(input).map((thread) => thread.id)).toEqual(["matching-thread"]);
+    expect(cache.countThreads(input)).toBe(1);
+
+    cache.setPageToken(primary.id, input.resultSetKey, undefined);
+    expect(cache.listThreads(input)).toEqual([]);
+    expect(cache.countThreads(input)).toBe(0);
+    cache.close();
+  });
+
+  it("treats missing optional fields as nonmatches before negating local filters", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({ id: "draft", threadId: "draft-thread", from: undefined, snippet: undefined }),
+    ]);
+    const input = {
+      view: "search" as const,
+      query: "-from:amy",
+      resultSetKey: "search::-from:amy",
+      offset: 0,
+      limit: 20,
+    };
+
+    expect(cache.listThreads(input).map((thread) => thread.id)).toEqual(["draft-thread"]);
+    expect(cache.countThreads(input)).toBe(1);
+    cache.close();
+  });
+
+  it("treats in:all as the cached all-mail scope", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({ id: "inbox", threadId: "inbox-thread" }),
+      message({
+        id: "spam",
+        threadId: "spam-thread",
+        folder: { id: "SPAM", name: "Spam", role: "spam" },
+      }),
+      message({
+        id: "trash",
+        threadId: "trash-thread",
+        folder: { id: "TRASH", name: "Trash", role: "trash" },
+      }),
+    ]);
+    const input = {
+      view: "search" as const,
+      query: "in:all",
+      resultSetKey: "search::in:all",
+      offset: 0,
+      limit: 20,
+    };
+
+    expect(cache.listThreads(input).map((thread) => thread.id)).toEqual(["inbox-thread"]);
+    expect(cache.countThreads(input)).toBe(1);
+    cache.close();
+  });
+
+  it("matches cached account filters by display name and provider", () => {
+    const cache = createCache();
+    const personal = { ...primary, displayName: "Personal" };
+    cache.putMessages(personal, [message({ id: "personal", threadId: "personal-thread" })]);
+    const baseInput = {
+      view: "search" as const,
+      resultSetKey: "search::account-alias",
+      accounts: [personal],
+      offset: 0,
+      limit: 20,
+    };
+
+    expect(
+      cache.listThreads({ ...baseInput, query: "account:personal" }).map((thread) => thread.id),
+    ).toEqual(["personal-thread"]);
+    expect(cache.countThreads({ ...baseInput, query: "account:gmail" })).toBe(1);
+    cache.close();
+  });
+
   it("matches labels exactly", () => {
     const cache = createCache();
     cache.putMessages(primary, [
