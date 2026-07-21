@@ -205,6 +205,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     return (
       <section className="reading-pane empty-reading">
         <LoaderCircle className="spin" size={22} />
+        <p role="status">Opening conversation...</p>
       </section>
     );
   const lastMessage = detail.messages.at(-1);

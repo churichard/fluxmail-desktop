@@ -13,9 +13,9 @@ describe("thread row activation", () => {
     const onOpen = vi.fn();
     const onCheck = vi.fn();
     const onMove = vi.fn();
-    const rendered = render(
+    const { container, getByRole } = render(
       createElement(ThreadRow, {
-        thread: thread(),
+        thread: testThread,
         active: false,
         checked: false,
         onOpen,
@@ -28,15 +28,15 @@ describe("thread row activation", () => {
       }),
     );
 
-    fireEvent.click(rendered.container.querySelector(".thread-row")!);
+    fireEvent.click(container.querySelector(".thread-row")!);
     expect(onOpen).toHaveBeenCalledOnce();
 
     onOpen.mockClear();
-    fireEvent.click(rendered.getByRole("button", { name: "Archive conversation" }));
+    fireEvent.click(getByRole("button", { name: "Archive conversation" }));
     expect(onMove).toHaveBeenCalledOnce();
     expect(onOpen).not.toHaveBeenCalled();
 
-    fireEvent.click(rendered.getByRole("checkbox", { name: "Select conversation" }));
+    fireEvent.click(getByRole("checkbox", { name: "Select conversation" }));
     expect(onCheck).toHaveBeenCalledOnce();
     expect(onOpen).not.toHaveBeenCalled();
   });
@@ -80,22 +80,20 @@ describe("bulk read action", () => {
   });
 });
 
-function thread(): ThreadSummary {
-  return {
-    id: "thread-1",
-    accountId: "account-1",
-    accountEmail: "me@example.com",
-    subject: "Subject",
-    senderName: "Sender",
-    senderEmail: "sender@example.com",
-    snippet: "Preview",
-    date: "2026-07-20T12:00:00Z",
-    unread: false,
-    starred: false,
-    draft: false,
-    hasAttachments: false,
-    messageCount: 1,
-    labels: [],
-    folderRoles: ["inbox"],
-  };
-}
+const testThread: ThreadSummary = {
+  id: "thread-1",
+  accountId: "account-1",
+  accountEmail: "me@example.com",
+  subject: "Subject",
+  senderName: "Sender",
+  senderEmail: "sender@example.com",
+  snippet: "Preview",
+  date: "2026-07-20T12:00:00Z",
+  unread: false,
+  starred: false,
+  draft: false,
+  hasAttachments: false,
+  messageCount: 1,
+  labels: [],
+  folderRoles: ["inbox"],
+};

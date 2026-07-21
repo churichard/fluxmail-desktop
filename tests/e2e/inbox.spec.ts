@@ -589,16 +589,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }),
     ).toHaveCSS("-webkit-app-region", "no-drag");
     await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
-    const secondRowBounds = await page.locator(".thread-row").nth(1).boundingBox();
-    expect(secondRowBounds).not.toBeNull();
-    await page.mouse.click(
-      secondRowBounds!.x + 4,
-      secondRowBounds!.y + secondRowBounds!.height / 2,
-    );
+    await page
+      .locator(".thread-row")
+      .nth(1)
+      .click({ position: { x: 4, y: 4 } });
     await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday");
-    const firstRowBounds = await page.locator(".thread-row").first().boundingBox();
-    expect(firstRowBounds).not.toBeNull();
-    await page.mouse.click(firstRowBounds!.x + 4, firstRowBounds!.y + firstRowBounds!.height / 2);
+    await page
+      .locator(".thread-row")
+      .first()
+      .click({ position: { x: 4, y: 4 } });
     await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
     await expect(page.locator(".conversation-scroll")).toHaveCSS("padding-top", "14px");
     await expect(page.locator(".conversation-title")).toHaveCSS("margin-bottom", "12px");

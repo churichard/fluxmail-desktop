@@ -26,6 +26,18 @@ afterEach(() => {
 });
 
 describe("ReadingPane", () => {
+  it("announces when a conversation is opening", () => {
+    const getThread = vi.fn(() => new Promise<MailThread>(() => undefined));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+
+    renderPane(summary());
+
+    expect(screen.getByRole("status").textContent).toBe("Opening conversation...");
+  });
+
   it("reloads an open conversation when its message count changes", async () => {
     const getThread = vi
       .fn<() => Promise<MailThread>>()
