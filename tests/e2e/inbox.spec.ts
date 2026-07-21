@@ -159,6 +159,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const sidebarNav = page.locator(".sidebar-nav");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("flex-shrink", "0");
     await expect(sidebarNav.locator(".nav-item").first()).toHaveCSS("height", "36px");
+    await expect(sidebarNav).toHaveCSS("scrollbar-width", "none");
     await sidebarNav.evaluate((element) => {
       let position = 0;
       Object.defineProperties(element, {
@@ -176,6 +177,8 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(page.locator(".sidebar-fade.bottom")).toBeVisible();
     await expect(page.locator(".sidebar-fade.top")).toHaveCount(0);
+    await page.locator(".sidebar-nav-wrap").hover();
+    await expect(page.locator(".sidebar-nav-wrap .overlay-scrollbar")).toHaveCSS("opacity", "1");
     await sidebarNav.evaluate((element) => {
       (element as HTMLElement).scrollTop = 100;
       element.dispatchEvent(new Event("scroll"));
@@ -316,7 +319,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(page.locator(".thread-header")).toHaveCSS("border-bottom-width", "0px");
     await expect(page.getByText("Today", { exact: true })).toBeVisible();
     await expect(page.locator(".thread-row").first().locator(".unread-dot")).toBeVisible();
-    await expect(page.locator(".thread-row").nth(1).locator(".unread-dot")).toHaveCount(0);
+    await expect(
+      page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" }).locator(".unread-dot"),
+    ).toHaveCount(0);
     const listDividerColor = await page
       .locator(".thread-row")
       .first()
@@ -413,9 +418,12 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
         ),
     ).toBe("drag");
     const draftsNav = page.locator(".sidebar .nav-item").filter({ hasText: "Drafts" });
-    await expect(
-      page.locator(".sidebar .nav-item").filter({ hasText: "Inbox" }).locator(".nav-count"),
-    ).toHaveText("1");
+    const inboxNavCount = page
+      .locator(".sidebar .nav-item")
+      .filter({ hasText: "Inbox" })
+      .locator(".nav-count");
+    await expect(inboxNavCount).toHaveText(/^\d+$/);
+    expect(Number(await inboxNavCount.textContent())).toBeGreaterThan(1);
     await expect(draftsNav.locator(".nav-count")).toHaveText("1");
     const inboxCountFits = await page
       .locator(".sidebar .nav-item")
@@ -499,7 +507,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       await page.locator(".thread-list").evaluate((node) => node.getBoundingClientRect().top),
     ).toBe(threadListTopBeforeSelection);
     await expect(selectAll).toHaveAttribute("aria-checked", "mixed");
-    await expect(page.getByRole("textbox", { name: "Search mail" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Search mail" })).toBeVisible();
     await expect(
       page.locator(".thread-header").getByRole("heading", { name: "Inbox" }),
     ).toHaveCount(0);
@@ -549,7 +557,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       name: "Clear selection",
     });
     await expect(clearSelection).toHaveAttribute("aria-checked", "true");
-    await expect(page.locator(".row-check.checked")).toHaveCount(2);
+    await expect(page.locator(".selection-count")).toHaveText("60 selected");
     await clearSelection.click();
     await expect(page.locator(".row-check.checked")).toHaveCount(0);
     await expect(
@@ -585,6 +593,16 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(
       page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }),
     ).toHaveCSS("-webkit-app-region", "no-drag");
+    await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
+    await page
+      .locator(".thread-row")
+      .nth(1)
+      .click({ position: { x: 4, y: 4 } });
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday");
+    await page
+      .locator(".thread-row")
+      .first()
+      .click({ position: { x: 4, y: 4 } });
     await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
     await expect(page.locator(".conversation-scroll")).toHaveCSS("padding-top", "14px");
     await expect(page.locator(".conversation-title")).toHaveCSS("margin-bottom", "12px");
@@ -698,6 +716,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       root.innerHTML = "<p>Welcome to Fluxmail</p>";
     });
 
+    const messageActions = page.locator(".reply-actions");
+    await expect(
+      messageActions.getByRole("button", { name: "Reply", exact: true }),
+    ).toHaveAttribute("aria-keyshortcuts", "R");
+    await expect(messageActions.getByRole("button", { name: "Reply all" })).toHaveCount(0);
+    await expect(messageActions.getByRole("button", { name: "Forward" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "F",
+    );
     await page.getByRole("button", { name: "Reply", exact: true }).click();
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
@@ -705,11 +732,44 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
     ).toHaveAttribute("aria-keyshortcuts", "Meta+U");
+    const replyPlaceholder = page.locator(".quick-reply .mail-editor-placeholder");
+    await expect(replyPlaceholder).toBeVisible();
+    await expect
+      .poll(() =>
+        replyPlaceholder.evaluate((element) =>
+          ((element as HTMLElement).offsetParent as HTMLElement | null)?.classList.contains(
+            "mail-editor",
+          ),
+        ),
+      )
+      .toBe(true);
+    const placeholderOffset = () =>
+      page.locator(".quick-reply .mail-editor").evaluate((editor) => {
+        const placeholder = editor.querySelector<HTMLElement>(".mail-editor-placeholder");
+        if (!placeholder) throw new Error("Reply placeholder is missing");
+        return placeholder.getBoundingClientRect().top - editor.getBoundingClientRect().top;
+      });
+    const placeholderOffsetBeforeScroll = await placeholderOffset();
+    await page.locator(".conversation-scroll").evaluate((element) => {
+      element.scrollTop = Math.max(0, element.scrollTop - 80);
+    });
+    expect(Math.abs((await placeholderOffset()) - placeholderOffsetBeforeScroll)).toBeLessThan(1);
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }),
     ).toBeVisible();
     await page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }).click();
     await expect(page.locator(".quick-reply .quoted-reply-content")).toBeVisible();
+    await expect(page.locator(".quick-reply .quoted-reply-meta")).toHaveText(/^On .+ wrote:$/);
+    await expect(page.locator(".quick-reply .quoted-reply-body")).toBeVisible();
+    await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
+
+    await page.keyboard.press("a");
+    await expect(page.locator(".quick-reply")).toHaveCount(0);
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
+
+    await page.keyboard.press("f");
+    await expect(page.locator(".quick-reply").getByRole("textbox", { name: "To" })).toBeVisible();
+    await expect(page.locator(".compose-dialog")).toHaveCount(0);
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
     await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
@@ -721,7 +781,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(page.getByText("Welcome to Fluxmail", { exact: true })).toHaveCount(0);
 
-    const search = page.getByRole("textbox", { name: "Search mail" });
+    const search = page.getByRole("combobox", { name: "Search mail" });
+    await search.fill("sub");
+    await expect(page.getByRole("option", { name: /subject:/ })).toBeVisible();
+    await search.press("Enter");
+    await expect(search).toHaveValue("subject:");
+    await search.fill("is:");
+    await page.getByRole("option", { name: /is:unread/ }).click();
+    await expect(search).toHaveValue("is:unread ");
     await search.fill("receipt");
     await search.press("Enter");
     await expect(page.getByText("Receipt for Tuesday", { exact: true })).toBeVisible();

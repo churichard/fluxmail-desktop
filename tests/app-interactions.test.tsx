@@ -54,42 +54,64 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   ),
 }));
 
-vi.mock("../src/renderer/components/ReadingPane", () => ({
-  ReadingPane: ({
-    thread,
-    onModify,
-    onQuickReplyDirtyChange,
-  }: {
-    thread?: ThreadSummary;
-    onModify(action: { type: "star" | "unstar" }): Promise<void>;
-    onQuickReplyDirtyChange(dirty: boolean): void;
-  }) => (
-    <section>
-      {thread ? `Reading ${thread.subject}` : "No conversation"}
-      {thread ? (
-        <>
-          <button onClick={() => onQuickReplyDirtyChange(true)}>Start quick reply</button>
-          <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
-            {thread.starred ? "Unstar conversation" : "Star conversation"}
-          </button>
-        </>
-      ) : null}
-    </section>
-  ),
-}));
+vi.mock("../src/renderer/components/ReadingPane", async () => {
+  const React = await import("react");
+  return {
+    ReadingPane: React.forwardRef(function MockReadingPane(
+      {
+        thread,
+        onModify,
+        onQuickReplyDirtyChange,
+      }: {
+        thread?: ThreadSummary;
+        onModify(action: { type: "star" | "unstar" }): Promise<void>;
+        onQuickReplyDirtyChange(dirty: boolean): void;
+      },
+      ref,
+    ) {
+      const [composerMode, setComposerMode] = React.useState<string>();
+      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode }));
+      return (
+        <section>
+          {thread ? `Reading ${thread.subject}` : "No conversation"}
+          {composerMode ? <span>Inline {composerMode}</span> : null}
+          {thread ? (
+            <>
+              <button onClick={() => onQuickReplyDirtyChange(true)}>Start quick reply</button>
+              <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
+                {thread.starred ? "Unstar conversation" : "Star conversation"}
+              </button>
+            </>
+          ) : null}
+        </section>
+      );
+    }),
+  };
+});
 
 vi.mock("../src/renderer/components/ComposeDialog", async () => {
   const React = await import("react");
   return {
-    ComposeDialog: React.forwardRef(({ seed }: { seed: { subject?: string } }, ref) => {
-      React.useImperativeHandle(ref, () => ({ close: async () => true }));
-      return (
-        <section role="dialog" aria-label="Compose">
-          {seed.subject}
-          <button>Compose action</button>
-        </section>
-      );
-    }),
+    ComposeDialog: React.forwardRef(
+      (
+        {
+          seed,
+        }: {
+          seed: { subject?: string; threadId?: string; replyToMessageId?: string };
+        },
+        ref,
+      ) => {
+        React.useImperativeHandle(ref, () => ({ close: async () => true }));
+        return (
+          <section role="dialog" aria-label="Compose">
+            {seed.subject}
+            <span data-testid="compose-thread-id">{seed.threadId}</span>
+            <span data-testid="compose-reply-target">{seed.replyToMessageId}</span>
+            <button>Compose action</button>
+          </section>
+        );
+      },
+    ),
   };
 });
 
@@ -179,6 +201,54 @@ describe("App thread navigation", () => {
     expect(screen.getByText(`Reading ${regular.subject}`)).toBeTruthy();
   });
 
+  it("opens a conversation when its stale draft flag has no matching draft", async () => {
+    const staleDraft = {
+      ...thread("thread-1", "Reply conversation", true),
+      folderRoles: ["inbox", "drafts"],
+    };
+    installApi(
+      [staleDraft],
+      vi.fn(async () => mailThread(staleDraft)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: staleDraft.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: staleDraft.subject }));
+
+    await screen.findByText(`Reading ${staleDraft.subject}`);
+    expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("restores the reply target when reopening a saved reply draft", async () => {
+    const savedReply = thread("thread-1", "Saved reply", true);
+    const detail = mailThread(savedReply);
+    const original = { ...detail.messages[0]!, id: "original-message" };
+    detail.messages = [
+      original,
+      {
+        ...original,
+        id: "draft-message",
+        draftId: "draft-1",
+        from: { email: "me@example.com" },
+        to: [{ email: "sender@example.com" }],
+        flags: { read: true, starred: false, draft: true },
+      },
+    ];
+    installApi(
+      [savedReply],
+      vi.fn(async () => detail),
+    );
+    installMatchMedia();
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: savedReply.subject }));
+
+    expect((await screen.findByTestId("compose-thread-id")).textContent).toBe(savedReply.id);
+    expect(screen.getByTestId("compose-reply-target").textContent).toBe(original.id);
+  });
+
   it("keeps an unsent quick reply when thread navigation is canceled", async () => {
     const first = thread("thread-1", "First conversation", false);
     const second = thread("thread-2", "Second conversation", false);
@@ -195,7 +265,7 @@ describe("App thread navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start quick reply" }));
     fireEvent.click(screen.getByRole("button", { name: second.subject }));
 
-    expect(confirmDiscard).toHaveBeenCalledWith("Discard this unsent reply?");
+    expect(confirmDiscard).toHaveBeenCalledWith("Discard this unsent message?");
     expect(screen.getByText(`Reading ${first.subject}`)).toBeTruthy();
 
     confirmDiscard.mockReturnValue(true);
@@ -416,11 +486,31 @@ describe("App thread navigation", () => {
 
     const conversation = screen.getByRole("button", { name: current.subject });
     fireEvent.click(conversation);
-    fireEvent.keyDown(conversation, { key: "r" });
+    fireEvent.keyDown(conversation, { key: "c" });
     const composeAction = await screen.findByRole("button", { name: "Compose action" });
     fireEvent.keyDown(composeAction, { key: "#" });
 
     expect(window.fluxmail.mail.modify).not.toHaveBeenCalled();
+  });
+
+  it("opens each message action in the inline composer from its shortcut", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    fireEvent.keyDown(window, { key: "r" });
+    expect(screen.getByText("Inline reply")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "a" });
+    expect(screen.getByText("Inline replyAll")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "f" });
+    expect(screen.getByText("Inline forward")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
   });
 
   it("runs mailbox shortcuts forwarded from the email iframe", async () => {

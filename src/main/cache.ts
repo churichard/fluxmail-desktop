@@ -9,6 +9,7 @@ import type {
   ModifyActionInput,
   ThreadSummary,
 } from "../shared/contracts";
+import { compileSearchSql } from "./search-sql";
 
 interface BodyCipher {
   encrypt(value: string): Buffer | undefined;
@@ -349,6 +350,7 @@ export class MailCache {
   listThreads(input: {
     view: MailboxView;
     accountIds?: string[];
+    accounts?: AccountInfo[];
     label?: string;
     query?: string;
     resultSetKey?: string;
@@ -384,13 +386,32 @@ export class MailCache {
       params.push(input.label);
     }
     if (input.resultSetKey) {
-      conditions.push(`EXISTS (
-        SELECT 1 FROM view_results
-        WHERE view_results.account_id = threads.account_id
-          AND view_results.thread_id = threads.thread_id
-          AND view_results.view_key = ?
-      )`);
-      params.push(input.resultSetKey);
+      const localSearch = input.query ? compileSearchSql(input.query, input.accounts) : undefined;
+      if (localSearch) {
+        conditions.push(`(
+          EXISTS (
+            SELECT 1 FROM view_results
+            WHERE view_results.account_id = threads.account_id
+              AND view_results.thread_id = threads.thread_id
+              AND view_results.view_key = ?
+          ) OR (
+            NOT EXISTS (
+              SELECT 1 FROM page_tokens
+              WHERE page_tokens.account_id = threads.account_id
+                AND page_tokens.view_key = ?
+            ) AND ${localSearch.sql}
+          )
+        )`);
+        params.push(input.resultSetKey, input.resultSetKey, ...localSearch.params);
+      } else {
+        conditions.push(`EXISTS (
+          SELECT 1 FROM view_results
+          WHERE view_results.account_id = threads.account_id
+            AND view_results.thread_id = threads.thread_id
+            AND view_results.view_key = ?
+        )`);
+        params.push(input.resultSetKey);
+      }
     } else if (input.query?.trim()) {
       const keys = this.searchKeys(input.query, input.limit * 3);
       if (!keys.length) return [];
@@ -408,6 +429,7 @@ export class MailCache {
   countThreads(input: {
     view: MailboxView;
     accountIds?: string[];
+    accounts?: AccountInfo[];
     label?: string;
     query?: string;
     resultSetKey?: string;
@@ -415,7 +437,7 @@ export class MailCache {
     if (input.query?.trim() && !input.resultSetKey)
       return this.listThreads({ ...input, offset: 0, limit: 1_000_000 }).length;
     const conditions: string[] = [];
-    const params: string[] = [];
+    const params: Array<string | number> = [];
     if (input.accountIds?.length) {
       conditions.push(`account_id IN (${input.accountIds.map(() => "?").join(", ")})`);
       params.push(...input.accountIds);
@@ -443,13 +465,32 @@ export class MailCache {
       params.push(input.label);
     }
     if (input.resultSetKey) {
-      conditions.push(`EXISTS (
-        SELECT 1 FROM view_results
-        WHERE view_results.account_id = threads.account_id
-          AND view_results.thread_id = threads.thread_id
-          AND view_results.view_key = ?
-      )`);
-      params.push(input.resultSetKey);
+      const localSearch = input.query ? compileSearchSql(input.query, input.accounts) : undefined;
+      if (localSearch) {
+        conditions.push(`(
+          EXISTS (
+            SELECT 1 FROM view_results
+            WHERE view_results.account_id = threads.account_id
+              AND view_results.thread_id = threads.thread_id
+              AND view_results.view_key = ?
+          ) OR (
+            NOT EXISTS (
+              SELECT 1 FROM page_tokens
+              WHERE page_tokens.account_id = threads.account_id
+                AND page_tokens.view_key = ?
+            ) AND ${localSearch.sql}
+          )
+        )`);
+        params.push(input.resultSetKey, input.resultSetKey, ...localSearch.params);
+      } else {
+        conditions.push(`EXISTS (
+          SELECT 1 FROM view_results
+          WHERE view_results.account_id = threads.account_id
+            AND view_results.thread_id = threads.thread_id
+            AND view_results.view_key = ?
+        )`);
+        params.push(input.resultSetKey);
+      }
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const row = this.db

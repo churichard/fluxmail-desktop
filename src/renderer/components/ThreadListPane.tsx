@@ -10,7 +10,6 @@ import {
   Paperclip,
   Pencil,
   RefreshCw,
-  Search,
   ShieldAlert,
   Star,
   Tag,
@@ -18,6 +17,7 @@ import {
   Undo2,
 } from "lucide-react";
 import type {
+  AccountInfo,
   MailboxView,
   ModifyActionInput,
   SyncState,
@@ -32,6 +32,7 @@ import {
 } from "../mail-actions";
 import { KEYBOARD_SHORTCUTS, type KeyboardShortcutHint } from "../shortcuts";
 import { IconButton, MenuButton, SelectionCheckbox } from "./Controls";
+import { MailSearchBox } from "./MailSearchBox";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 
 interface Props {
@@ -48,6 +49,7 @@ interface Props {
   searchRef: RefObject<HTMLInputElement | null>;
   sync: SyncState;
   labels: string[];
+  accounts: AccountInfo[];
   permanentDeleteAccountIds: ReadonlySet<string>;
   sidebarCollapsed: boolean;
   onSearchText(value: string): void;
@@ -117,27 +119,15 @@ export function ThreadListPane(props: Props) {
               </IconButton>
             </div>
           ) : null}
-          <form
-            className="search-box"
-            onSubmit={(event) => {
-              event.preventDefault();
-              props.onSearch();
-            }}
-          >
-            <Search size={16} />
-            <input
-              ref={props.searchRef}
-              value={props.searchText}
-              onChange={(event) => props.onSearchText(event.target.value)}
-              placeholder="Search mail"
-              aria-label="Search mail"
-            />
-            {props.searchText !== props.deferredSearch ? (
-              <LoaderCircle className="spin" size={14} />
-            ) : (
-              <kbd>⌘K</kbd>
-            )}
-          </form>
+          <MailSearchBox
+            value={props.searchText}
+            deferredValue={props.deferredSearch}
+            inputRef={props.searchRef}
+            accounts={props.accounts}
+            labels={props.labels}
+            onChange={props.onSearchText}
+            onSubmit={props.onSearch}
+          />
         </div>
         <div className={`title-row ${selectedThreads.length ? "selection-mode" : ""}`}>
           <SelectionCheckbox
@@ -281,7 +271,7 @@ export function ThreadListPane(props: Props) {
   );
 }
 
-function ThreadRow({
+export function ThreadRow({
   thread,
   active,
   checked,
@@ -305,7 +295,10 @@ function ThreadRow({
   onStar(): void;
 }) {
   return (
-    <div className={`thread-row ${active ? "active" : ""} ${thread.unread ? "unread" : ""}`}>
+    <div
+      className={`thread-row ${active ? "active" : ""} ${thread.unread ? "unread" : ""}`}
+      onClick={onOpen}
+    >
       <SelectionCheckbox
         state={checked ? "checked" : "unchecked"}
         label={checked ? "Deselect conversation" : "Select conversation"}
@@ -315,7 +308,7 @@ function ThreadRow({
           onCheck();
         }}
       />
-      <button className="thread-open" onClick={onOpen}>
+      <button className="thread-open">
         <div className="thread-content">
           <div className="thread-topline">
             {thread.unread ? <span className="unread-dot" aria-hidden="true" /> : null}

@@ -19,7 +19,11 @@ import type {
 } from "../shared/contracts";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadListPane } from "./components/ThreadListPane";
-import { ReadingPane } from "./components/ReadingPane";
+import {
+  ReadingPane,
+  type InlineComposerMode,
+  type ReadingPaneHandle,
+} from "./components/ReadingPane";
 import {
   ComposeDialog,
   type ComposeDialogHandle,
@@ -57,6 +61,7 @@ export function App() {
   const [listWidth, setListWidth] = useState(410);
   const searchRef = useRef<HTMLInputElement>(null);
   const composeDialogRef = useRef<ComposeDialogHandle>(null);
+  const readingPaneRef = useRef<ReadingPaneHandle>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
   const openThreadRequest = useRef(0);
@@ -108,6 +113,10 @@ export function App() {
       ),
     ],
     [accountId, bootstrap?.folders],
+  );
+  const availableSearchAccounts = useMemo(
+    () => (bootstrap?.accounts ?? []).filter((account) => !accountId || account.id === accountId),
+    [accountId, bootstrap?.accounts],
   );
 
   const loadBootstrap = useCallback(async () => {
@@ -283,14 +292,6 @@ export function App() {
       .catch(() => undefined);
   }, [accountId, bootstrap?.accounts, confirmQuickReplyNavigation]);
 
-  const openSeededCompose = useCallback(
-    (seed: ComposeSeed) => {
-      if (!confirmQuickReplyNavigation()) return;
-      setComposeSeed(seed);
-    },
-    [confirmQuickReplyNavigation],
-  );
-
   const changeAccount = useCallback(
     (nextAccountId?: string) => {
       if (nextAccountId === accountId || !confirmQuickReplyNavigation()) return;
@@ -458,6 +459,7 @@ export function App() {
         thread.draft || !selectedThread || threadKey(selectedThread) !== threadKey(thread);
       if (changesThread && !confirmQuickReplyNavigation()) return;
       const request = ++openThreadRequest.current;
+      let threadToOpen = thread;
       if (thread.draft) {
         try {
           const detail = await window.fluxmail.mail.getThread({
@@ -466,49 +468,66 @@ export function App() {
           });
           if (request !== openThreadRequest.current) return;
           const draft = [...detail.messages].reverse().find((message) => message.flags.draft);
-          if (!draft?.draftId) throw new Error("Fluxmail could not find this draft.");
-          const attachments = draft.attachments?.length
-            ? await window.fluxmail.attachments.prepare({
-                accountId: thread.accountId,
-                messageId: draft.id,
-                attachments: draft.attachments,
-              })
-            : [];
-          if (request !== openThreadRequest.current) {
-            if (attachments.length)
-              void window.fluxmail.attachments
-                .release(attachments.map((attachment) => attachment.token))
-                .catch(() => undefined);
+          if (!draft?.draftId) {
+            threadToOpen = { ...thread, draft: false };
+            setThreads((current) =>
+              current.map((candidate) =>
+                threadKey(candidate) === threadKey(thread)
+                  ? { ...candidate, draft: false }
+                  : candidate,
+              ),
+            );
+          } else {
+            const replyTarget = [...detail.messages]
+              .reverse()
+              .find((message) => !message.flags.draft);
+            const attachments = draft.attachments?.length
+              ? await window.fluxmail.attachments.prepare({
+                  accountId: thread.accountId,
+                  messageId: draft.id,
+                  attachments: draft.attachments,
+                })
+              : [];
+            if (request !== openThreadRequest.current) {
+              if (attachments.length)
+                void window.fluxmail.attachments
+                  .release(attachments.map((attachment) => attachment.token))
+                  .catch(() => undefined);
+              return;
+            }
+            setComposeSeed({
+              accountId: thread.accountId,
+              draftId: draft.draftId,
+              to: formatAddresses(draft.to),
+              cc: formatAddresses(draft.cc),
+              bcc: formatAddresses(draft.bcc),
+              subject: draft.subject,
+              initialHtml: draft.body?.html,
+              initialText: draft.body?.text,
+              ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
+              initialAttachments: attachments,
+            });
             return;
           }
-          setComposeSeed({
-            accountId: thread.accountId,
-            draftId: draft.draftId,
-            to: formatAddresses(draft.to),
-            cc: formatAddresses(draft.cc),
-            bcc: formatAddresses(draft.bcc),
-            subject: draft.subject,
-            initialHtml: draft.body?.html,
-            initialText: draft.body?.text,
-            initialAttachments: attachments,
-          });
         } catch (caught) {
           if (request === openThreadRequest.current) setError(errorMessage(caught));
+          return;
         }
-        return;
       }
-      const openedThread = thread.unread ? { ...thread, unread: false } : thread;
+      const openedThread = threadToOpen.unread ? { ...threadToOpen, unread: false } : threadToOpen;
       setSelectedThread(openedThread);
-      if (!thread.unread) return;
+      if (!threadToOpen.unread) return;
 
       setThreads((current) =>
         current.map((candidate) =>
-          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
+          threadKey(candidate) === threadKey(threadToOpen)
+            ? { ...candidate, unread: false }
+            : candidate,
         ),
       );
-      if (thread.folderRoles.includes("inbox")) {
+      if (threadToOpen.folderRoles.includes("inbox")) {
         setBootstrap((current) =>
-          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
+          current ? adjustUnreadCount(current, threadToOpen.accountId, -1) : current,
         );
       }
       if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
@@ -517,26 +536,26 @@ export function App() {
       }
       void window.fluxmail.mail
         .modify({
-          targets: [{ accountId: thread.accountId, threadId: thread.id }],
+          targets: [{ accountId: threadToOpen.accountId, threadId: threadToOpen.id }],
           action: { type: "markRead" },
           undoable: false,
         })
         .catch((caught) => {
           setThreads((current) =>
             current.map((candidate) =>
-              threadKey(candidate) === threadKey(thread)
+              threadKey(candidate) === threadKey(threadToOpen)
                 ? { ...candidate, unread: true }
                 : candidate,
             ),
           );
           setSelectedThread((current) =>
-            current && threadKey(current) === threadKey(thread)
+            current && threadKey(current) === threadKey(threadToOpen)
               ? { ...current, unread: true }
               : current,
           );
-          if (thread.folderRoles.includes("inbox")) {
+          if (threadToOpen.folderRoles.includes("inbox")) {
             setBootstrap((current) =>
-              current ? adjustUnreadCount(current, thread.accountId, 1) : current,
+              current ? adjustUnreadCount(current, threadToOpen.accountId, 1) : current,
             );
           }
           setError(errorMessage(caught));
@@ -594,8 +613,16 @@ export function App() {
       if (event.key === "#" && deleteAction) void modify(deleteAction, actionTargets);
       if (event.key.toLowerCase() === "s" && selectedThread)
         void modify({ type: selectedThread.starred ? "unstar" : "star" }, [selectedThread]);
-      if (event.key.toLowerCase() === "r" && selectedThread)
-        openSeededCompose(replySeed(selectedThread));
+      const composerShortcut: Partial<Record<string, InlineComposerMode>> = {
+        r: "reply",
+        a: "replyAll",
+        f: "forward",
+      };
+      const composerMode = composerShortcut[event.key.toLowerCase()];
+      if (composerMode && selectedThread) {
+        event.preventDefault();
+        readingPaneRef.current?.openComposer(composerMode);
+      }
       if (!event.shiftKey && event.key.toLowerCase() === "u" && actionTargets?.length)
         void modify(
           {
@@ -623,7 +650,6 @@ export function App() {
     composeSeed,
     modify,
     openCompose,
-    openSeededCompose,
     openThread,
     permanentDeleteAccountIds,
     refreshMail,
@@ -700,6 +726,7 @@ export function App() {
         searchRef={searchRef}
         sync={bootstrap.sync}
         labels={availableLabels}
+        accounts={availableSearchAccounts}
         permanentDeleteAccountIds={permanentDeleteAccountIds}
         sidebarCollapsed={sidebarCollapsed}
         onSearchText={setSearchText}
@@ -741,6 +768,7 @@ export function App() {
         onChange={setListWidth}
       />
       <ReadingPane
+        ref={readingPaneRef}
         view={submittedSearch ? "search" : view}
         thread={selectedThread}
         labels={availableLabels}
@@ -753,7 +781,6 @@ export function App() {
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
-        onCompose={openSeededCompose}
         onError={setError}
         onQuickReplyDirtyChange={handleQuickReplyDirtyChange}
         quickReplyDiscardVersion={quickReplyDiscardVersion}
@@ -964,7 +991,7 @@ export function permanentDeletePrompt(count: number): string {
 
 export function canCloseQuickReply(
   hasUnsavedReply: boolean,
-  confirmDiscard: () => boolean = () => window.confirm("Discard this unsent reply?"),
+  confirmDiscard: () => boolean = () => window.confirm("Discard this unsent message?"),
 ): boolean {
   return !hasUnsavedReply || confirmDiscard();
 }

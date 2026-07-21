@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Message, ModifyAction } from "@fluxmail/core";
+import type { EmailQuery, Message, ModifyAction } from "@fluxmail/core";
 import Database from "better-sqlite3";
 import {
   encryptString,
@@ -427,7 +427,7 @@ describe("FluxmailRuntime thread loading", () => {
   });
 
   it("keeps provider search results that do not match cached summary text", async () => {
-    const listMessages = vi.fn(async () => ({
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({
       items: [
         inboxMessage({
           id: "attachment",
@@ -453,6 +453,87 @@ describe("FluxmailRuntime thread loading", () => {
     const cachedResult = await runtime.listThreads(input);
     expect(cachedResult.items.map((item) => item.id)).toEqual(["attachment-thread"]);
     expect(listMessages).toHaveBeenCalledOnce();
+    expect(listMessages.mock.calls[0]?.[1]).toEqual({ hasAttachment: true });
+  });
+
+  it("sends boolean search trees to the provider", async () => {
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({ items: [] }));
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.listThreads(
+      {
+        view: "search",
+        query: "from:amy OR (to:david AND NOT subject:status)",
+        pageSize: 100,
+      },
+      true,
+    );
+
+    expect(listMessages.mock.calls[0]?.[1]).toEqual({
+      expression: {
+        type: "or",
+        operands: [
+          { type: "field", field: "from", value: "amy" },
+          {
+            type: "and",
+            operands: [
+              { type: "field", field: "to", value: "david" },
+              {
+                type: "not",
+                operand: { type: "field", field: "subject", value: "status" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("skips providers excluded by account search filters", async () => {
+    const listMessages = vi.fn(async (_accountId: string, _query: EmailQuery) => ({ items: [] }));
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.listThreads(
+      { view: "search", query: "account:missing", pageSize: 100 },
+      true,
+    );
+
+    expect(result.items).toEqual([]);
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not let an excluded account hide the matching account's provider failure", async () => {
+    const personalAccount: AccountInfo = { ...account, displayName: "Personal" };
+    const workAccount: AccountInfo = {
+      id: "account-2",
+      email: "me@company.example",
+      displayName: "Work",
+      provider: "outlook",
+      status: "active",
+    };
+    const listMessages = vi.fn(async (_accountId: string) => {
+      throw new Error("Provider unavailable");
+    });
+    const runtime = createRuntimeWithCache({
+      cache: createCache(),
+      accounts: [personalAccount, workAccount],
+      service: { listMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    await expect(
+      runtime.listThreads({ view: "search", query: "account:personal", pageSize: 100 }, true),
+    ).rejects.toThrow("Provider unavailable");
+    expect(listMessages).toHaveBeenCalledOnce();
+    expect(listMessages.mock.calls[0]?.[0]).toBe(personalAccount.id);
   });
 
   it("keeps cached threads when a forced refresh fails", async () => {
@@ -1435,6 +1516,99 @@ describe("FluxmailRuntime draft mutations", () => {
     expect(onCacheChanged).toHaveBeenCalledOnce();
   });
 
+  it("adds the quoted message only during the final update of a saved reply", async () => {
+    const original = inboxMessage({
+      id: "original",
+      threadId: "thread-1",
+      from: { email: "friend@example.com" },
+      body: {
+        text: "Original message",
+        html: '<p>Original message</p><img src="cid:reply-logo@example.com">',
+      },
+      attachments: [
+        {
+          id: "reply-logo",
+          filename: "logo.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+          contentId: "reply-logo@example.com",
+          disposition: "inline",
+        },
+      ],
+    });
+    const createDraft = vi.fn(async () =>
+      draftMessage({ id: "draft-reply", threadId: "thread-1" }),
+    );
+    const updateDraft = vi.fn(async () =>
+      draftMessage({ id: "draft-reply", threadId: "thread-1" }),
+    );
+    const send = vi.fn(async () => ({ id: "reply", threadId: "thread-1" }));
+    const getAttachment = vi.fn(async () => ({
+      meta: { filename: "logo.png", mimeType: "image/png" },
+      content: Buffer.from("logo"),
+    }));
+    const runtime = createRuntime({
+      service: {
+        createDraft,
+        updateDraft,
+        send,
+        getMessage: vi.fn(async () => original),
+        getAttachment,
+        getThread: vi.fn(async () => ({
+          id: "thread-1",
+          subject: "Hello",
+          messages: [original],
+        })),
+      },
+      cache: { putMessages: vi.fn(), deleteDraft: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+    const input = {
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Re: Hello",
+      text: "Reply",
+      html: "<p>Reply</p>",
+      replyToMessageId: "original",
+    };
+
+    await runtime.saveDraft(input);
+    await runtime.send({ ...input, draftId: "draft-1" });
+
+    expect(createDraft).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({
+        body: { text: "Reply", html: "<p>Reply</p>" },
+      }),
+    );
+    expect(updateDraft).toHaveBeenCalledWith(
+      account.id,
+      "draft-1",
+      expect.objectContaining({
+        body: {
+          text: expect.stringContaining("\n> Original message"),
+          html: expect.stringContaining('class="gmail_quote gmail_quote_container"'),
+        },
+        attachments: [
+          {
+            filename: "logo.png",
+            mimeType: "image/png",
+            content: Buffer.from("logo").toString("base64"),
+            contentId: "reply-logo@example.com",
+            disposition: "inline",
+          },
+        ],
+      }),
+    );
+    expect(getAttachment).toHaveBeenCalledWith(
+      account.id,
+      "original",
+      "reply-logo",
+      25 * 1024 * 1024,
+    );
+    expect(send).toHaveBeenCalledWith(account.id, { draftId: "draft-1" });
+  });
+
   it("purges the cached draft after the provider deletes it", async () => {
     const providerDelete = vi.fn(async () => undefined);
     const cacheDelete = vi.fn();
@@ -1454,6 +1628,13 @@ describe("FluxmailRuntime draft mutations", () => {
 
   it("refreshes the cached conversation after a direct reply", async () => {
     const send = vi.fn(async () => ({ id: "reply", threadId: "thread-1" }));
+    const original = inboxMessage({
+      id: "original",
+      threadId: "thread-1",
+      from: { name: "Friend", email: "friend@example.com" },
+      body: { text: "Original message", html: "<p>Original message</p>" },
+    });
+    const getMessage = vi.fn(async () => original);
     const getThread = vi.fn(async () => ({
       id: "thread-1",
       subject: "Hello",
@@ -1462,7 +1643,7 @@ describe("FluxmailRuntime draft mutations", () => {
     const putThread = vi.fn();
     const onCacheChanged = vi.fn();
     const runtime = createRuntime({
-      service: { send, getThread },
+      service: { send, getMessage, getThread },
       cache: { putThread, invalidateThread: vi.fn() },
       onCacheChanged,
     });
@@ -1472,9 +1653,21 @@ describe("FluxmailRuntime draft mutations", () => {
       to: [{ email: "friend@example.com" }],
       subject: "Re: Hello",
       text: "Reply",
+      html: "<p>Reply</p>",
       replyToMessageId: "original",
     });
 
+    expect(getMessage).toHaveBeenCalledWith(account.id, "original");
+    expect(send).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({
+        replyToMessageId: "original",
+        body: {
+          text: expect.stringMatching(/^Reply\n\nOn .+ Friend <friend@example\.com> wrote:/),
+          html: expect.stringContaining('class="gmail_quote gmail_quote_container"'),
+        },
+      }),
+    );
     expect(getThread).toHaveBeenCalledWith(account.id, "thread-1");
     expect(putThread).toHaveBeenCalledWith(account, expect.objectContaining({ id: "thread-1" }));
     expect(onCacheChanged).toHaveBeenCalledOnce();

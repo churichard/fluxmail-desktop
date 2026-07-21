@@ -298,13 +298,20 @@ textarea:focus-visible,
 .sidebar-nav {
   display: flex;
   min-height: 0;
-  overflow-y: auto;
   flex: 1;
   flex-direction: column;
   gap: 3px;
   padding: 0 0 4px;
   overscroll-behavior: contain;
-  overflow-y: overlay;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .sidebar-nav > * {
@@ -564,6 +571,8 @@ textarea:focus-visible,
 }
 
 .search-box {
+  position: relative;
+  z-index: 20;
   display: flex;
   height: 34px;
   align-items: center;
@@ -619,6 +628,58 @@ textarea:focus-visible,
   font-family: inherit;
   font-size: 9px;
   box-shadow: 0 1px 0 rgb(0 0 0 / 0.04);
+}
+
+.search-autocomplete {
+  position: absolute;
+  z-index: 150;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 4px;
+  background: var(--paper);
+  box-shadow: var(--shadow-md);
+  -webkit-app-region: no-drag;
+}
+
+.search-autocomplete > button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.search-autocomplete > button:hover,
+.search-autocomplete > button.active {
+  background: var(--field-strong);
+  color: var(--ink);
+}
+
+.search-autocomplete code {
+  min-width: 88px;
+  color: var(--accent-deep);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.search-autocomplete span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .selection-count {
@@ -825,6 +886,7 @@ textarea:focus-visible,
 }
 
 .thread-list:hover .overlay-scrollbar,
+.sidebar-nav-wrap:hover .overlay-scrollbar,
 .conversation-scroll-shell:hover .overlay-scrollbar,
 .overlay-scrollbar.dragging {
   opacity: 1;
@@ -1637,8 +1699,17 @@ textarea:focus-visible,
 }
 
 .quick-reply .mail-editor {
+  position: relative;
   min-height: 132px;
   padding: 14px 16px;
+}
+
+.inline-compose-fields {
+  padding-top: 4px;
+}
+
+.inline-compose-attachments {
+  border-top: 1px solid var(--hairline-soft);
 }
 
 .quick-reply-footer,
@@ -2011,15 +2082,19 @@ textarea:focus-visible,
   max-height: 240px;
   overflow: auto;
   margin-top: 8px;
-  border-left: 2px solid var(--hairline);
-  padding: 4px 0 4px 12px;
+  padding: 4px 0;
   color: var(--muted);
 }
 
 .quoted-reply-meta {
   margin-bottom: 8px;
-  font-size: 10px;
-  font-weight: 620;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quoted-reply-body {
+  border-left: 2px solid var(--hairline);
+  padding-left: 12px;
 }
 
 .format-buttons button:hover,

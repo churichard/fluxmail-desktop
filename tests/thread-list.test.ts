@@ -1,7 +1,46 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it } from "vitest";
-import { getSelectionReadAction } from "../src/renderer/components/ThreadListPane";
+import { createElement } from "react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getSelectionReadAction, ThreadRow } from "../src/renderer/components/ThreadListPane";
 import { calculateScrollThumb } from "../src/renderer/components/OverlayScrollbar";
+import type { ThreadSummary } from "../src/shared/contracts";
+
+afterEach(cleanup);
+
+describe("thread row activation", () => {
+  it("opens the conversation from the full row without stealing action clicks", () => {
+    const onOpen = vi.fn();
+    const onCheck = vi.fn();
+    const onMove = vi.fn();
+    const { container, getByRole } = render(
+      createElement(ThreadRow, {
+        thread: testThread,
+        active: false,
+        checked: false,
+        onOpen,
+        onCheck,
+        moveLabel: "Archive",
+        restore: false,
+        onMove,
+        onToggleRead: vi.fn(),
+        onStar: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(container.querySelector(".thread-row")!);
+    expect(onOpen).toHaveBeenCalledOnce();
+
+    onOpen.mockClear();
+    fireEvent.click(getByRole("button", { name: "Archive conversation" }));
+    expect(onMove).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(getByRole("checkbox", { name: "Select conversation" }));
+    expect(onCheck).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
 
 describe("thread list overlay scrollbar", () => {
   it("maps scroll position onto an overlaid thumb", () => {
@@ -40,3 +79,21 @@ describe("bulk read action", () => {
     expect(getSelectionReadAction([{ unread: false }, { unread: false }])).toBe("markUnread");
   });
 });
+
+const testThread: ThreadSummary = {
+  id: "thread-1",
+  accountId: "account-1",
+  accountEmail: "me@example.com",
+  subject: "Subject",
+  senderName: "Sender",
+  senderEmail: "sender@example.com",
+  snippet: "Preview",
+  date: "2026-07-20T12:00:00Z",
+  unread: false,
+  starred: false,
+  draft: false,
+  hasAttachments: false,
+  messageCount: 1,
+  labels: [],
+  folderRoles: ["inbox"],
+};
