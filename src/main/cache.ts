@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import type { Folder, FolderRole, Message, Thread } from "@fluxmail/core";
 import type {
   AccountInfo,
+  DraftRecipientFields,
   MailThread,
   MailboxView,
   ModifyActionInput,
@@ -116,6 +117,14 @@ export class MailCache {
         account_id TEXT PRIMARY KEY,
         initialized_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS draft_recipient_fields (
+        account_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        to_raw TEXT NOT NULL,
+        cc_raw TEXT NOT NULL,
+        bcc_raw TEXT NOT NULL,
+        PRIMARY KEY (account_id, draft_id)
+      );
     `);
     const storedVersion = Number(
       (
@@ -160,7 +169,8 @@ export class MailCache {
            UNION SELECT account_id FROM page_tokens
            UNION SELECT account_id FROM view_results
            UNION SELECT account_id FROM notification_seen
-           UNION SELECT account_id FROM notification_state`,
+           UNION SELECT account_id FROM notification_state
+           UNION SELECT account_id FROM draft_recipient_fields`,
         )
         .all() as Array<{ account_id: string }>
     ).map((row) => row.account_id);
@@ -505,6 +515,7 @@ export class MailCache {
   }
 
   deleteDraft(account: AccountInfo, draftId: string): void {
+    this.deleteDraftRecipientFields(account.id, draftId);
     const rows = this.db
       .prepare(
         `SELECT message_id, thread_id
@@ -525,6 +536,46 @@ export class MailCache {
         this.rebuildThread(account, threadId);
       }
     })();
+  }
+
+  hasDraft(accountId: string, draftId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          `SELECT 1
+           FROM messages
+           WHERE account_id = ? AND json_extract(payload_json, '$.draftId') = ?
+           LIMIT 1`,
+        )
+        .get(accountId, draftId),
+    );
+  }
+
+  putDraftRecipientFields(accountId: string, draftId: string, fields: DraftRecipientFields): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO draft_recipient_fields(
+          account_id, draft_id, to_raw, cc_raw, bcc_raw
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(accountId, draftId, fields.to, fields.cc, fields.bcc);
+  }
+
+  getDraftRecipientFields(accountId: string, draftId: string): DraftRecipientFields | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT to_raw, cc_raw, bcc_raw
+         FROM draft_recipient_fields
+         WHERE account_id = ? AND draft_id = ?`,
+      )
+      .get(accountId, draftId) as { to_raw: string; cc_raw: string; bcc_raw: string } | undefined;
+    return row ? { to: row.to_raw, cc: row.cc_raw, bcc: row.bcc_raw } : undefined;
+  }
+
+  deleteDraftRecipientFields(accountId: string, draftId: string): void {
+    this.db
+      .prepare("DELETE FROM draft_recipient_fields WHERE account_id = ? AND draft_id = ?")
+      .run(accountId, draftId);
   }
 
   reconcileFolderPage(
@@ -623,6 +674,7 @@ export class MailCache {
         "view_results",
         "notification_seen",
         "notification_state",
+        "draft_recipient_fields",
       ]) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
       }

@@ -96,8 +96,15 @@ vi.mock("../src/renderer/components/ComposeDialog", async () => {
       (
         {
           seed,
+          onSent,
         }: {
           seed: { subject?: string; threadId?: string; replyToMessageId?: string };
+          onSent(delivery: {
+            kind: "undo";
+            scheduleId: string;
+            draftId: string;
+            sendAt: string;
+          }): void;
         },
         ref,
       ) => {
@@ -108,6 +115,18 @@ vi.mock("../src/renderer/components/ComposeDialog", async () => {
             <span data-testid="compose-thread-id">{seed.threadId}</span>
             <span data-testid="compose-reply-target">{seed.replyToMessageId}</span>
             <button>Compose action</button>
+            <button
+              onClick={() =>
+                onSent({
+                  kind: "undo",
+                  scheduleId: "schedule-1",
+                  draftId: "draft-1",
+                  sendAt: new Date(Date.now() + 10_000).toISOString(),
+                })
+              }
+            >
+              Finish compose
+            </button>
           </section>
         );
       },
@@ -134,6 +153,7 @@ vi.mock("../src/renderer/components/FluxmailLogoMark", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("App thread navigation", () => {
@@ -172,6 +192,29 @@ describe("App thread navigation", () => {
         }),
       ),
     );
+  });
+
+  it("keeps the undo timer running while switching mailboxes", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Finish compose" }));
+    expect(screen.getByRole("status").textContent).toContain("Message sent.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Starred" }));
+    await act(async () => vi.advanceTimersByTime(10_500));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(window.fluxmail.sync.refresh).toHaveBeenCalledOnce();
+    vi.useRealTimers();
   });
 
   it("ignores a draft that finishes loading after another thread is selected", async () => {
@@ -534,6 +577,7 @@ function installApi(
       dockBadge: true,
       blockRemoteImages: true,
       imageRelay: true,
+      undoSendDelaySeconds: 10,
     },
     license: {
       plan: "personal",
@@ -568,6 +612,7 @@ function installApi(
         prepare: vi.fn(async () => []),
         release: vi.fn(async () => undefined),
       },
+      drafts: { recipientFields: vi.fn(async () => undefined) },
       sync: { refresh: vi.fn(async () => undefined) },
       analytics: { trackFeature: vi.fn(async () => undefined) },
       system: {

@@ -1,6 +1,10 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { ExternalLink, Monitor, Moon, RefreshCw, Sun, Trash2, X } from "lucide-react";
-import type { AppearancePreference, BootstrapState } from "../../shared/contracts";
+import type {
+  AppearancePreference,
+  BootstrapState,
+  UndoSendDelaySeconds,
+} from "../../shared/contracts";
 import { IconButton, SelectionCheckbox } from "./Controls";
 
 interface Props {
@@ -15,6 +19,7 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [dockBadgeBusy, setDockBadgeBusy] = useState(false);
+  const [undoSendBusy, setUndoSendBusy] = useState(false);
   const [blockRemoteImagesBusy, setBlockRemoteImagesBusy] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [licenseKey, setLicenseKey] = useState("");
@@ -129,6 +134,42 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
       onError(error instanceof Error ? error.message : "Could not change the Dock badge setting.");
     } finally {
       setDockBadgeBusy(false);
+    }
+  };
+  const updateUndoSendDelay = async (delay: UndoSendDelaySeconds) => {
+    if (undoSendBusy || delay === state.preferences.undoSendDelaySeconds) return;
+    const previous = state.preferences.undoSendDelaySeconds;
+    setUndoSendBusy(true);
+    onState((current) =>
+      current
+        ? {
+            ...current,
+            preferences: { ...current.preferences, undoSendDelaySeconds: delay },
+          }
+        : current,
+    );
+    try {
+      const value = await window.fluxmail.preferences.setUndoSendDelaySeconds(delay);
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, undoSendDelaySeconds: value },
+            }
+          : current,
+      );
+    } catch (error) {
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, undoSendDelaySeconds: previous },
+            }
+          : current,
+      );
+      onError(error instanceof Error ? error.message : "Could not change the undo send setting.");
+    } finally {
+      setUndoSendBusy(false);
     }
   };
   const updateBlockRemoteImages = async (enabled: boolean) => {
@@ -475,6 +516,29 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                 onClick={() => void updateDockBadge(!state.preferences.dockBadge)}
               />
             </div>
+          </section>
+          <section>
+            <h2>Sending</h2>
+            <label className="setting-select-row">
+              <span>
+                <strong>Undo send</strong>
+                <small>Delay delivery so you have time to cancel a sent message.</small>
+              </span>
+              <select
+                aria-label="Undo send"
+                value={state.preferences.undoSendDelaySeconds}
+                disabled={undoSendBusy}
+                onChange={(event) =>
+                  void updateUndoSendDelay(Number(event.target.value) as UndoSendDelaySeconds)
+                }
+              >
+                <option value={0}>Off</option>
+                <option value={5}>5 seconds</option>
+                <option value={10}>10 seconds</option>
+                <option value={20}>20 seconds</option>
+                <option value={30}>30 seconds</option>
+              </select>
+            </label>
           </section>
           <section>
             <h2>Privacy</h2>

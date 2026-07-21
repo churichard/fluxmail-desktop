@@ -112,6 +112,36 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("preserves raw draft recipient fields until the draft is deleted", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({
+        id: "draft-message",
+        threadId: "draft-thread",
+        draftId: "draft-1",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+    cache.putDraftRecipientFields(primary.id, "draft-1", {
+      to: "r",
+      cc: "valid@example.com, unfinished@",
+      bcc: "",
+    });
+
+    expect(cache.getDraftRecipientFields(primary.id, "draft-1")).toEqual({
+      to: "r",
+      cc: "valid@example.com, unfinished@",
+      bcc: "",
+    });
+    expect(cache.hasDraft(primary.id, "draft-1")).toBe(true);
+
+    cache.deleteDraft(primary, "draft-1");
+    expect(cache.getDraftRecipientFields(primary.id, "draft-1")).toBeUndefined();
+    expect(cache.hasDraft(primary.id, "draft-1")).toBe(false);
+    cache.close();
+  });
+
   it("excludes cached spam and trash from All Mail", () => {
     const cache = createCache();
     cache.putMessages(primary, [

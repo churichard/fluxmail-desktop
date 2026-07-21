@@ -101,6 +101,19 @@ describe("SettingsDialog private image relay", () => {
   });
 });
 
+describe("SettingsDialog undo send", () => {
+  it("can turn undo send off", async () => {
+    const setUndoSendDelaySeconds = vi.fn(async () => 0 as const);
+    installApi(undefined, setUndoSendDelaySeconds);
+    render(<SettingsHarness />);
+
+    fireEvent.change(screen.getByLabelText("Undo send"), { target: { value: "0" } });
+
+    await waitFor(() => expect(setUndoSendDelaySeconds).toHaveBeenCalledWith(0));
+    expect(screen.getByLabelText("Undo send")).toHaveValue("0");
+  });
+});
+
 function SettingsHarness() {
   const [state, setState] = useState<BootstrapState | null>(bootstrapState(false));
   if (!state) return null;
@@ -111,7 +124,8 @@ function installApi(
   activate: (key: string) => Promise<{
     outcome: "activated" | "saved_for_retry";
     license: BootstrapState["license"];
-  }>,
+  }> = vi.fn(),
+  setUndoSendDelaySeconds = vi.fn(),
 ): void {
   Object.defineProperty(window, "fluxmail", {
     configurable: true,
@@ -119,6 +133,7 @@ function installApi(
       license: { activate },
       analytics: { trackFeature: vi.fn(async () => undefined) },
       system: { openExternal: vi.fn(async () => undefined) },
+      preferences: { setUndoSendDelaySeconds },
     } as unknown as FluxmailDesktopApi,
   });
 }
@@ -143,6 +158,7 @@ function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
       dockBadge: true,
       blockRemoteImages: true,
       imageRelay: true,
+      undoSendDelaySeconds: 10,
     },
     license: {
       plan: "personal",

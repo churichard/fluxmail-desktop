@@ -7,17 +7,24 @@ import {
   useRef,
   useState,
 } from "react";
-import { Ellipsis, Paperclip, Send, Trash2, X } from "lucide-react";
+import { CalendarClock, ChevronDown, Ellipsis, Paperclip, Send, Trash2, X } from "lucide-react";
 import {
   addressSchema,
+  hasUndoSendDelay,
   type AccountInfo,
   type ComposeAttachment,
   type MailMessage,
+  type ScheduledSendResult,
+  type UndoSendDelaySeconds,
 } from "../../shared/contracts";
 import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEditor";
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+
+export type ComposeDelivery =
+  | { kind: "sent" }
+  | (ScheduledSendResult & { kind: "undo" | "scheduled" });
 
 export interface ComposeSeed {
   accountId: string;
@@ -41,8 +48,9 @@ interface Props {
   blockRemoteImages?: boolean;
   imageRelay?: boolean;
   imageRelayAvailable?: boolean;
+  undoSendDelaySeconds?: UndoSendDelaySeconds;
   onClose(): void;
-  onSent(): void;
+  onSent(delivery: ComposeDelivery): void;
   onError(message: string): void;
 }
 
@@ -57,6 +65,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     blockRemoteImages = true,
     imageRelay = true,
     imageRelayAvailable = true,
+    undoSendDelaySeconds = 10,
     onClose,
     onSent,
     onError,
@@ -80,7 +89,10 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   const [showBcc, setShowBcc] = useState(Boolean(seed.bcc));
   const [recipientsCollapsed, setRecipientsCollapsed] = useState(Boolean(seed.to));
   const [sending, setSending] = useState(false);
+  const [deliveryKind, setDeliveryKind] = useState<ComposeDelivery["kind"]>("undo");
   const [saving, setSaving] = useState(false);
+  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState(() => defaultScheduleTime());
   const [quotedMessage, setQuotedMessage] = useState<MailMessage>();
   const [quoteOpen, setQuoteOpen] = useState(false);
   const revision = useRef(0);
@@ -193,6 +205,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
           replyToMessageId,
           replyAll: seed.replyAll,
           attachments,
+          recipientFields: { to, cc, bcc },
         });
       const previous = saveInFlight.current;
       const request = previous ? previous.catch(() => undefined).then(save) : save();
@@ -229,16 +242,90 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     text,
   ]);
 
-  const send = async () => {
+  const validateSend = () => {
     if (toField.invalid || ccField.invalid || bccField.invalid) {
       onError("Check the recipient addresses and try again.");
-      return;
+      return false;
     }
     const hasRecipient = Boolean(parsedTo.length || parsedCc.length || parsedBcc.length);
     if (!hasRecipient || (!seed.forwardMessageId && !text.trim())) {
       onError("Add a recipient and write a message before sending.");
+      return false;
+    }
+    return true;
+  };
+
+  const deliver = async (
+    kind: "undo" | "scheduled",
+    timing: { sendAt: string } | { delaySeconds: Exclude<UndoSendDelaySeconds, 0> },
+  ) => {
+    if (!validateSend()) return;
+    finishing.current = true;
+    setDeliveryKind(kind);
+    setSending(true);
+    try {
+      const pendingDraft = await saveInFlight.current?.catch(() => undefined);
+      const currentDraftId = draftId ?? pendingDraft?.draftId;
+      if (seed.forwardMessageId) {
+        const scheduled = await window.fluxmail.mail.forward({
+          target: {
+            accountId,
+            threadId: seed.threadId ?? seed.forwardMessageId,
+          },
+          messageId: seed.forwardMessageId,
+          to: parsedTo,
+          cc: parsedCc,
+          bcc: parsedBcc,
+          subject,
+          text,
+          html,
+          attachments,
+          includeAttachments: false,
+          ...timing,
+        });
+        if (!scheduled) throw new Error("Fluxmail could not schedule this message.");
+        releaseAttachments();
+        onSent({ ...scheduled, kind });
+      } else {
+        const scheduled = await window.fluxmail.drafts.schedule({
+          accountId,
+          draftId: currentDraftId,
+          to: parsedTo,
+          cc: parsedCc,
+          bcc: parsedBcc,
+          subject,
+          html,
+          text,
+          replyToMessageId,
+          replyAll: seed.replyAll,
+          attachments,
+          recipientFields: { to, cc, bcc },
+          ...timing,
+        });
+        releaseAttachments();
+        onSent({ ...scheduled, kind });
+      }
+      void window.fluxmail.analytics
+        .trackFeature({
+          feature: "compose",
+          action: "completed",
+          source: "compose",
+        })
+        .catch(() => undefined);
+    } catch (error) {
+      finishing.current = false;
+      onError(error instanceof Error ? error.message : "Fluxmail could not send this message.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const send = async () => {
+    if (hasUndoSendDelay(undoSendDelaySeconds)) {
+      await deliver("undo", { delaySeconds: undoSendDelaySeconds });
       return;
     }
+    if (!validateSend()) return;
     finishing.current = true;
     setSending(true);
     try {
@@ -246,10 +333,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
       const currentDraftId = draftId ?? pendingDraft?.draftId;
       if (seed.forwardMessageId) {
         await window.fluxmail.mail.forward({
-          target: {
-            accountId,
-            threadId: seed.threadId ?? seed.forwardMessageId,
-          },
+          target: { accountId, threadId: seed.threadId ?? seed.forwardMessageId },
           messageId: seed.forwardMessageId,
           to: parsedTo,
           cc: parsedCc,
@@ -273,17 +357,11 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
           replyToMessageId,
           replyAll: seed.replyAll,
           attachments,
+          recipientFields: { to, cc, bcc },
         });
       }
-      void window.fluxmail.analytics
-        .trackFeature({
-          feature: "compose",
-          action: "completed",
-          source: "compose",
-        })
-        .catch(() => undefined);
       releaseAttachments();
-      onSent();
+      onSent({ kind: "sent" });
     } catch (error) {
       finishing.current = false;
       onError(error instanceof Error ? error.message : "Fluxmail could not send this message.");
@@ -292,11 +370,17 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     }
   };
 
-  const close = async (): Promise<boolean> => {
-    if (toField.invalid || ccField.invalid || bccField.invalid) {
-      onError("Check the recipient addresses and try again.");
-      return false;
+  const schedule = () => {
+    const date = new Date(scheduledAt);
+    if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
+      onError("Choose a send time in the future.");
+      return;
     }
+    setSendOptionsOpen(false);
+    void deliver("scheduled", { sendAt: date.toISOString() });
+  };
+
+  const close = async (): Promise<boolean> => {
     if (finishing.current) return false;
     finishing.current = true;
     if (seed.forwardMessageId && !canCloseForward(revision.current !== savedRevision.current)) {
@@ -333,6 +417,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
           replyToMessageId,
           replyAll: seed.replyAll,
           attachments,
+          recipientFields: { to, cc, bcc },
         });
         setDraftId(result.draftId);
         savedRevision.current = requestRevision;
@@ -570,14 +655,43 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
           </div>
         ) : null}
         <footer>
-          <button
-            className="primary-button send-button"
-            disabled={sending}
-            onClick={() => void send()}
-          >
-            <Send size={16} />
-            {sending ? "Sending..." : "Send"}
-          </button>
+          <div className="send-controls">
+            <button
+              className="primary-button send-button"
+              disabled={sending}
+              onClick={() => void send()}
+            >
+              <Send size={16} />
+              {sending ? (deliveryKind === "scheduled" ? "Scheduling..." : "Sending...") : "Send"}
+            </button>
+            <button
+              type="button"
+              className="primary-button send-options-button"
+              disabled={sending}
+              aria-label="More send options"
+              aria-expanded={sendOptionsOpen}
+              onClick={() => setSendOptionsOpen((value) => !value)}
+            >
+              <ChevronDown size={15} />
+            </button>
+            {sendOptionsOpen ? (
+              <div className="send-options-popover" role="dialog" aria-label="Schedule send">
+                <label>
+                  <span>Send at</span>
+                  <input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    min={localDateTimeValue(new Date(Date.now() + 60_000))}
+                    onChange={(event) => setScheduledAt(event.target.value)}
+                  />
+                </label>
+                <button type="button" className="secondary-button" onClick={schedule}>
+                  <CalendarClock size={15} />
+                  Schedule
+                </button>
+              </div>
+            ) : null}
+          </div>
           <MailEditorToolbar
             editor={editor}
             onAttach={() =>
@@ -674,6 +788,17 @@ function htmlFromText(value: string): string {
     (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character]!,
   );
   return `<p>${escaped.replaceAll("\n", "<br>")}</p>`;
+}
+
+function defaultScheduleTime(): string {
+  const date = new Date(Date.now() + 60 * 60_000);
+  date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
+  return localDateTimeValue(date);
+}
+
+function localDateTimeValue(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 export function replyRecipient(accountEmail: string, message: MailMessage): string {

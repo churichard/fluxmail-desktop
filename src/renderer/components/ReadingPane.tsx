@@ -16,15 +16,17 @@ import {
   X,
   Undo2,
 } from "lucide-react";
-import type {
+import {
+  hasUndoSendDelay,
+  type ComposeAttachment,
   MailMessage,
   MailThread,
   MailboxView,
   ModifyActionInput,
-  ComposeAttachment,
   ThreadSummary,
+  UndoSendDelaySeconds,
 } from "../../shared/contracts";
-import { parseAddressField } from "./ComposeDialog";
+import { parseAddressField, type ComposeDelivery } from "./ComposeDialog";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { EmailHtml } from "./EmailHtml";
 import { TrackingPixelIndicator } from "./TrackingPixelIndicator";
@@ -51,6 +53,8 @@ interface Props {
   onModify(action: ModifyActionInput): Promise<void>;
   onError(message: string): void;
   onQuickReplyDirtyChange(dirty: boolean): void;
+  onDelivery?(delivery: ComposeDelivery): void;
+  undoSendDelaySeconds?: UndoSendDelaySeconds;
   quickReplyDiscardVersion?: number;
 }
 
@@ -77,6 +81,8 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onModify,
     onError,
     onQuickReplyDirtyChange,
+    onDelivery,
+    undoSendDelaySeconds = 10,
     quickReplyDiscardVersion,
   },
   ref,
@@ -346,7 +352,11 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               imageRelay={imageRelay}
               imageRelayAvailable={imageRelayAvailable}
               onCancel={closeComposer}
-              onSent={closeComposer}
+              onSent={(delivery) => {
+                closeComposer();
+                onDelivery?.(delivery);
+              }}
+              undoSendDelaySeconds={undoSendDelaySeconds}
               onError={onError}
               onDirtyChange={handleComposerDirtyChange}
               blockRemoteImages={blockRemoteImages}
@@ -471,6 +481,7 @@ function InlineComposer({
   onError,
   onDirtyChange,
   blockRemoteImages,
+  undoSendDelaySeconds,
 }: {
   accountId: string;
   threadId: string;
@@ -480,10 +491,11 @@ function InlineComposer({
   imageRelay: boolean;
   imageRelayAvailable: boolean;
   onCancel(): void;
-  onSent(): void;
+  onSent(delivery: ComposeDelivery): void;
   onError(message: string): void;
   onDirtyChange(dirty: boolean): void;
   blockRemoteImages: boolean;
+  undoSendDelaySeconds: UndoSendDelaySeconds;
 }) {
   const forwarding = mode === "forward";
   const initialSubject = forwarding
@@ -567,7 +579,7 @@ function InlineComposer({
     setSending(true);
     try {
       if (forwarding) {
-        await window.fluxmail.mail.forward({
+        const delivery = await window.fluxmail.mail.forward({
           target: { accountId, threadId },
           messageId: message.id,
           to: toField.addresses,
@@ -578,9 +590,16 @@ function InlineComposer({
           html,
           attachments,
           includeAttachments: false,
+          ...(hasUndoSendDelay(undoSendDelaySeconds)
+            ? {
+                delaySeconds: undoSendDelaySeconds,
+              }
+            : {}),
         });
+        releaseAttachments();
+        onSent(delivery ? { ...delivery, kind: "undo" } : { kind: "sent" });
       } else {
-        await window.fluxmail.drafts.send({
+        const input = {
           accountId,
           to: [],
           subject,
@@ -589,10 +608,20 @@ function InlineComposer({
           replyToMessageId: message.id,
           replyAll: mode === "replyAll",
           attachments,
-        });
+        };
+        if (hasUndoSendDelay(undoSendDelaySeconds)) {
+          const delivery = await window.fluxmail.drafts.schedule({
+            ...input,
+            delaySeconds: undoSendDelaySeconds,
+          });
+          releaseAttachments();
+          onSent({ ...delivery, kind: "undo" });
+        } else {
+          await window.fluxmail.drafts.send(input);
+          releaseAttachments();
+          onSent({ kind: "sent" });
+        }
       }
-      releaseAttachments();
-      onSent();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Fluxmail could not send this message.");
     } finally {

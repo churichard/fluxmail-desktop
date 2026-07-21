@@ -14,6 +14,7 @@ vi.mock("../src/renderer/components/EmailHtml", () => ({
 describe("ComposeDialog draft coordination", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.setSystemTime("2026-07-20T18:00:00.000Z");
   });
 
   afterEach(() => {
@@ -215,8 +216,11 @@ describe("ComposeDialog draft coordination", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("does not silently drop an invalid recipient when closing", () => {
-    const save = vi.fn();
+  it("saves the raw recipient text when closing with an incomplete address", async () => {
+    const save = vi.fn(async () => ({
+      draftId: "draft-1",
+      messageId: "message-1",
+    }));
     const onClose = vi.fn();
     const onError = vi.fn();
     installApi({ save });
@@ -226,10 +230,16 @@ describe("ComposeDialog draft coordination", () => {
       target: { value: "unfinished@" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+    await act(async () => Promise.resolve());
 
-    expect(save).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith("Check the recipient addresses and try again.");
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: [],
+        recipientFields: { to: "unfinished@", cc: "", bcc: "" },
+      }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("restores a plain-text draft in the editor", () => {
@@ -255,10 +265,14 @@ describe("ComposeDialog draft coordination", () => {
   });
 
   it("sends a message with only a Bcc recipient", async () => {
-    const send = vi.fn(async () => ({ id: "sent", threadId: "thread" }));
+    const schedule = vi.fn(async () => ({
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+      sendAt: "2026-07-20T18:00:10.000Z",
+    }));
     const onSent = vi.fn();
     const onError = vi.fn();
-    installApi({ save: vi.fn(), send });
+    installApi({ save: vi.fn(), schedule });
     render(
       <ComposeDialog
         seed={{ accountId: "account-1", initialText: "Private update" }}
@@ -283,15 +297,94 @@ describe("ComposeDialog draft coordination", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await act(async () => Promise.resolve());
 
-    expect(send).toHaveBeenCalledWith(
+    expect(schedule).toHaveBeenCalledWith(
       expect.objectContaining({
         to: [],
         bcc: [{ email: "archive@example.com" }],
         text: "Private update",
+        delaySeconds: 10,
       }),
     );
     expect(onSent).toHaveBeenCalledOnce();
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("sends immediately when undo send is off", async () => {
+    const send = vi.fn(async () => ({ id: "sent", threadId: "thread" }));
+    const schedule = vi.fn(async () => scheduledResult());
+    const onSent = vi.fn();
+    installApi({ save: vi.fn(), send, schedule });
+    render(
+      <ComposeDialog
+        seed={{
+          accountId: "account-1",
+          to: "sam@example.com",
+          initialText: "Hello",
+        }}
+        accounts={[
+          {
+            id: "account-1",
+            email: "me@example.com",
+            provider: "gmail",
+            status: "active",
+          },
+        ]}
+        onClose={vi.fn()}
+        onSent={onSent}
+        onError={vi.fn()}
+        undoSendDelaySeconds={0}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => Promise.resolve());
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: "Hello" }));
+    expect(schedule).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalledWith({ kind: "sent" });
+  });
+
+  it("uses the selected date for scheduled send", async () => {
+    const schedule = vi.fn(async (input) => ({
+      ...scheduledResult(),
+      sendAt: input.sendAt,
+    }));
+    const onSent = vi.fn();
+    installApi({ save: vi.fn(), schedule });
+    render(
+      <ComposeDialog
+        seed={{
+          accountId: "account-1",
+          to: "friend@example.com",
+          initialText: "Later today",
+        }}
+        accounts={[
+          {
+            id: "account-1",
+            email: "me@example.com",
+            provider: "gmail",
+            status: "active",
+          },
+        ]}
+        onClose={vi.fn()}
+        onSent={onSent}
+        onError={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "More send options" }));
+    fireEvent.change(screen.getByLabelText("Send at"), {
+      target: { value: "2026-07-21T09:30" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await act(async () => Promise.resolve());
+
+    expect(schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sendAt: new Date("2026-07-21T09:30").toISOString(),
+      }),
+    );
+    expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ kind: "scheduled" }));
   });
 
   it("saves reply metadata that arrives after an earlier autosave", async () => {
@@ -452,7 +545,7 @@ describe("ComposeDialog draft coordination", () => {
   });
 
   it("forwards a message without requiring a comment", async () => {
-    const forward = vi.fn(async () => undefined);
+    const forward = vi.fn(async () => scheduledResult());
     const onSent = vi.fn();
     installApi({ save: vi.fn(), forward });
     render(
@@ -490,7 +583,7 @@ describe("ComposeDialog draft coordination", () => {
   });
 
   it("passes every editable forward field to the desktop bridge", async () => {
-    const forward = vi.fn(async () => undefined);
+    const forward = vi.fn(async () => scheduledResult());
     installApi({ save: vi.fn(), forward });
     render(
       <ComposeDialog
@@ -592,6 +685,7 @@ function renderDialog(onClose = vi.fn()): void {
 function installApi(input: {
   save: ReturnType<typeof vi.fn>;
   send?: ReturnType<typeof vi.fn>;
+  schedule?: ReturnType<typeof vi.fn>;
   deleteDraft?: ReturnType<typeof vi.fn>;
   release?: ReturnType<typeof vi.fn>;
   forward?: ReturnType<typeof vi.fn>;
@@ -602,15 +696,24 @@ function installApi(input: {
       save: input.save,
       delete: input.deleteDraft ?? vi.fn(async () => undefined),
       send: input.send ?? vi.fn(async () => ({ id: "sent", threadId: "thread" })),
+      schedule: input.schedule ?? vi.fn(async () => scheduledResult()),
     },
     attachments: { release: input.release ?? vi.fn(async () => undefined) },
     mail: {
-      forward: input.forward ?? vi.fn(async () => undefined),
+      forward: input.forward ?? vi.fn(async () => scheduledResult()),
       getThread: input.getThread ?? vi.fn(),
     },
     analytics: { trackFeature: vi.fn(async () => undefined) },
   } as unknown as FluxmailDesktopApi;
   Object.defineProperty(window, "fluxmail", { configurable: true, value: api });
+}
+
+function scheduledResult() {
+  return {
+    scheduleId: "schedule-1",
+    draftId: "draft-1",
+    sendAt: "2026-07-20T18:00:10.000Z",
+  };
 }
 
 function replyThread(): MailThread {

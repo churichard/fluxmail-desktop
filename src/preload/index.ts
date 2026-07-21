@@ -13,6 +13,8 @@ import {
   composeAttachmentSchema,
   composeInputSchema,
   draftDeleteInputSchema,
+  draftRecipientFieldsInputSchema,
+  draftRecipientFieldsSchema,
   draftResultSchema,
   featureEventSchema,
   imageRelayInputSchema,
@@ -24,11 +26,16 @@ import {
   mailModifyInputSchema,
   sendInputSchema,
   sendResultSchema,
+  scheduledSendCancelInputSchema,
+  scheduledSendCancelResultSchema,
+  scheduledSendInputSchema,
+  scheduledSendResultSchema,
   telemetryStatusSchema,
   threadListInputSchema,
   threadPageSchema,
   threadSchema,
   threadTargetSchema,
+  undoSendDelaySecondsSchema,
   type FluxmailDesktopApi,
 } from "../shared/contracts";
 
@@ -45,12 +52,29 @@ const api: FluxmailDesktopApi = {
     search: (input) => invoke(IPC.mailSearch, input, threadListInputSchema, threadPageSchema),
     getThread: (target) => invoke(IPC.mailThread, target, threadTargetSchema, threadSchema),
     modify: (input) => invoke(IPC.mailModify, input, mailModifyInputSchema, z.void()),
-    forward: (input) => invoke(IPC.mailForward, input, mailForwardInputSchema, z.void()),
+    forward: (input) =>
+      invoke(IPC.mailForward, input, mailForwardInputSchema, scheduledSendResultSchema.optional()),
   },
   drafts: {
     save: (input) => invoke(IPC.draftSave, input, composeInputSchema, draftResultSchema),
     delete: (input) => invoke(IPC.draftDelete, input, draftDeleteInputSchema, z.void()),
+    recipientFields: (input) =>
+      invoke(
+        IPC.draftRecipientFields,
+        input,
+        draftRecipientFieldsInputSchema,
+        draftRecipientFieldsSchema.optional(),
+      ),
     send: (input) => invoke(IPC.draftSend, input, sendInputSchema, sendResultSchema),
+    schedule: (input) =>
+      invoke(IPC.draftSchedule, input, scheduledSendInputSchema, scheduledSendResultSchema),
+    cancelScheduled: (input) =>
+      invoke(
+        IPC.draftCancelScheduled,
+        input,
+        scheduledSendCancelInputSchema,
+        scheduledSendCancelResultSchema,
+      ),
   },
   attachments: {
     pick: () =>
@@ -90,6 +114,13 @@ const api: FluxmailDesktopApi = {
       invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
     setImageRelay: (enabled) =>
       invoke(IPC.preferencesImageRelaySet, enabled, z.boolean(), z.boolean()),
+    setUndoSendDelaySeconds: (delay) =>
+      invoke(
+        IPC.preferencesUndoSendDelaySet,
+        delay,
+        undoSendDelaySecondsSchema,
+        undoSendDelaySecondsSchema,
+      ),
   },
   images: {
     proxy: (urls) => invoke(IPC.imagesProxy, urls, imageRelayInputSchema, imageRelayResultSchema),

@@ -12,11 +12,12 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   writeFileSync(
     path.join(dataDirectory, "desktop-preferences.json"),
     JSON.stringify({
-      version: 4,
+      version: 5,
       appearance: "system",
       dockBadge: true,
       blockRemoteImages: true,
       imageRelay: false,
+      undoSendDelaySeconds: 10,
     }),
   );
   const electronApp = await electron.launch({
@@ -794,6 +795,16 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     );
     await expect(resumedDraft.locator(".compose-attachments")).toContainText("launch-notes.pdf");
     await expect(resumedDraft.getByText("Draft saved", { exact: true })).toBeVisible();
+    await resumedDraft.getByRole("button", { name: "Edit recipients" }).click();
+    await resumedDraft
+      .locator(".recipient-row")
+      .filter({ hasText: /^To/ })
+      .locator("input")
+      .fill("r");
+    await resumedDraft.getByRole("button", { name: "Close compose" }).click();
+    await expect(resumedDraft).toBeHidden();
+    await launchDraft.locator(".thread-open").click();
+    await expect(resumedDraft.locator(".recipient-summary")).toContainText("r");
     await resumedDraft.getByRole("button", { name: "Close compose" }).click();
     await expect(resumedDraft).toBeHidden();
 
@@ -846,8 +857,26 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "border-top-width",
       "0px",
     );
+    await compose.getByRole("button", { name: "More send options" }).click();
+    const schedulePopover = compose.getByRole("dialog", { name: "Schedule send" });
+    await expect(schedulePopover).toBeVisible();
+    expect(
+      await schedulePopover.evaluate((popover) => {
+        const input = popover.querySelector("input")!.getBoundingClientRect();
+        const button = popover.querySelector("button")!.getBoundingClientRect();
+        return {
+          separateRows: button.top >= input.bottom,
+          contained: button.right <= popover.getBoundingClientRect().right,
+        };
+      }),
+    ).toEqual({ separateRows: true, contained: true });
+    await compose.getByRole("button", { name: "More send options" }).click();
     await page.keyboard.press("Meta+Enter");
     await expect(compose).toBeHidden();
+    const undoToast = page.getByRole("status");
+    await expect(undoToast).toContainText("Message sent.");
+    await undoToast.getByRole("button", { name: "Undo" }).click();
+    await expect(undoToast).toContainText("Sending canceled. The message is in Drafts.");
 
     await electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]?.setSize(1040, 680),
@@ -876,9 +905,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Plan",
       "Accounts",
       "Appearance",
+      "Sending",
       "Privacy",
       "About",
     ]);
+    const undoSendSelect = settings.getByLabel("Undo send");
+    await expect(undoSendSelect).toHaveValue("10");
+    await undoSendSelect.selectOption("0");
+    await expect(undoSendSelect).toHaveValue("0");
     const settingsContent = settings.locator(".settings-content");
     const sharedDataFormat = settings.locator(".settings-about span", {
       hasText: "Shared data format",
@@ -998,6 +1032,19 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       accountActionAlignment.identityRight,
     );
     expect(accountActionAlignment.rowRight - accountActionAlignment.actionsRight).toBeLessThan(14);
+    await settings.getByRole("button", { name: "Close settings" }).click();
+    await page.getByRole("button", { name: "Compose" }).click();
+    const immediateCompose = page.getByRole("dialog", { name: "New message" });
+    await immediateCompose
+      .locator(".recipient-row")
+      .filter({ hasText: /^To/ })
+      .locator("input")
+      .fill("friend@example.com");
+    await immediateCompose.locator('[contenteditable="true"]').fill("Send now.");
+    await immediateCompose.getByRole("button", { name: "Send", exact: true }).click();
+    const sentToast = page.getByRole("status");
+    await expect(sentToast).toContainText("Message sent.");
+    await expect(sentToast.getByRole("button", { name: "Undo" })).toHaveCount(0);
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

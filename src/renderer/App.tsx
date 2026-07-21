@@ -27,6 +27,7 @@ import {
 import {
   ComposeDialog,
   type ComposeDialogHandle,
+  type ComposeDelivery,
   type ComposeSeed,
 } from "./components/ComposeDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -54,6 +55,10 @@ export function App() {
   const [quickReplyDiscardVersion, setQuickReplyDiscardVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [deliveryNotice, setDeliveryNotice] = useState<{
+    message: string;
+    delivery?: ComposeDelivery;
+  }>();
   const [startupError, setStartupError] = useState<AppError>();
   const [sidebarWidth, setSidebarWidth] = useState(228);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -62,6 +67,7 @@ export function App() {
   const composeDialogRef = useRef<ComposeDialogHandle>(null);
   const readingPaneRef = useRef<ReadingPaneHandle>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
+  const deliveryTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
   const openThreadRequest = useRef(0);
   const quickReplyDirty = useRef(false);
@@ -204,6 +210,51 @@ export function App() {
     [accountIds, cursor, label, mailboxContext, submittedSearch, view],
   );
 
+  const showDelivery = useCallback(
+    (delivery: ComposeDelivery) => {
+      window.clearTimeout(deliveryTimer.current);
+      if (delivery.kind === "sent") {
+        setDeliveryNotice({ message: "Message sent." });
+        deliveryTimer.current = window.setTimeout(() => setDeliveryNotice(undefined), 4_000);
+        return;
+      }
+      const sendDate = new Date(delivery.sendAt);
+      setDeliveryNotice({
+        delivery,
+        message:
+          delivery.kind === "undo"
+            ? "Message sent."
+            : `Message scheduled for ${sendDate.toLocaleString([], {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })}.`,
+      });
+      const visibleFor =
+        delivery.kind === "undo" ? Math.max(0, sendDate.getTime() - Date.now()) + 500 : 8_000;
+      deliveryTimer.current = window.setTimeout(() => {
+        setDeliveryNotice(undefined);
+        if (delivery.kind === "undo") void refreshMail().then(() => loadThreads({ quiet: true }));
+      }, visibleFor);
+    },
+    [loadThreads, refreshMail],
+  );
+
+  const cancelDelivery = useCallback(async () => {
+    const delivery = deliveryNotice?.delivery;
+    if (!delivery || delivery.kind === "sent") return;
+    try {
+      await window.fluxmail.drafts.cancelScheduled({ scheduleId: delivery.scheduleId });
+      window.clearTimeout(deliveryTimer.current);
+      setDeliveryNotice({ message: "Sending canceled. The message is in Drafts." });
+      deliveryTimer.current = window.setTimeout(() => setDeliveryNotice(undefined), 4_000);
+      void loadBootstrap();
+      void loadThreads({ quiet: true });
+    } catch (caught) {
+      setDeliveryNotice(undefined);
+      setError(errorMessage(caught));
+    }
+  }, [deliveryNotice?.delivery, loadBootstrap, loadThreads]);
+
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
@@ -272,6 +323,13 @@ export function App() {
       unsubscribe();
     };
   }, [loadBootstrap, loadThreads]);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(deliveryTimer.current);
+    },
+    [],
+  );
 
   const openCompose = useCallback(() => {
     if (!confirmQuickReplyNavigation()) return;
@@ -453,6 +511,10 @@ export function App() {
                   attachments: draft.attachments,
                 })
               : [];
+            const recipientFields = await window.fluxmail.drafts.recipientFields({
+              accountId: thread.accountId,
+              draftId: draft.draftId,
+            });
             if (request !== openThreadRequest.current) {
               if (attachments.length)
                 void window.fluxmail.attachments
@@ -463,9 +525,9 @@ export function App() {
             setComposeSeed({
               accountId: thread.accountId,
               draftId: draft.draftId,
-              to: formatAddresses(draft.to),
-              cc: formatAddresses(draft.cc),
-              bcc: formatAddresses(draft.bcc),
+              to: recipientFields?.to ?? formatAddresses(draft.to),
+              cc: recipientFields?.cc ?? formatAddresses(draft.cc),
+              bcc: recipientFields?.bcc ?? formatAddresses(draft.bcc),
               subject: draft.subject,
               initialHtml: draft.body?.html,
               initialText: draft.body?.text,
@@ -736,6 +798,8 @@ export function App() {
         }
         onError={setError}
         onQuickReplyDirtyChange={handleQuickReplyDirtyChange}
+        onDelivery={showDelivery}
+        undoSendDelaySeconds={bootstrap.preferences.undoSendDelaySeconds}
         quickReplyDiscardVersion={quickReplyDiscardVersion}
       />
       {composeSeed ? (
@@ -746,9 +810,11 @@ export function App() {
           blockRemoteImages={bootstrap.preferences.blockRemoteImages}
           imageRelay={bootstrap.preferences.imageRelay}
           imageRelayAvailable={imageRelayAvailable}
+          undoSendDelaySeconds={bootstrap.preferences.undoSendDelaySeconds}
           onClose={() => setComposeSeed(null)}
-          onSent={() => {
+          onSent={(delivery) => {
             setComposeSeed(null);
+            showDelivery(delivery);
             void loadThreads();
           }}
           onError={setError}
@@ -762,7 +828,19 @@ export function App() {
           onError={setError}
         />
       ) : null}
-      {error ? (
+      {deliveryNotice ? (
+        <div className="toast" role="status">
+          <span>{deliveryNotice.message}</span>
+          {deliveryNotice.delivery && deliveryNotice.delivery.kind !== "sent" ? (
+            <button className="toast-action" onClick={() => void cancelDelivery()}>
+              {deliveryNotice.delivery.kind === "undo" ? "Undo" : "Cancel"}
+            </button>
+          ) : null}
+          <button onClick={() => setDeliveryNotice(undefined)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
+      ) : error ? (
         <div className="toast" role="alert">
           <span>{error}</span>
           <button onClick={() => setError(undefined)} aria-label="Dismiss message">

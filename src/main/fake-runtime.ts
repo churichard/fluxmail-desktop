@@ -10,12 +10,15 @@ import type {
   AccountInfo,
   BootstrapState,
   ComposeInput,
+  DraftRecipientFields,
   LicenseActivationResult,
   MailThread,
   ModifyActionInput,
+  ScheduledSendInput,
   ThreadListInput,
   ThreadPage,
   ThreadSummary,
+  UndoSendDelaySeconds,
 } from "../shared/contracts";
 import type { DesktopAnalytics } from "./analytics";
 
@@ -113,6 +116,11 @@ export class FakeFluxmailRuntime {
 
   private connected = true;
   private messages = structuredClone(seedMessages);
+  private readonly draftRecipientValues = new Map<string, DraftRecipientFields>();
+  private readonly scheduled = new Map<
+    string,
+    { draftId: string; timer: ReturnType<typeof setTimeout> }
+  >();
   private licenseValue: BootstrapState["license"] = {
     plan: "pro",
     maxMembers: 1,
@@ -129,7 +137,10 @@ export class FakeFluxmailRuntime {
   ) {}
 
   async initialize(): Promise<void> {}
-  async shutdown(): Promise<void> {}
+  async shutdown(): Promise<void> {
+    for (const item of this.scheduled.values()) clearTimeout(item.timer);
+    this.scheduled.clear();
+  }
 
   accounts(): AccountInfo[] {
     return this.connected ? [account] : [];
@@ -325,11 +336,18 @@ export class FakeFluxmailRuntime {
     };
     if (existing) this.messages[this.messages.indexOf(existing)] = draft;
     else this.messages.push(draft);
+    if (input.recipientFields) this.draftRecipientValues.set(draftId, input.recipientFields);
     this.options.onCacheChanged();
     return { draftId, messageId };
   }
 
-  async deleteDraft(_accountId: string, _draftId: string): Promise<void> {}
+  async deleteDraft(_accountId: string, draftId: string): Promise<void> {
+    this.draftRecipientValues.delete(draftId);
+  }
+
+  draftRecipientFields(_accountId: string, draftId: string): DraftRecipientFields | undefined {
+    return this.draftRecipientValues.get(draftId);
+  }
 
   async send(input: ComposeInput): Promise<{ id: string; threadId: string }> {
     const id = `sent-${this.messages.length + 1}`;
@@ -350,6 +368,31 @@ export class FakeFluxmailRuntime {
     return { id, threadId: id };
   }
 
+  async schedule(
+    input: ScheduledSendInput,
+  ): Promise<{ scheduleId: string; draftId: string; sendAt: string }> {
+    const draft = await this.saveDraft(input);
+    const sendAt = fakeScheduledSendAt(input);
+    const scheduleId = `test-schedule-${draft.draftId}`;
+    this.scheduleFakeDraft(scheduleId, draft.draftId, sendAt, () => {
+      this.messages = this.messages.filter((message) => message.draftId !== draft.draftId);
+      void this.send({ ...input, draftId: undefined });
+    });
+    return {
+      scheduleId,
+      draftId: draft.draftId,
+      sendAt,
+    };
+  }
+
+  async cancelScheduled(scheduleId: string): Promise<{ draftId: string }> {
+    const item = this.scheduled.get(scheduleId);
+    if (!item) throw new Error("This message has already been sent or canceled.");
+    clearTimeout(item.timer);
+    this.scheduled.delete(scheduleId);
+    return { draftId: item.draftId };
+  }
+
   async forward(input: {
     accountId: string;
     messageId: string;
@@ -362,15 +405,22 @@ export class FakeFluxmailRuntime {
     html?: string;
     attachments?: ComposeInput["attachments"];
     includeAttachments?: boolean;
-  }): Promise<void> {
+    sendAt?: string;
+    delaySeconds?: Exclude<UndoSendDelaySeconds, 0>;
+  }): Promise<{ scheduleId: string; draftId: string; sendAt: string } | undefined> {
     const original = this.messages.find((message) => message.id === input.messageId);
     const id = `forwarded-${this.messages.length + 1}`;
     const subject = input.subject || original?.subject || "";
+    const scheduled = Boolean(input.sendAt || input.delaySeconds);
+    const draftId = scheduled ? `test-draft-${id}` : undefined;
     this.messages.push({
       id,
       threadId: id,
       accountId: account.id,
-      folder: { id: "SENT", name: "Sent", role: "sent" },
+      ...(draftId ? { draftId } : {}),
+      folder: draftId
+        ? { id: "DRAFT", name: "Drafts", role: "drafts" }
+        : { id: "SENT", name: "Sent", role: "sent" },
       from: { email: account.email },
       to: input.to,
       ...(input.cc?.length ? { cc: input.cc } : {}),
@@ -386,9 +436,39 @@ export class FakeFluxmailRuntime {
           ...attachment,
         })),
       ],
-      flags: { read: true, starred: false, draft: false },
+      flags: { read: true, starred: false, draft: Boolean(draftId) },
     });
     this.options.onCacheChanged();
+    if (!scheduled || !draftId) return undefined;
+    const sendAt = fakeScheduledSendAt(
+      input.delaySeconds ? { delaySeconds: input.delaySeconds } : { sendAt: input.sendAt! },
+    );
+    const scheduleId = `test-schedule-${id}`;
+    this.scheduleFakeDraft(scheduleId, draftId, sendAt, () => {
+      const draft = this.messages.find((message) => message.draftId === draftId);
+      if (!draft) return;
+      delete draft.draftId;
+      draft.folder = { id: "SENT", name: "Sent", role: "sent" };
+      draft.flags.draft = false;
+      this.options.onCacheChanged();
+    });
+    return { scheduleId, draftId, sendAt };
+  }
+
+  private scheduleFakeDraft(
+    scheduleId: string,
+    draftId: string,
+    sendAt: string,
+    send: () => void,
+  ): void {
+    const timer = setTimeout(
+      () => {
+        this.scheduled.delete(scheduleId);
+        send();
+      },
+      Math.max(0, Date.parse(sendAt) - Date.now()),
+    );
+    this.scheduled.set(scheduleId, { draftId, timer });
   }
 
   async attachment(
@@ -440,4 +520,12 @@ export class FakeFluxmailRuntime {
       }))
       .sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
   }
+}
+
+function fakeScheduledSendAt(
+  timing: { sendAt: string } | { delaySeconds: Exclude<UndoSendDelaySeconds, 0> },
+): string {
+  return "delaySeconds" in timing
+    ? new Date(Date.now() + timing.delaySeconds * 1_000).toISOString()
+    : timing.sendAt;
 }

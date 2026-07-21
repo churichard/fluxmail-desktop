@@ -15,13 +15,17 @@ import type {
   BootstrapState,
   ComposeAttachment,
   ComposeInput,
+  DraftRecipientFields,
   FolderInfo,
   LicenseActivationResult,
   MailThread,
   MailboxView,
   ModifyActionInput,
+  ScheduledSendInput,
+  ScheduledSendResult,
   ThreadListInput,
   ThreadPage,
+  UndoSendDelaySeconds,
 } from "../shared/contracts";
 import { MailCache } from "./cache";
 import { DesktopAnalytics, type MailOperation, type SyncTrigger } from "./analytics";
@@ -50,6 +54,13 @@ interface RuntimeOptions {
 
 const PRIVATE_IMAGE_RELAY_PLANS = new Set(["pro", "team", "enterprise"]);
 
+interface ScheduledCacheTarget {
+  scheduleId: string;
+  accountId: string;
+  draftId: string;
+  sendAt: string;
+}
+
 export class FluxmailRuntime {
   private context!: AppContext;
   private fluxmail!: typeof import("fluxmail");
@@ -61,6 +72,7 @@ export class FluxmailRuntime {
   private imageRelayAccessDeniedByServer = false;
   private readonly backgroundViewRefreshes = new Map<string, Promise<void>>();
   private readonly committedViewRefreshes = new Map<string, number>();
+  private readonly scheduledCacheTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -84,12 +96,15 @@ export class FluxmailRuntime {
       });
     }
     this.context.scheduler.start();
+    this.restoreScheduledCacheTracking();
     this.context.licenseController.start();
     this.initialized = true;
   }
 
   async shutdown(): Promise<void> {
     if (!this.initialized) return;
+    for (const timer of this.scheduledCacheTimers.values()) clearTimeout(timer);
+    this.scheduledCacheTimers.clear();
     this.context.scheduler.stop();
     this.context.licenseController.stop();
     await this.context.telemetry.shutdown();
@@ -574,10 +589,20 @@ export class FluxmailRuntime {
       this.options.cache.putMessages(this.requireAccount(input.accountId), [draft], {
         invalidateBodies: true,
       });
+      if (input.recipientFields)
+        this.options.cache.putDraftRecipientFields(
+          input.accountId,
+          draft.draftId,
+          input.recipientFields,
+        );
       this.includeThreadInViews(input.accountId, draft.threadId, ["drafts", "all"]);
       this.options.onCacheChanged();
       return { value: { draftId: draft.draftId, messageId: draft.id } };
     });
+  }
+
+  draftRecipientFields(accountId: string, draftId: string): DraftRecipientFields | undefined {
+    return this.options.cache.getDraftRecipientFields(accountId, draftId);
   }
 
   async deleteDraft(accountId: string, draftId: string): Promise<void> {
@@ -624,6 +649,62 @@ export class FluxmailRuntime {
     });
   }
 
+  async schedule(input: ScheduledSendInput): Promise<ScheduledSendResult> {
+    return this.measure("send", async () => {
+      const account = this.requireAccount(input.accountId);
+      const draft = input.draftId
+        ? await this.context.service.updateDraft(
+            input.accountId,
+            input.draftId,
+            await this.toSendInput(input, true),
+          )
+        : await this.context.service.createDraft(
+            input.accountId,
+            await this.toSendInput(input, true),
+          );
+      if (!draft.draftId) throw new Error("The provider did not return a draft ID.");
+      this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
+      if (input.recipientFields)
+        this.options.cache.putDraftRecipientFields(
+          input.accountId,
+          draft.draftId,
+          input.recipientFields,
+        );
+      this.includeThreadInViews(input.accountId, draft.threadId, ["drafts", "all"]);
+      const sendAt = scheduledSendAt(input);
+      const scheduled = await this.context.service.scheduleSend(
+        input.accountId,
+        { draftId: draft.draftId },
+        sendAt,
+      );
+      this.trackScheduledCache({
+        scheduleId: scheduled.scheduleId,
+        accountId: input.accountId,
+        draftId: scheduled.draftId,
+        sendAt: scheduled.sendAt,
+      });
+      this.options.onCacheChanged();
+      return {
+        value: {
+          scheduleId: scheduled.scheduleId,
+          draftId: scheduled.draftId,
+          sendAt: scheduled.sendAt,
+        },
+      };
+    });
+  }
+
+  async cancelScheduled(scheduleId: string): Promise<{ draftId: string }> {
+    return this.measure("send", async () => {
+      const result = this.context.service.cancelScheduled(scheduleId);
+      const timer = this.scheduledCacheTimers.get(scheduleId);
+      if (timer) clearTimeout(timer);
+      this.scheduledCacheTimers.delete(scheduleId);
+      this.options.onCacheChanged();
+      return { value: { draftId: result.draftId } };
+    });
+  }
+
   async forward(input: {
     accountId: string;
     messageId: string;
@@ -636,8 +717,10 @@ export class FluxmailRuntime {
     html?: string;
     attachments?: ComposeAttachment[];
     includeAttachments?: boolean;
-  }): Promise<void> {
-    await this.measure("forward", async () => {
+    sendAt?: string;
+    delaySeconds?: Exclude<UndoSendDelaySeconds, 0>;
+  }): Promise<ScheduledSendResult | undefined> {
+    return this.measure("forward", async () => {
       const original = await this.context.service.getMessage(input.accountId, input.messageId);
       const originalAttachments = input.includeAttachments
         ? await Promise.all(
@@ -663,7 +746,7 @@ export class FluxmailRuntime {
             input.attachments.map((attachment) => this.options.resolveAttachment(attachment)),
           )
         : [];
-      const result = await this.context.service.send(input.accountId, {
+      const payload: SendInput = {
         to: input.to,
         ...(input.cc?.length ? { cc: input.cc } : {}),
         ...(input.bcc?.length ? { bcc: input.bcc } : {}),
@@ -672,7 +755,37 @@ export class FluxmailRuntime {
         ...(originalAttachments.length || addedAttachments.length
           ? { attachments: [...originalAttachments, ...addedAttachments] }
           : {}),
-      });
+      };
+      if (input.sendAt || input.delaySeconds) {
+        const account = this.requireAccount(input.accountId);
+        const draft = await this.context.service.createDraft(input.accountId, payload);
+        if (!draft.draftId) throw new Error("The provider did not return a draft ID.");
+        this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
+        this.includeThreadInViews(input.accountId, draft.threadId, ["drafts", "all"]);
+        const sendAt = scheduledSendAt(
+          input.delaySeconds ? { delaySeconds: input.delaySeconds } : { sendAt: input.sendAt! },
+        );
+        const scheduled = await this.context.service.scheduleSend(
+          input.accountId,
+          { draftId: draft.draftId },
+          sendAt,
+        );
+        this.trackScheduledCache({
+          scheduleId: scheduled.scheduleId,
+          accountId: input.accountId,
+          draftId: scheduled.draftId,
+          sendAt: scheduled.sendAt,
+        });
+        this.options.onCacheChanged();
+        return {
+          value: {
+            scheduleId: scheduled.scheduleId,
+            draftId: scheduled.draftId,
+            sendAt: scheduled.sendAt,
+          },
+        };
+      }
+      const result = await this.context.service.send(input.accountId, payload);
       try {
         const thread = await this.context.service.getThread(input.accountId, result.threadId);
         this.options.cache.putThread(this.requireAccount(input.accountId), thread);
@@ -683,6 +796,74 @@ export class FluxmailRuntime {
       this.options.onCacheChanged();
       return { value: undefined };
     });
+  }
+
+  private restoreScheduledCacheTracking(): void {
+    for (const scheduled of this.context.service.listScheduled()) {
+      const target = {
+        scheduleId: scheduled.scheduleId,
+        accountId: scheduled.accountId,
+        draftId: scheduled.draftId,
+        sendAt: scheduled.sendAt,
+      };
+      if (scheduled.status === "pending" || scheduled.status === "sending") {
+        this.trackScheduledCache(target);
+      } else if (
+        scheduled.status === "sent" &&
+        scheduled.sentThreadId &&
+        this.options.cache.hasDraft(scheduled.accountId, scheduled.draftId)
+      ) {
+        void this.completeScheduledCache(target, scheduled.sentThreadId);
+      }
+    }
+  }
+
+  private trackScheduledCache(
+    target: ScheduledCacheTarget,
+    delayMs = Math.max(0, Date.parse(target.sendAt) - Date.now()) + 100,
+    nextPollMs = 250,
+  ): void {
+    const previous = this.scheduledCacheTimers.get(target.scheduleId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.scheduledCacheTimers.delete(target.scheduleId);
+      void this.reconcileScheduledCache(target, nextPollMs);
+    }, delayMs);
+    timer.unref();
+    this.scheduledCacheTimers.set(target.scheduleId, timer);
+  }
+
+  private async reconcileScheduledCache(
+    target: ScheduledCacheTarget,
+    pollMs: number,
+  ): Promise<void> {
+    const scheduled = this.context.service
+      .listScheduled(target.accountId)
+      .find((item) => item.scheduleId === target.scheduleId);
+    if (!scheduled || scheduled.status === "canceled" || scheduled.status === "failed") return;
+    if (scheduled.status === "pending" || scheduled.status === "sending") {
+      this.trackScheduledCache(target, pollMs, Math.min(pollMs * 2, 30_000));
+      return;
+    }
+    if (scheduled.sentThreadId) await this.completeScheduledCache(target, scheduled.sentThreadId);
+  }
+
+  private async completeScheduledCache(
+    target: ScheduledCacheTarget,
+    sentThreadId: string,
+  ): Promise<void> {
+    const account = this.accounts().find((candidate) => candidate.id === target.accountId);
+    if (!account) return;
+    this.options.cache.deleteDraft(account, target.draftId);
+    this.options.onCacheChanged();
+    try {
+      const thread = await this.context.service.getThread(target.accountId, sentThreadId);
+      this.options.cache.putThread(account, thread);
+      this.includeThreadInViews(target.accountId, sentThreadId, ["sent", "all"]);
+    } catch {
+      this.options.cache.invalidateThread(target.accountId, sentThreadId);
+    }
+    this.options.onCacheChanged();
   }
 
   async attachment(
@@ -1056,6 +1237,14 @@ function accountViewKey(accountId: string, currentViewKey: string): string {
 
 function backgroundRefreshKey(input: ThreadListInput): string {
   return JSON.stringify([viewKey(input), [...(input.accountIds ?? [])].sort()]);
+}
+
+function scheduledSendAt(
+  timing: { sendAt: string } | { delaySeconds: Exclude<UndoSendDelaySeconds, 0> },
+): string {
+  return "delaySeconds" in timing
+    ? new Date(Date.now() + timing.delaySeconds * 1_000).toISOString()
+    : timing.sendAt;
 }
 
 export function shouldUseBundledGoogleConfig(

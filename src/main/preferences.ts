@@ -1,7 +1,12 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { appearancePreferenceSchema, type AppearancePreference } from "../shared/contracts";
+import {
+  appearancePreferenceSchema,
+  undoSendDelaySecondsSchema,
+  type AppearancePreference,
+  type UndoSendDelaySeconds,
+} from "../shared/contracts";
 
 const preferencesFileSchema = z.discriminatedUnion("version", [
   z.object({ version: z.literal(1), appearance: appearancePreferenceSchema }).strict(),
@@ -29,6 +34,16 @@ const preferencesFileSchema = z.discriminatedUnion("version", [
       imageRelay: z.boolean(),
     })
     .strict(),
+  z
+    .object({
+      version: z.literal(5),
+      appearance: appearancePreferenceSchema,
+      dockBadge: z.boolean(),
+      blockRemoteImages: z.boolean(),
+      imageRelay: z.boolean(),
+      undoSendDelaySeconds: undoSendDelaySecondsSchema,
+    })
+    .strict(),
 ]);
 
 export class DesktopPreferences {
@@ -36,6 +51,7 @@ export class DesktopPreferences {
   private dockBadgeValue = true;
   private blockRemoteImagesValue = true;
   private imageRelayValue = true;
+  private undoSendDelaySecondsValue: UndoSendDelaySeconds = 10;
   private readonly filePath: string;
   private mutationQueue: Promise<void> = Promise.resolve();
 
@@ -49,8 +65,12 @@ export class DesktopPreferences {
       this.appearanceValue = stored.appearance;
       this.dockBadgeValue = stored.version === 1 ? true : stored.dockBadge;
       this.blockRemoteImagesValue =
-        stored.version === 3 || stored.version === 4 ? stored.blockRemoteImages : true;
-      this.imageRelayValue = stored.version === 4 ? stored.imageRelay : true;
+        stored.version === 3 || stored.version === 4 || stored.version === 5
+          ? stored.blockRemoteImages
+          : true;
+      this.imageRelayValue =
+        stored.version === 4 || stored.version === 5 ? stored.imageRelay : true;
+      this.undoSendDelaySecondsValue = stored.version === 5 ? stored.undoSendDelaySeconds : 10;
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== "ENOENT" &&
@@ -63,6 +83,7 @@ export class DesktopPreferences {
       this.dockBadgeValue = true;
       this.blockRemoteImagesValue = true;
       this.imageRelayValue = true;
+      this.undoSendDelaySecondsValue = 10;
     }
     return this.appearanceValue;
   }
@@ -83,6 +104,10 @@ export class DesktopPreferences {
     return this.imageRelayValue;
   }
 
+  undoSendDelaySeconds(): UndoSendDelaySeconds {
+    return this.undoSendDelaySecondsValue;
+  }
+
   async setAppearance(appearance: AppearancePreference): Promise<AppearancePreference> {
     const value = appearancePreferenceSchema.parse(appearance);
     return this.enqueueMutation(async () => {
@@ -91,6 +116,7 @@ export class DesktopPreferences {
         this.dockBadgeValue,
         this.blockRemoteImagesValue,
         this.imageRelayValue,
+        this.undoSendDelaySecondsValue,
       );
       this.appearanceValue = value;
       return value;
@@ -105,6 +131,7 @@ export class DesktopPreferences {
         value,
         this.blockRemoteImagesValue,
         this.imageRelayValue,
+        this.undoSendDelaySecondsValue,
       );
       this.dockBadgeValue = value;
       return value;
@@ -114,7 +141,13 @@ export class DesktopPreferences {
   async setBlockRemoteImages(enabled: boolean): Promise<boolean> {
     const value = z.boolean().parse(enabled);
     return this.enqueueMutation(async () => {
-      await this.save(this.appearanceValue, this.dockBadgeValue, value, this.imageRelayValue);
+      await this.save(
+        this.appearanceValue,
+        this.dockBadgeValue,
+        value,
+        this.imageRelayValue,
+        this.undoSendDelaySecondsValue,
+      );
       this.blockRemoteImagesValue = value;
       return value;
     });
@@ -128,8 +161,24 @@ export class DesktopPreferences {
         this.dockBadgeValue,
         this.blockRemoteImagesValue,
         value,
+        this.undoSendDelaySecondsValue,
       );
       this.imageRelayValue = value;
+      return value;
+    });
+  }
+
+  async setUndoSendDelaySeconds(delay: UndoSendDelaySeconds): Promise<UndoSendDelaySeconds> {
+    const value = undoSendDelaySecondsSchema.parse(delay);
+    return this.enqueueMutation(async () => {
+      await this.save(
+        this.appearanceValue,
+        this.dockBadgeValue,
+        this.blockRemoteImagesValue,
+        this.imageRelayValue,
+        value,
+      );
+      this.undoSendDelaySecondsValue = value;
       return value;
     });
   }
@@ -148,6 +197,7 @@ export class DesktopPreferences {
     dockBadge: boolean,
     blockRemoteImages: boolean,
     imageRelay: boolean,
+    undoSendDelaySeconds: UndoSendDelaySeconds,
   ): Promise<void> {
     const directory = path.dirname(this.filePath);
     const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
@@ -155,11 +205,12 @@ export class DesktopPreferences {
     await writeFile(
       temporaryPath,
       `${JSON.stringify({
-        version: 4,
+        version: 5,
         appearance,
         dockBadge,
         blockRemoteImages,
         imageRelay,
+        undoSendDelaySeconds,
       })}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
