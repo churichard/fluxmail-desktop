@@ -2,11 +2,26 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.2.0...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.3.0...HEAD)
+
+## [0.3.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.3.0) - 2026-07-21
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Changed
+
+- Include the original message and citation in replies, restore reply drafts, and attach referenced inline images ([#32](https://github.com/churichard/fluxmail-desktop/pull/32))
+- Use an overlay scrollbar in the sidebar to match the thread list and reading pane ([#31](https://github.com/churichard/fluxmail-desktop/pull/31))
+
+### Added
+
+- Search mail with Boolean expressions and filters for people, folders, labels, dates, attachments, files, and accounts, with autocomplete for filters and known values ([#35](https://github.com/churichard/fluxmail-desktop/pull/35))
+- Compose replies and forwards in the reading pane, use R, A, and F shortcuts, and confirm before replacing an unsent message ([#30](https://github.com/churichard/fluxmail-desktop/pull/30))
 
 ### Fixed
 
 - Start the app when the local Fluxmail data store uses the latest format ([#28](https://github.com/churichard/fluxmail-desktop/pull/28))
+- Open a conversation from any non-action area of its thread row ([#33](https://github.com/churichard/fluxmail-desktop/pull/33))
 
 ## [0.2.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.2.0) - 2026-07-20
 
