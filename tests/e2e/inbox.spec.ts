@@ -499,7 +499,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       await page.locator(".thread-list").evaluate((node) => node.getBoundingClientRect().top),
     ).toBe(threadListTopBeforeSelection);
     await expect(selectAll).toHaveAttribute("aria-checked", "mixed");
-    await expect(page.getByRole("textbox", { name: "Search mail" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Search mail" })).toBeVisible();
     await expect(
       page.locator(".thread-header").getByRole("heading", { name: "Inbox" }),
     ).toHaveCount(0);
@@ -721,7 +721,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(page.getByText("Welcome to Fluxmail", { exact: true })).toHaveCount(0);
 
-    const search = page.getByRole("textbox", { name: "Search mail" });
+    const search = page.getByRole("combobox", { name: "Search mail" });
+    await search.fill("sub");
+    await expect(page.getByRole("option", { name: /subject:/ })).toBeVisible();
+    await search.press("Enter");
+    await expect(search).toHaveValue("subject:");
+    await search.fill("is:");
+    await page.getByRole("option", { name: /is:unread/ }).click();
+    await expect(search).toHaveValue("is:unread ");
     await search.fill("receipt");
     await search.press("Enter");
     await expect(page.getByText("Receipt for Tuesday", { exact: true })).toBeVisible();
