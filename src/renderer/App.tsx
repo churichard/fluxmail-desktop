@@ -67,9 +67,13 @@ export function App() {
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
   const mailboxContextRef = useRef(mailboxContext);
+  const selectedThreadRef = useRef<ThreadSummary | undefined>(undefined);
   useLayoutEffect(() => {
     mailboxContextRef.current = mailboxContext;
   }, [mailboxContext]);
+  useLayoutEffect(() => {
+    selectedThreadRef.current = selectedThread;
+  }, [selectedThread]);
 
   const accountIds = useMemo(() => (accountId ? [accountId] : undefined), [accountId]);
   const permanentDeleteAccountIds = useMemo(
@@ -379,6 +383,7 @@ export function App() {
 
   const activateThread = useCallback(
     (thread: ThreadSummary) => {
+      selectedThreadRef.current = thread;
       setSelectedThread(thread);
       if (!thread.unread) return;
       void markThreadRead(thread);
@@ -432,8 +437,8 @@ export function App() {
           return next;
         });
         if (shouldAdvanceAfterArchive) {
-          if (nextThread) setSelectedThread(nextThread);
-          else setSelectedThread(undefined);
+          selectedThreadRef.current = nextThread;
+          setSelectedThread(nextThread);
         } else {
           setSelectedThread((current) =>
             current && targetKeys.has(threadKey(current)) ? undefined : current,
@@ -461,7 +466,15 @@ export function App() {
             return undefined;
           return current;
         });
-        if (nextThread?.unread) await markThreadRead(nextThread);
+        const currentSelectedThread = selectedThreadRef.current;
+        if (
+          nextThread?.unread &&
+          currentSelectedThread?.unread &&
+          threadKey(currentSelectedThread) === threadKey(nextThread) &&
+          mailboxContext === mailboxContextRef.current
+        ) {
+          await markThreadRead(nextThread);
+        }
         await loadThreads({
           quiet: optimisticRemoval,
           forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),

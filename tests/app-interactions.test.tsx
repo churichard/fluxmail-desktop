@@ -369,7 +369,7 @@ describe("App thread navigation", () => {
 
   it("keeps a newly opened thread selected when an archive finishes", async () => {
     const first = thread("thread-1", "First conversation", false);
-    const second = thread("thread-2", "Second conversation", false);
+    const second = { ...thread("thread-2", "Second conversation", false), unread: true };
     const third = thread("thread-3", "Third conversation", false);
     let finishArchive!: () => void;
     const pendingArchive = new Promise<void>((resolve) => {
@@ -397,6 +397,7 @@ describe("App thread navigation", () => {
 
     await waitFor(() => expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(2));
     expect(screen.getByText(`Reading ${third.subject}`)).toBeTruthy();
+    expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(1);
   });
 
   it("opens the next conversation after archiving the current one", async () => {
