@@ -120,6 +120,11 @@ if (!app.isPackaged && process.env.FLUXMAIL_DESKTOP_TEST_DATA_DIR) {
 }
 
 if (!app.requestSingleInstanceLock()) {
+  if (!app.isPackaged) {
+    console.error(
+      "Fluxmail could not start because another instance is already running. Quit Fluxmail and stop any other Fluxmail development session, then try again.",
+    );
+  }
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -362,6 +367,7 @@ function registerIpc(): void {
       preferences: {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),
+        openNextAfterArchive: requirePreferences().openNextAfterArchive(),
         blockRemoteImages: requirePreferences().blockRemoteImages(),
         imageRelay: requirePreferences().imageRelay(),
       },
@@ -477,6 +483,9 @@ function registerIpc(): void {
     updateDockBadge();
     return value;
   });
+  handle(IPC.preferencesOpenNextAfterArchiveSet, z.boolean(), z.boolean(), (enabled) =>
+    requirePreferences().setOpenNextAfterArchive(enabled),
+  );
   handle(IPC.preferencesBlockRemoteImagesSet, z.boolean(), z.boolean(), (enabled) =>
     requirePreferences().setBlockRemoteImages(enabled),
   );

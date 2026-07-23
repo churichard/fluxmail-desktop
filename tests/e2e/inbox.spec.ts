@@ -773,12 +773,10 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
     await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
-    await expect(page.locator(".thread-row.active")).toHaveCount(0, {
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday", {
       timeout: 200,
     });
-    await expect(page.locator(".reading-placeholder")).toBeVisible({
-      timeout: 200,
-    });
+    await expect(page.locator(".thread-row.active")).toContainText("Receipt for Tuesday");
     await expect(page.getByText("Welcome to Fluxmail", { exact: true })).toHaveCount(0);
 
     const search = page.getByRole("combobox", { name: "Search mail" });
@@ -900,6 +898,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Plan",
       "Accounts",
       "Appearance",
+      "Behavior",
       "Privacy",
       "About",
     ]);
@@ -939,6 +938,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect.poll(() => electronApp.evaluate(({ app }) => app.dock?.getBadge())).toBe("");
     await dockBadgeCheckbox.click();
     await expect(dockBadgeCheckbox).toHaveAttribute("aria-checked", "true");
+    const openNextAfterArchiveCheckbox = settings.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "false");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(
       settings.getByText(
@@ -1028,7 +1035,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   }
 });
 
-test("archives from a row and the email iframe without transferring focus", async () => {
+test("advances after archive unless the setting is disabled", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
   const electronApp = await electron.launch({
     args: [mockKeychainArgument, process.cwd()],
@@ -1049,13 +1056,21 @@ test("archives from a row and the email iframe without transferring focus", asyn
     await welcomeThread.locator(".thread-open").click();
     await page.keyboard.press("e");
 
-    await expect(page.locator(".reading-placeholder")).toBeVisible();
     await expect(welcomeThread).toHaveCount(0);
-    await expect(page.locator(".thread-row").first()).toBeVisible();
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday");
+    await expect(page.locator(".thread-row.active")).toContainText("Receipt for Tuesday");
     await expect(page.locator(".thread-open:focus")).toHaveCount(0);
 
     const nextThread = page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" });
-    await nextThread.locator(".thread-open").click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const openNextAfterArchiveCheckbox = settings.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "false");
+    await settings.getByRole("button", { name: "Close settings" }).click();
 
     const messageFrame = page.frameLocator('iframe[title="Email message"]');
     await messageFrame.locator("#email-root").click();

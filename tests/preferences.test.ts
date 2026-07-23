@@ -18,18 +18,21 @@ describe("desktop preferences", () => {
     const preferences = new DesktopPreferences(directory);
     expect(await preferences.load()).toBe("system");
     expect(preferences.dockBadge()).toBe(true);
+    expect(preferences.openNextAfterArchive()).toBe(true);
     expect(preferences.blockRemoteImages()).toBe(true);
     expect(preferences.imageRelay()).toBe(true);
     expect(await preferences.setAppearance("dark")).toBe("dark");
     expect(await preferences.setDockBadge(false)).toBe(false);
+    expect(await preferences.setOpenNextAfterArchive(false)).toBe(false);
     expect(await preferences.setBlockRemoteImages(false)).toBe(false);
     expect(await preferences.setImageRelay(false)).toBe(false);
 
     const filePath = path.join(directory, "desktop-preferences.json");
     expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({
-      version: 4,
+      version: 5,
       appearance: "dark",
       dockBadge: false,
+      openNextAfterArchive: false,
       blockRemoteImages: false,
       imageRelay: false,
     });
@@ -37,11 +40,12 @@ describe("desktop preferences", () => {
     const restored = new DesktopPreferences(directory);
     expect(await restored.load()).toBe("dark");
     expect(restored.dockBadge()).toBe(false);
+    expect(restored.openNextAfterArchive()).toBe(false);
     expect(restored.blockRemoteImages()).toBe(false);
     expect(restored.imageRelay()).toBe(false);
   });
 
-  it("enables new privacy defaults when migrating version one and two preferences", async () => {
+  it("enables new defaults when migrating version one and two preferences", async () => {
     for (const stored of [
       { version: 1, appearance: "light" },
       { version: 2, appearance: "dark", dockBadge: false },
@@ -54,6 +58,7 @@ describe("desktop preferences", () => {
       );
       const preferences = new DesktopPreferences(directory);
       expect(await preferences.load()).toBe(stored.appearance);
+      expect(preferences.openNextAfterArchive()).toBe(true);
       expect(preferences.blockRemoteImages()).toBe(true);
       expect(preferences.imageRelay()).toBe(true);
     }
@@ -74,8 +79,28 @@ describe("desktop preferences", () => {
     const preferences = new DesktopPreferences(directory);
     expect(await preferences.load()).toBe("dark");
     expect(preferences.dockBadge()).toBe(false);
+    expect(preferences.openNextAfterArchive()).toBe(true);
     expect(preferences.blockRemoteImages()).toBe(false);
     expect(preferences.imageRelay()).toBe(true);
+  });
+
+  it("enables archive advancement when migrating version four preferences", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(
+      path.join(directory, "desktop-preferences.json"),
+      JSON.stringify({
+        version: 4,
+        appearance: "dark",
+        dockBadge: false,
+        blockRemoteImages: false,
+        imageRelay: false,
+      }),
+      "utf8",
+    );
+    const preferences = new DesktopPreferences(directory);
+    expect(await preferences.load()).toBe("dark");
+    expect(preferences.openNextAfterArchive()).toBe(true);
+    expect(preferences.imageRelay()).toBe(false);
   });
 
   it("serializes concurrent setting changes without losing values", async () => {
@@ -86,20 +111,23 @@ describe("desktop preferences", () => {
     await Promise.all([
       preferences.setAppearance("dark"),
       preferences.setDockBadge(false),
+      preferences.setOpenNextAfterArchive(false),
       preferences.setBlockRemoteImages(false),
       preferences.setImageRelay(false),
     ]);
 
     expect(preferences.appearance()).toBe("dark");
     expect(preferences.dockBadge()).toBe(false);
+    expect(preferences.openNextAfterArchive()).toBe(false);
     expect(preferences.blockRemoteImages()).toBe(false);
     expect(preferences.imageRelay()).toBe(false);
     expect(
       JSON.parse(await readFile(path.join(directory, "desktop-preferences.json"), "utf8")),
     ).toEqual({
-      version: 4,
+      version: 5,
       appearance: "dark",
       dockBadge: false,
+      openNextAfterArchive: false,
       blockRemoteImages: false,
       imageRelay: false,
     });
@@ -111,6 +139,7 @@ describe("desktop preferences", () => {
     const preferences = new DesktopPreferences(directory);
     expect(await preferences.load()).toBe("system");
     expect(preferences.dockBadge()).toBe(true);
+    expect(preferences.openNextAfterArchive()).toBe(true);
     expect(preferences.blockRemoteImages()).toBe(true);
     expect(preferences.imageRelay()).toBe(true);
   });

@@ -15,6 +15,7 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [dockBadgeBusy, setDockBadgeBusy] = useState(false);
+  const [openNextAfterArchiveBusy, setOpenNextAfterArchiveBusy] = useState(false);
   const [blockRemoteImagesBusy, setBlockRemoteImagesBusy] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [licenseKey, setLicenseKey] = useState("");
@@ -129,6 +130,51 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
       onError(error instanceof Error ? error.message : "Could not change the Dock badge setting.");
     } finally {
       setDockBadgeBusy(false);
+    }
+  };
+  const updateOpenNextAfterArchive = async (enabled: boolean) => {
+    if (openNextAfterArchiveBusy || enabled === state.preferences.openNextAfterArchive) return;
+    const previous = state.preferences.openNextAfterArchive;
+    setOpenNextAfterArchiveBusy(true);
+    onState((current) =>
+      current
+        ? {
+            ...current,
+            preferences: { ...current.preferences, openNextAfterArchive: enabled },
+          }
+        : current,
+    );
+    try {
+      const value = await window.fluxmail.preferences.setOpenNextAfterArchive(enabled);
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, openNextAfterArchive: value },
+            }
+          : current,
+      );
+      void window.fluxmail.analytics
+        .trackFeature({
+          feature: "settings",
+          action: "updated",
+          source: "settings",
+        })
+        .catch(() => undefined);
+    } catch (error) {
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, openNextAfterArchive: previous },
+            }
+          : current,
+      );
+      onError(
+        error instanceof Error ? error.message : "Could not change the archive behavior setting.",
+      );
+    } finally {
+      setOpenNextAfterArchiveBusy(false);
     }
   };
   const updateBlockRemoteImages = async (enabled: boolean) => {
@@ -473,6 +519,24 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                 className="settings-checkbox"
                 disabled={dockBadgeBusy}
                 onClick={() => void updateDockBadge(!state.preferences.dockBadge)}
+              />
+            </div>
+          </section>
+          <section>
+            <h2>Behavior</h2>
+            <div className="toggle-row">
+              <span>
+                <strong>Open next conversation after archiving</strong>
+                <small>When you archive an open conversation, open the next one in the list.</small>
+              </span>
+              <SelectionCheckbox
+                state={state.preferences.openNextAfterArchive ? "checked" : "unchecked"}
+                label="Open next conversation after archiving"
+                className="settings-checkbox"
+                disabled={openNextAfterArchiveBusy}
+                onClick={() =>
+                  void updateOpenNextAfterArchive(!state.preferences.openNextAfterArchive)
+                }
               />
             </div>
           </section>
