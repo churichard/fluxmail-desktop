@@ -316,6 +316,7 @@ export function ThreadRow({
             <time>{formatListDate(thread.date)}</time>
           </div>
           <div className="subject-line">
+            {thread.draft ? <span className="thread-draft-label">Draft</span> : null}
             <span className="truncate">{thread.subject || "(no subject)"}</span>
             {thread.messageCount > 1 ? (
               <span className="message-count">{thread.messageCount}</span>

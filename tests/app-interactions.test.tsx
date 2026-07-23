@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/renderer/App";
 import type {
   AppEvent,
@@ -10,18 +10,21 @@ import type {
   ThreadSummary,
 } from "../src/shared/contracts";
 
+const closeDraft = vi.hoisted(() => vi.fn<() => boolean | Promise<boolean>>(() => true));
+
 vi.mock("../src/renderer/components/Sidebar", () => ({
   Sidebar: ({
     onSettings,
     onViewChange,
   }: {
     onSettings(): void;
-    onViewChange(view: "starred" | "all"): void;
+    onViewChange(view: "starred" | "all" | "drafts"): void;
   }) => (
     <aside>
       Sidebar
       <button onClick={() => onViewChange("starred")}>Starred</button>
       <button onClick={() => onViewChange("all")}>All mail</button>
+      <button onClick={() => onViewChange("drafts")}>Drafts</button>
       <button onClick={onSettings}>Settings</button>
     </aside>
   ),
@@ -65,16 +68,18 @@ vi.mock("../src/renderer/components/ReadingPane", async () => {
       {
         thread,
         onModify,
+        onDraftFinished,
         onQuickReplyDirtyChange,
       }: {
         thread?: ThreadSummary;
         onModify(action: { type: "star" | "unstar" }): Promise<void>;
+        onDraftFinished?(): void;
         onQuickReplyDirtyChange(dirty: boolean): void;
       },
       ref,
     ) {
       const [composerMode, setComposerMode] = React.useState<string>();
-      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode }));
+      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode, closeDraft }));
       return (
         <section>
           {thread ? `Reading ${thread.subject}` : "No conversation"}
@@ -85,6 +90,7 @@ vi.mock("../src/renderer/components/ReadingPane", async () => {
               <button onClick={() => void onModify({ type: thread.starred ? "unstar" : "star" })}>
                 {thread.starred ? "Unstar conversation" : "Star conversation"}
               </button>
+              <button onClick={onDraftFinished}>Finish draft</button>
             </>
           ) : null}
         </section>
@@ -135,6 +141,11 @@ vi.mock("../src/renderer/components/FluxmailLogoMark", () => ({
   FluxmailLogoMark: () => <span>Fluxmail</span>,
 }));
 
+beforeEach(() => {
+  closeDraft.mockReset();
+  closeDraft.mockReturnValue(true);
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -178,31 +189,80 @@ describe("App thread navigation", () => {
     );
   });
 
-  it("ignores a draft that finishes loading after another thread is selected", async () => {
+  it("opens a draft conversation in the reading pane instead of compose", async () => {
     const draft = thread("draft-thread", "Draft in progress", true);
-    const regular = thread("regular-thread", "Current conversation", false);
-    let resolveDraft: ((thread: MailThread) => void) | undefined;
-    const getThread = vi.fn(({ threadId }: { threadId: string }) => {
-      if (threadId === draft.id)
-        return new Promise<MailThread>((resolve) => {
-          resolveDraft = resolve;
-        });
-      return Promise.resolve(mailThread(regular));
-    });
-    installApi([draft, regular], getThread);
+    installApi(
+      [draft],
+      vi.fn(async () => draftThread(draft)),
+    );
     installMatchMedia();
     render(<App />);
     await screen.findByRole("button", { name: draft.subject });
 
     fireEvent.click(screen.getByRole("button", { name: draft.subject }));
-    fireEvent.click(screen.getByRole("button", { name: regular.subject }));
-    await screen.findByText(`Reading ${regular.subject}`);
-    await act(async () => {
-      resolveDraft?.(draftThread(draft));
-    });
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByText(`Reading ${regular.subject}`)).toBeTruthy();
+    expect(await screen.findByText(`Reading ${draft.subject}`)).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
+  });
+
+  it("clears a completed draft when it disappears from the current view", async () => {
+    const draft = thread("draft-thread", "Draft in progress", true);
+    const api = installApi(
+      [draft],
+      vi.fn(async () => draftThread(draft)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: draft.subject });
+    fireEvent.click(screen.getByRole("button", { name: "Drafts" }));
+    fireEvent.click(await screen.findByRole("button", { name: draft.subject }));
+    expect(await screen.findByText(`Reading ${draft.subject}`)).toBeTruthy();
+    api.setVisibleThreads([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish draft" }));
+
+    await screen.findByText("No conversation");
+    expect(screen.getByText("0 conversations")).toBeTruthy();
+  });
+
+  it("keeps the current conversation selected when its inline draft cannot close", async () => {
+    const first = thread("draft-thread", "Draft in progress", true);
+    const second = thread("regular-thread", "Another conversation", false);
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+    expect(await screen.findByText(`Reading ${first.subject}`)).toBeTruthy();
+    closeDraft.mockResolvedValueOnce(false);
+
+    fireEvent.click(screen.getByRole("button", { name: second.subject }));
+
+    await waitFor(() => expect(closeDraft).toHaveBeenCalled());
+    expect(screen.getByText(`Reading ${first.subject}`)).toBeTruthy();
+  });
+
+  it("waits for an inline draft before confirming a window close", async () => {
+    const current = thread("draft-thread", "Draft in progress", true);
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: current.subject }));
+    await screen.findByText(`Reading ${current.subject}`);
+    const pendingClose = deferred<boolean>();
+    closeDraft.mockReturnValueOnce(pendingClose.promise);
+
+    act(() => events.emit({ type: "window-close-requested" }));
+
+    expect(window.fluxmail.system.confirmWindowClose).not.toHaveBeenCalled();
+    await act(async () => pendingClose.resolve(true));
+    expect(window.fluxmail.system.confirmWindowClose).toHaveBeenCalledOnce();
+    expect(window.fluxmail.system.cancelWindowClose).not.toHaveBeenCalled();
   });
 
   it("opens a conversation when its stale draft flag has no matching draft", async () => {
@@ -223,34 +283,6 @@ describe("App thread navigation", () => {
     await screen.findByText(`Reading ${staleDraft.subject}`);
     expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("restores the reply target when reopening a saved reply draft", async () => {
-    const savedReply = thread("thread-1", "Saved reply", true);
-    const detail = mailThread(savedReply);
-    const original = { ...detail.messages[0]!, id: "original-message" };
-    detail.messages = [
-      original,
-      {
-        ...original,
-        id: "draft-message",
-        draftId: "draft-1",
-        from: { email: "me@example.com" },
-        to: [{ email: "sender@example.com" }],
-        flags: { read: true, starred: false, draft: true },
-      },
-    ];
-    installApi(
-      [savedReply],
-      vi.fn(async () => detail),
-    );
-    installMatchMedia();
-    render(<App />);
-
-    fireEvent.click(await screen.findByRole("button", { name: savedReply.subject }));
-
-    expect((await screen.findByTestId("compose-thread-id")).textContent).toBe(savedReply.id);
-    expect(screen.getByTestId("compose-reply-target").textContent).toBe(original.id);
   });
 
   it("keeps an unsent quick reply when thread navigation is canceled", async () => {
@@ -636,22 +668,11 @@ function installMatchMedia(): void {
   });
 }
 
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve(value: T): void;
-} {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 function installApi(
   threads: ThreadSummary[],
   getThread: (target: { accountId: string; threadId: string }) => Promise<MailThread>,
   options: { threadsAfterModify?: ThreadSummary[] } = {},
-): { emit(event: AppEvent): void } {
+): { emit(event: AppEvent): void; setVisibleThreads(threads: ThreadSummary[]): void } {
   const state: BootstrapState = {
     engine: {
       version: "0.3.0",
@@ -730,7 +751,12 @@ function installApi(
       }),
     } as unknown as FluxmailDesktopApi,
   });
-  return { emit: (event) => eventListener?.(event) };
+  return {
+    emit: (event) => eventListener?.(event),
+    setVisibleThreads: (nextThreads) => {
+      visibleThreads = nextThreads;
+    },
+  };
 }
 
 function thread(id: string, subject: string, draft: boolean): ThreadSummary {
@@ -782,4 +808,12 @@ function draftThread(summary: ThreadSummary): MailThread {
     flags: { read: true, starred: false, draft: true },
   };
   return detail;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }

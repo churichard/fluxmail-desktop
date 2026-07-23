@@ -38,6 +38,7 @@ export interface ComposeSeed {
 interface Props {
   seed: ComposeSeed;
   accounts: AccountInfo[];
+  inline?: boolean;
   blockRemoteImages?: boolean;
   imageRelay?: boolean;
   imageRelayAvailable?: boolean;
@@ -54,6 +55,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   {
     seed,
     accounts,
+    inline = false,
     blockRemoteImages = true,
     imageRelay = true,
     imageRelayAvailable = true,
@@ -98,7 +100,7 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   const bccRef = useRef<HTMLInputElement>(null);
   const editor = useMailEditor({
     initialHtml: initialEditorHtml,
-    autoFocus: Boolean(seed.to),
+    autoFocus: !inline && Boolean(seed.to),
     onChange: ({ html: nextHtml, text: nextText }) => {
       revision.current += 1;
       setHtml(nextHtml);
@@ -166,7 +168,6 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   const composeTitle =
     subject.trim() ||
     (seed.forwardMessageId ? "Forward message" : replyToMessageId ? "Reply" : "New message");
-
   useEffect(() => {
     if (
       seed.forwardMessageId ||
@@ -370,248 +371,269 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     onClose();
   };
 
+  const composer = (
+    <section
+      className={`compose-dialog ${inline ? "inline-draft-composer" : ""}`}
+      role={inline ? undefined : "dialog"}
+      aria-modal={inline ? undefined : true}
+      aria-label={inline ? "Draft" : "New message"}
+      onKeyDown={(event) => {
+        if (event.metaKey && event.key === "Enter") {
+          event.preventDefault();
+          void send();
+        }
+        if (!inline && event.key === "Escape") void close();
+      }}
+    >
+      <header>
+        <strong className={inline ? "inline-draft-label" : undefined} title={composeTitle}>
+          {inline ? "Draft" : composeTitle}
+        </strong>
+        <span>
+          {saving
+            ? inline
+              ? "Saving..."
+              : "Saving draft..."
+            : draftId
+              ? inline
+                ? "Saved"
+                : "Draft saved"
+              : ""}
+        </span>
+        {!inline ? (
+          <button className="icon-button" onClick={() => void close()} aria-label="Close compose">
+            <X size={17} />
+          </button>
+        ) : null}
+      </header>
+      <div className="compose-fields">
+        {accounts.length > 1 ? (
+          <label>
+            <span>From</span>
+            <select
+              value={accountId}
+              disabled={Boolean(draftId) || saving}
+              onChange={(event) => {
+                revision.current += 1;
+                setAccountId(event.target.value);
+              }}
+            >
+              {accounts.map((account) => (
+                <option value={account.id} key={account.id}>
+                  {account.email}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <div
+          className="compose-recipients"
+          onBlurCapture={(event) => {
+            const next = event.relatedTarget;
+            if (!(next instanceof Node) || !event.currentTarget.contains(next))
+              setRecipientsCollapsed(true);
+          }}
+        >
+          {recipientsCollapsed ? (
+            <button
+              type="button"
+              className="recipient-summary"
+              aria-label="Edit recipients"
+              onClick={() => setRecipientsCollapsed(false)}
+            >
+              <span>To</span>
+              <span className="truncate">
+                {to || "No recipients"}
+                {cc ? `, Cc: ${cc}` : ""}
+                {bcc ? `, Bcc: ${bcc}` : ""}
+              </span>
+            </button>
+          ) : (
+            <>
+              <label className="recipient-row">
+                <span>To</span>
+                <input
+                  autoFocus={!seed.to}
+                  value={to}
+                  onFocus={() => setRecipientsCollapsed(false)}
+                  onChange={(event) => {
+                    revision.current += 1;
+                    setTo(event.target.value);
+                  }}
+                  placeholder="name@example.com"
+                />
+                <span className="recipient-field-actions">
+                  {!showCc ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCc(true);
+                        window.requestAnimationFrame(() => ccRef.current?.focus());
+                      }}
+                    >
+                      Cc
+                    </button>
+                  ) : null}
+                  {!showBcc ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowBcc(true);
+                        window.requestAnimationFrame(() => bccRef.current?.focus());
+                      }}
+                    >
+                      Bcc
+                    </button>
+                  ) : null}
+                </span>
+              </label>
+              {showCc ? (
+                <label className="recipient-row">
+                  <span>Cc</span>
+                  <input
+                    ref={ccRef}
+                    value={cc}
+                    onFocus={() => setRecipientsCollapsed(false)}
+                    onChange={(event) => {
+                      revision.current += 1;
+                      setCc(event.target.value);
+                    }}
+                  />
+                </label>
+              ) : null}
+              {showBcc ? (
+                <label className="recipient-row">
+                  <span>Bcc</span>
+                  <input
+                    ref={bccRef}
+                    value={bcc}
+                    onFocus={() => setRecipientsCollapsed(false)}
+                    onChange={(event) => {
+                      revision.current += 1;
+                      setBcc(event.target.value);
+                    }}
+                  />
+                </label>
+              ) : null}
+            </>
+          )}
+        </div>
+        <label>
+          <span>Subject</span>
+          <input
+            value={subject}
+            onChange={(event) => {
+              revision.current += 1;
+              setSubject(event.target.value);
+            }}
+          />
+        </label>
+      </div>
+      <MailEditorContent
+        editor={editor}
+        empty={!text.trim()}
+        placeholder="Write a message"
+        className="compose-editor"
+        onFocus={() => setRecipientsCollapsed(true)}
+      />
+      {quotedMessage ? (
+        <div className="compose-quoted">
+          <IconButton
+            label={quoteOpen ? "Hide quoted message" : "Show quoted message"}
+            className="quoted-reply-toggle"
+            tooltipSide="top"
+            onClick={() => setQuoteOpen((value) => !value)}
+          >
+            <Ellipsis size={18} />
+          </IconButton>
+          {quoteOpen ? (
+            <div className="quoted-reply-content">
+              <div className="quoted-reply-meta">{quotedReplyCitation(quotedMessage)}</div>
+              <div className="quoted-reply-body">
+                <EmailHtml
+                  message={quotedMessage}
+                  blockRemoteImages={blockRemoteImages}
+                  imageRelay={imageRelay}
+                  imageRelayAvailable={imageRelayAvailable}
+                  onError={onError}
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {attachments.length ? (
+        <div className="compose-attachments">
+          {attachments.map((attachment) => (
+            <span key={attachment.token}>
+              <Paperclip size={13} />
+              {attachment.filename}
+              <button
+                aria-label={`Remove ${attachment.filename}`}
+                onClick={() =>
+                  setAttachments((current) => {
+                    revision.current += 1;
+                    return current.filter((item) => item.token !== attachment.token);
+                  })
+                }
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <footer>
+        <button
+          className="primary-button send-button"
+          disabled={sending}
+          onClick={() => void send()}
+        >
+          <Send size={16} />
+          {sending ? "Sending..." : "Send"}
+        </button>
+        <MailEditorToolbar
+          editor={editor}
+          onAttach={() =>
+            void window.fluxmail.attachments
+              .pick()
+              .then((picked) => {
+                if (!picked.length) return;
+                if (attachments.length + picked.length > 20) {
+                  releaseTokens(picked.map((attachment) => attachment.token));
+                  onError("You can attach up to 20 files to a message.");
+                  return;
+                }
+                for (const attachment of picked) attachmentTokens.current.add(attachment.token);
+                revision.current += 1;
+                setAttachments((current) => [...current, ...picked]);
+              })
+              .catch((error) =>
+                onError(
+                  error instanceof Error ? error.message : "Fluxmail could not attach these files.",
+                ),
+              )
+          }
+        />
+        <button
+          className="icon-button discard-button"
+          onClick={() => void discard()}
+          aria-label="Discard draft"
+        >
+          <Trash2 size={16} />
+        </button>
+      </footer>
+    </section>
+  );
+  if (inline) return composer;
   return (
     <div
       className="modal-backdrop compose-backdrop"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target) void close();
       }}
-      onKeyDown={(event) => {
-        if (event.metaKey && event.key === "Enter") {
-          event.preventDefault();
-          void send();
-        }
-        if (event.key === "Escape") void close();
-      }}
     >
-      <section className="compose-dialog" role="dialog" aria-modal="true" aria-label="New message">
-        <header>
-          <strong title={composeTitle}>{composeTitle}</strong>
-          <span>{saving ? "Saving draft..." : draftId ? "Draft saved" : ""}</span>
-          <button className="icon-button" onClick={() => void close()} aria-label="Close compose">
-            <X size={17} />
-          </button>
-        </header>
-        <div className="compose-fields">
-          {accounts.length > 1 ? (
-            <label>
-              <span>From</span>
-              <select
-                value={accountId}
-                disabled={Boolean(draftId) || saving}
-                onChange={(event) => {
-                  revision.current += 1;
-                  setAccountId(event.target.value);
-                }}
-              >
-                {accounts.map((account) => (
-                  <option value={account.id} key={account.id}>
-                    {account.email}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <div
-            className="compose-recipients"
-            onBlurCapture={(event) => {
-              const next = event.relatedTarget;
-              if (!(next instanceof Node) || !event.currentTarget.contains(next))
-                setRecipientsCollapsed(true);
-            }}
-          >
-            {recipientsCollapsed ? (
-              <button
-                type="button"
-                className="recipient-summary"
-                aria-label="Edit recipients"
-                onClick={() => setRecipientsCollapsed(false)}
-              >
-                <span>To</span>
-                <span className="truncate">
-                  {to || "No recipients"}
-                  {cc ? `, Cc: ${cc}` : ""}
-                  {bcc ? `, Bcc: ${bcc}` : ""}
-                </span>
-              </button>
-            ) : (
-              <>
-                <label className="recipient-row">
-                  <span>To</span>
-                  <input
-                    autoFocus={!seed.to}
-                    value={to}
-                    onFocus={() => setRecipientsCollapsed(false)}
-                    onChange={(event) => {
-                      revision.current += 1;
-                      setTo(event.target.value);
-                    }}
-                    placeholder="name@example.com"
-                  />
-                  <span className="recipient-field-actions">
-                    {!showCc ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowCc(true);
-                          window.requestAnimationFrame(() => ccRef.current?.focus());
-                        }}
-                      >
-                        Cc
-                      </button>
-                    ) : null}
-                    {!showBcc ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowBcc(true);
-                          window.requestAnimationFrame(() => bccRef.current?.focus());
-                        }}
-                      >
-                        Bcc
-                      </button>
-                    ) : null}
-                  </span>
-                </label>
-                {showCc ? (
-                  <label className="recipient-row">
-                    <span>Cc</span>
-                    <input
-                      ref={ccRef}
-                      value={cc}
-                      onFocus={() => setRecipientsCollapsed(false)}
-                      onChange={(event) => {
-                        revision.current += 1;
-                        setCc(event.target.value);
-                      }}
-                    />
-                  </label>
-                ) : null}
-                {showBcc ? (
-                  <label className="recipient-row">
-                    <span>Bcc</span>
-                    <input
-                      ref={bccRef}
-                      value={bcc}
-                      onFocus={() => setRecipientsCollapsed(false)}
-                      onChange={(event) => {
-                        revision.current += 1;
-                        setBcc(event.target.value);
-                      }}
-                    />
-                  </label>
-                ) : null}
-              </>
-            )}
-          </div>
-          <label>
-            <span>Subject</span>
-            <input
-              value={subject}
-              onChange={(event) => {
-                revision.current += 1;
-                setSubject(event.target.value);
-              }}
-            />
-          </label>
-        </div>
-        <MailEditorContent
-          editor={editor}
-          empty={!text.trim()}
-          placeholder="Write a message"
-          className="compose-editor"
-          onFocus={() => setRecipientsCollapsed(true)}
-        />
-        {quotedMessage ? (
-          <div className="compose-quoted">
-            <IconButton
-              label={quoteOpen ? "Hide quoted message" : "Show quoted message"}
-              className="quoted-reply-toggle"
-              tooltipSide="top"
-              onClick={() => setQuoteOpen((value) => !value)}
-            >
-              <Ellipsis size={18} />
-            </IconButton>
-            {quoteOpen ? (
-              <div className="quoted-reply-content">
-                <div className="quoted-reply-meta">{quotedReplyCitation(quotedMessage)}</div>
-                <div className="quoted-reply-body">
-                  <EmailHtml
-                    message={quotedMessage}
-                    blockRemoteImages={blockRemoteImages}
-                    imageRelay={imageRelay}
-                    imageRelayAvailable={imageRelayAvailable}
-                    onError={onError}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {attachments.length ? (
-          <div className="compose-attachments">
-            {attachments.map((attachment) => (
-              <span key={attachment.token}>
-                <Paperclip size={13} />
-                {attachment.filename}
-                <button
-                  aria-label={`Remove ${attachment.filename}`}
-                  onClick={() =>
-                    setAttachments((current) => {
-                      revision.current += 1;
-                      return current.filter((item) => item.token !== attachment.token);
-                    })
-                  }
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <footer>
-          <button
-            className="primary-button send-button"
-            disabled={sending}
-            onClick={() => void send()}
-          >
-            <Send size={16} />
-            {sending ? "Sending..." : "Send"}
-          </button>
-          <MailEditorToolbar
-            editor={editor}
-            onAttach={() =>
-              void window.fluxmail.attachments
-                .pick()
-                .then((picked) => {
-                  if (!picked.length) return;
-                  if (attachments.length + picked.length > 20) {
-                    releaseTokens(picked.map((attachment) => attachment.token));
-                    onError("You can attach up to 20 files to a message.");
-                    return;
-                  }
-                  for (const attachment of picked) attachmentTokens.current.add(attachment.token);
-                  revision.current += 1;
-                  setAttachments((current) => [...current, ...picked]);
-                })
-                .catch((error) =>
-                  onError(
-                    error instanceof Error
-                      ? error.message
-                      : "Fluxmail could not attach these files.",
-                  ),
-                )
-            }
-          />
-          <button
-            className="icon-button discard-button"
-            onClick={() => void discard()}
-            aria-label="Discard draft"
-          >
-            <Trash2 size={16} />
-          </button>
-        </footer>
-      </section>
+      {composer}
     </div>
   );
 });
@@ -705,4 +727,8 @@ function formatAddress(address?: { name?: string; email: string }): string {
     ? `"${address.name.replaceAll('"', '\\"')}"`
     : address.name;
   return `${name} <${address.email}>`;
+}
+
+export function formatAddresses(addresses?: Array<{ name?: string; email: string }>): string {
+  return (addresses ?? []).map(formatAddress).join(", ");
 }

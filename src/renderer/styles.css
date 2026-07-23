@@ -1071,8 +1071,15 @@ textarea:focus-visible,
   letter-spacing: -0.006em;
 }
 
-.subject-line > span:first-child {
+.subject-line > .truncate {
   min-width: 0;
+}
+
+.subject-line .thread-draft-label {
+  min-width: auto;
+  flex: 0 0 auto;
+  color: var(--danger);
+  font-weight: 680;
 }
 
 .message-count {
@@ -1798,6 +1805,32 @@ textarea:focus-visible,
 .compose-dialog > header .icon-button:hover {
   background: var(--field-strong);
   color: var(--ink);
+}
+
+.inline-draft-composer {
+  width: 100%;
+  height: auto;
+  min-height: 350px;
+  margin-top: 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.inline-draft-composer > header {
+  min-height: 40px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.inline-draft-composer > header .inline-draft-label {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.inline-draft-composer .compose-editor {
+  min-height: 150px;
+  max-height: 360px;
 }
 
 .compose-fields {
