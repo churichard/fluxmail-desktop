@@ -101,10 +101,53 @@ describe("SettingsDialog private image relay", () => {
   });
 });
 
-function SettingsHarness() {
+describe("SettingsDialog archive behavior", () => {
+  it("updates the enabled-by-default archive setting", async () => {
+    const setOpenNextAfterArchive = vi.fn(async (enabled: boolean) => enabled);
+    installApi(
+      vi.fn(async () => {
+        throw new Error("Unused");
+      }),
+      setOpenNextAfterArchive,
+    );
+    render(<SettingsHarness />);
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+
+    expect(checkbox).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "false"));
+    expect(setOpenNextAfterArchive).toHaveBeenCalledWith(false);
+  });
+
+  it("restores the setting when saving fails", async () => {
+    const onError = vi.fn();
+    installApi(
+      vi.fn(async () => {
+        throw new Error("Unused");
+      }),
+      vi.fn(async () => {
+        throw new Error("Could not save this setting.");
+      }),
+    );
+    render(<SettingsHarness onError={onError} />);
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "true"));
+    expect(onError).toHaveBeenCalledWith("Could not save this setting.");
+  });
+});
+
+function SettingsHarness({ onError = vi.fn() }: { onError?(): void }) {
   const [state, setState] = useState<BootstrapState | null>(bootstrapState(false));
   if (!state) return null;
-  return <SettingsDialog state={state} onState={setState} onClose={vi.fn()} onError={vi.fn()} />;
+  return <SettingsDialog state={state} onState={setState} onClose={vi.fn()} onError={onError} />;
 }
 
 function installApi(
@@ -112,11 +155,13 @@ function installApi(
     outcome: "activated" | "saved_for_retry";
     license: BootstrapState["license"];
   }>,
+  setOpenNextAfterArchive: (enabled: boolean) => Promise<boolean> = async (enabled) => enabled,
 ): void {
   Object.defineProperty(window, "fluxmail", {
     configurable: true,
     value: {
       license: { activate },
+      preferences: { setOpenNextAfterArchive },
       analytics: { trackFeature: vi.fn(async () => undefined) },
       system: { openExternal: vi.fn(async () => undefined) },
     } as unknown as FluxmailDesktopApi,
@@ -141,6 +186,7 @@ function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
     preferences: {
       appearance: "system",
       dockBadge: true,
+      openNextAfterArchive: true,
       blockRemoteImages: true,
       imageRelay: true,
     },

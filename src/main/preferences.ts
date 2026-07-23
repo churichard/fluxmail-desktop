@@ -29,11 +29,22 @@ const preferencesFileSchema = z.discriminatedUnion("version", [
       imageRelay: z.boolean(),
     })
     .strict(),
+  z
+    .object({
+      version: z.literal(5),
+      appearance: appearancePreferenceSchema,
+      dockBadge: z.boolean(),
+      openNextAfterArchive: z.boolean(),
+      blockRemoteImages: z.boolean(),
+      imageRelay: z.boolean(),
+    })
+    .strict(),
 ]);
 
 export class DesktopPreferences {
   private appearanceValue: AppearancePreference = "system";
   private dockBadgeValue = true;
+  private openNextAfterArchiveValue = true;
   private blockRemoteImagesValue = true;
   private imageRelayValue = true;
   private readonly filePath: string;
@@ -49,8 +60,12 @@ export class DesktopPreferences {
       this.appearanceValue = stored.appearance;
       this.dockBadgeValue = stored.version === 1 ? true : stored.dockBadge;
       this.blockRemoteImagesValue =
-        stored.version === 3 || stored.version === 4 ? stored.blockRemoteImages : true;
-      this.imageRelayValue = stored.version === 4 ? stored.imageRelay : true;
+        stored.version === 3 || stored.version === 4 || stored.version === 5
+          ? stored.blockRemoteImages
+          : true;
+      this.imageRelayValue =
+        stored.version === 4 || stored.version === 5 ? stored.imageRelay : true;
+      this.openNextAfterArchiveValue = stored.version === 5 ? stored.openNextAfterArchive : true;
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== "ENOENT" &&
@@ -61,6 +76,7 @@ export class DesktopPreferences {
       }
       this.appearanceValue = "system";
       this.dockBadgeValue = true;
+      this.openNextAfterArchiveValue = true;
       this.blockRemoteImagesValue = true;
       this.imageRelayValue = true;
     }
@@ -73,6 +89,10 @@ export class DesktopPreferences {
 
   dockBadge(): boolean {
     return this.dockBadgeValue;
+  }
+
+  openNextAfterArchive(): boolean {
+    return this.openNextAfterArchiveValue;
   }
 
   blockRemoteImages(): boolean {
@@ -89,6 +109,7 @@ export class DesktopPreferences {
       await this.save(
         value,
         this.dockBadgeValue,
+        this.openNextAfterArchiveValue,
         this.blockRemoteImagesValue,
         this.imageRelayValue,
       );
@@ -103,6 +124,7 @@ export class DesktopPreferences {
       await this.save(
         this.appearanceValue,
         value,
+        this.openNextAfterArchiveValue,
         this.blockRemoteImagesValue,
         this.imageRelayValue,
       );
@@ -111,10 +133,31 @@ export class DesktopPreferences {
     });
   }
 
+  async setOpenNextAfterArchive(enabled: boolean): Promise<boolean> {
+    const value = z.boolean().parse(enabled);
+    return this.enqueueMutation(async () => {
+      await this.save(
+        this.appearanceValue,
+        this.dockBadgeValue,
+        value,
+        this.blockRemoteImagesValue,
+        this.imageRelayValue,
+      );
+      this.openNextAfterArchiveValue = value;
+      return value;
+    });
+  }
+
   async setBlockRemoteImages(enabled: boolean): Promise<boolean> {
     const value = z.boolean().parse(enabled);
     return this.enqueueMutation(async () => {
-      await this.save(this.appearanceValue, this.dockBadgeValue, value, this.imageRelayValue);
+      await this.save(
+        this.appearanceValue,
+        this.dockBadgeValue,
+        this.openNextAfterArchiveValue,
+        value,
+        this.imageRelayValue,
+      );
       this.blockRemoteImagesValue = value;
       return value;
     });
@@ -126,6 +169,7 @@ export class DesktopPreferences {
       await this.save(
         this.appearanceValue,
         this.dockBadgeValue,
+        this.openNextAfterArchiveValue,
         this.blockRemoteImagesValue,
         value,
       );
@@ -146,6 +190,7 @@ export class DesktopPreferences {
   private async save(
     appearance: AppearancePreference,
     dockBadge: boolean,
+    openNextAfterArchive: boolean,
     blockRemoteImages: boolean,
     imageRelay: boolean,
   ): Promise<void> {
@@ -155,9 +200,10 @@ export class DesktopPreferences {
     await writeFile(
       temporaryPath,
       `${JSON.stringify({
-        version: 4,
+        version: 5,
         appearance,
         dockBadge,
+        openNextAfterArchive,
         blockRemoteImages,
         imageRelay,
       })}\n`,

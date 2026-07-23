@@ -4,6 +4,7 @@ import {
   adjustUnreadCount,
   canCloseQuickReply,
   loadThreadPages,
+  nextThreadAfterArchive,
   permanentDeletePrompt,
   reconcileAccountSelection,
   replySeed,
@@ -31,6 +32,16 @@ describe("mail view optimistic updates", () => {
     expect(shouldOptimisticallyRemoveFromView("search", { type: "archive" })).toBe(false);
     expect(shouldClearSelectedThread("sent", { type: "archive" })).toBe(false);
     expect(shouldClearSelectedThread("all", { type: "archive" })).toBe(false);
+  });
+
+  it("chooses the next thread, then falls back to the previous thread", () => {
+    const first = thread("first");
+    const second = thread("second");
+    const third = thread("third");
+
+    expect(nextThreadAfterArchive([first, second, third], second)).toBe(third);
+    expect(nextThreadAfterArchive([first, second, third], third)).toBe(second);
+    expect(nextThreadAfterArchive([first], first)).toBeUndefined();
   });
 
   it("removes restored and permanently deleted threads from Trash immediately", () => {

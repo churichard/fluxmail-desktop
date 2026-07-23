@@ -86,6 +86,8 @@ const api: FluxmailDesktopApi = {
       ),
     setDockBadge: (enabled) =>
       invoke(IPC.preferencesDockBadgeSet, enabled, z.boolean(), z.boolean()),
+    setOpenNextAfterArchive: (enabled) =>
+      invoke(IPC.preferencesOpenNextAfterArchiveSet, enabled, z.boolean(), z.boolean()),
     setBlockRemoteImages: (enabled) =>
       invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
     setImageRelay: (enabled) =>
