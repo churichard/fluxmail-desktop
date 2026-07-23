@@ -40,7 +40,11 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
     <section>
       <span>{threads.length} conversations</span>
       {threads.map((thread) => (
-        <div key={thread.id}>
+        <div
+          key={thread.id}
+          data-testid={`thread-${thread.id}`}
+          data-unread={String(thread.unread)}
+        >
           <button onClick={() => onSelect(thread)}>{thread.subject}</button>
           <button onClick={() => void onModify({ type: "archive" }, [thread])}>
             Archive {thread.subject}
@@ -271,6 +275,74 @@ describe("App thread navigation", () => {
     confirmDiscard.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: second.subject }));
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+  });
+
+  it("does not reapply a stale unread state after opening a conversation", async () => {
+    const current = { ...thread("thread-1", "Unread conversation", false), unread: true };
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    const initialLoads = vi.mocked(window.fluxmail.mail.listThreads).mock.calls.length;
+    const staleReload = deferred<{
+      items: ThreadSummary[];
+      totalCount: number;
+      syncing: boolean;
+    }>();
+    vi.mocked(window.fluxmail.mail.listThreads).mockImplementationOnce(() => staleReload.promise);
+
+    act(() => events.emit({ type: "cache-changed" }));
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(initialLoads + 1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+    expect(screen.getByTestId(`thread-${current.id}`).dataset.unread).toBe("false");
+
+    await act(async () => {
+      staleReload.resolve({ items: [current], totalCount: 1, syncing: false });
+    });
+
+    expect(screen.getByTestId(`thread-${current.id}`).dataset.unread).toBe("false");
+  });
+
+  it("does not restore an archived conversation from a stale mailbox response", async () => {
+    const current = thread("thread-1", "Conversation to archive", false);
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    const pendingArchive = deferred<{ undoToken?: string }>();
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    const initialLoads = vi.mocked(window.fluxmail.mail.listThreads).mock.calls.length;
+    const staleReload = deferred<{
+      items: ThreadSummary[];
+      totalCount: number;
+      syncing: boolean;
+    }>();
+    vi.mocked(window.fluxmail.mail.listThreads).mockImplementationOnce(() => staleReload.promise);
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingArchive.promise);
+
+    act(() => events.emit({ type: "cache-changed" }));
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(initialLoads + 1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${current.subject}` }));
+    await screen.findByText("0 conversations");
+
+    await act(async () => {
+      staleReload.resolve({ items: [current], totalCount: 1, syncing: false });
+    });
+
+    expect(screen.getByText("0 conversations")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: current.subject })).toBeNull();
+    await act(async () => {
+      pendingArchive.resolve({});
+    });
   });
 
   it("keeps an unsent quick reply when a mutation removes the thread from the list", async () => {
@@ -562,6 +634,17 @@ function installMatchMedia(): void {
       removeEventListener: vi.fn(),
     }),
   });
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 function installApi(

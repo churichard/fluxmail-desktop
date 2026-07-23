@@ -565,6 +565,48 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("preserves optimistic summaries while ordinary thread hydration is stale", () => {
+    const cache = createCache();
+    const unread = message({ id: "read-message", threadId: "read-thread" });
+    const inbox = message({ id: "archive-message", threadId: "archive-thread" });
+    cache.putMessages(primary, [unread, inbox]);
+    const readTarget = { accountId: primary.id, threadId: unread.threadId };
+    const archiveTarget = { accountId: primary.id, threadId: inbox.threadId };
+
+    cache.claimMutation("read-mutation", [readTarget]);
+    cache.applyActionIfOwned(primary.id, unread.threadId, { type: "markRead" }, "read-mutation");
+    cache.claimMutation("archive-mutation", [archiveTarget]);
+    cache.applyActionIfOwned(primary.id, inbox.threadId, { type: "archive" }, "archive-mutation");
+
+    cache.putThread(primary, {
+      id: unread.threadId,
+      subject: unread.subject,
+      messages: [unread],
+    });
+    cache.putThread(primary, {
+      id: inbox.threadId,
+      subject: inbox.subject,
+      messages: [inbox],
+    });
+
+    expect(cache.snapshotThread(primary.id, unread.threadId)?.unread).toBe(0);
+    expect(
+      cache.listThreads({ view: "inbox", offset: 0, limit: 20 }).map((thread) => thread.id),
+    ).not.toContain(inbox.threadId);
+
+    cache.putThreadIfOwned(
+      primary,
+      {
+        id: unread.threadId,
+        subject: unread.subject,
+        messages: [unread],
+      },
+      "read-mutation",
+    );
+    expect(cache.snapshotThread(primary.id, unread.threadId)?.unread).toBe(1);
+    cache.close();
+  });
+
   it("removes cached messages missing from an authoritative thread response", () => {
     const cache = createCache();
     const first = message({ id: "m1", threadId: "thread-a" });

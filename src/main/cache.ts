@@ -295,7 +295,11 @@ export class MailCache {
     })();
   }
 
-  putThread(account: AccountInfo, thread: Thread): MailThread {
+  putThread(
+    account: AccountInfo,
+    thread: Thread,
+    options: { mutationId?: string } = {},
+  ): MailThread {
     const cachedMessageIds = this.messageIds(account.id, thread.id);
     const currentMessageIds = new Set(thread.messages.map((message) => message.id));
     const removeMessage = this.db.prepare(
@@ -305,7 +309,7 @@ export class MailCache {
       for (const messageId of cachedMessageIds)
         if (!currentMessageIds.has(messageId)) removeMessage.run(account.id, messageId);
       this.putMessages(account, thread.messages);
-      this.rebuildThread(account, thread.id);
+      this.rebuildThread(account, thread.id, options.mutationId);
     })();
     const normalized = this.toMailThread(account, thread);
     const encrypted = this.cipher.encrypt(JSON.stringify(normalized));
@@ -568,7 +572,7 @@ export class MailCache {
     mutationId: string,
   ): MailThread | undefined {
     if (!this.ownsMutation(account.id, thread.id, mutationId)) return undefined;
-    return this.putThread(account, thread);
+    return this.putThread(account, thread, { mutationId });
   }
 
   applyAction(accountId: string, threadId: string, action: ModifyActionInput): void {
@@ -824,7 +828,14 @@ export class MailCache {
     }
   }
 
-  private rebuildThread(account: AccountInfo, threadId: string): void {
+  private rebuildThread(account: AccountInfo, threadId: string, mutationId?: string): void {
+    const owner = this.db
+      .prepare(
+        `SELECT mutation_id FROM thread_mutation_owners
+         WHERE account_id = ? AND thread_id = ?`,
+      )
+      .get(account.id, threadId) as { mutation_id: string } | undefined;
+    if (owner && owner.mutation_id !== mutationId) return;
     const messages = (
       this.db
         .prepare(

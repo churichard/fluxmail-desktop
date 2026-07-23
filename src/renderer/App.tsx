@@ -74,6 +74,11 @@ export function App() {
   useLayoutEffect(() => {
     mailboxContextRef.current = mailboxContext;
   }, [mailboxContext]);
+  const invalidateThreadLoads = useCallback(() => {
+    listRequest.current += 1;
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
 
   const accountIds = useMemo(() => (accountId ? [accountId] : undefined), [accountId]);
   const permanentDeleteAccountIds = useMemo(
@@ -185,18 +190,26 @@ export function App() {
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
         startTransition(() => {
           setThreads((current) => {
+            if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current)
+              return current;
             const next = append ? mergeThreads(current, page.items) : page.items;
             loadedThreadCount.current = Math.max(DEFAULT_PAGE_SIZE, next.length);
             return next;
           });
           if (!append)
             setSelectedThread((current) =>
-              current
-                ? (page.items.find((thread) => threadKey(thread) === threadKey(current)) ??
-                  (options?.preserveSelection ? current : undefined))
-                : current,
+              request !== listRequest.current ||
+              mailboxContext !== mailboxContextRef.current ||
+              !current
+                ? current
+                : (page.items.find((thread) => threadKey(thread) === threadKey(current)) ??
+                  (options?.preserveSelection ? current : undefined)),
             );
-          setCursor(page.nextCursor);
+          setCursor((current) =>
+            request === listRequest.current && mailboxContext === mailboxContextRef.current
+              ? page.nextCursor
+              : current,
+          );
         });
       } catch (caught) {
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
@@ -391,6 +404,7 @@ export function App() {
       );
 
       if (optimisticRemoval) {
+        invalidateThreadLoads();
         setThreads((current) => current.filter((thread) => !targetKeys.has(threadKey(thread))));
         setSelection((current) => {
           const next = new Set(current);
@@ -443,6 +457,7 @@ export function App() {
     },
     [
       confirmQuickReplyNavigation,
+      invalidateThreadLoads,
       loadThreads,
       mailboxContext,
       selectedThread,
@@ -515,6 +530,7 @@ export function App() {
         }
       }
       const openedThread = threadToOpen.unread ? { ...threadToOpen, unread: false } : threadToOpen;
+      if (threadToOpen.unread) invalidateThreadLoads();
       setSelectedThread(openedThread);
       if (!threadToOpen.unread) return;
 
@@ -561,7 +577,7 @@ export function App() {
           setError(errorMessage(caught));
         });
     },
-    [confirmQuickReplyNavigation, selectedThread],
+    [confirmQuickReplyNavigation, invalidateThreadLoads, selectedThread],
   );
 
   useEffect(() => {

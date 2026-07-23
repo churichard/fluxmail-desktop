@@ -935,6 +935,63 @@ describe("FluxmailRuntime thread loading", () => {
 });
 
 describe("FluxmailRuntime conversation mutations", () => {
+  it("does not let stale body hydration overwrite an optimistic mark-read", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    cache.putMessages(account, [structuredClone(remote)]);
+    let finishHydration!: (thread: { id: string; subject: string; messages: Message[] }) => void;
+    let finishProviderMutation!: () => void;
+    const hydration = new Promise<{
+      id: string;
+      subject: string;
+      messages: Message[];
+    }>((resolve) => {
+      finishHydration = resolve;
+    });
+    const providerMutation = new Promise<void>((resolve) => {
+      finishProviderMutation = resolve;
+    });
+    const getThread = vi
+      .fn()
+      .mockImplementationOnce(() => hydration)
+      .mockImplementation(async () => ({
+        id: remote.threadId,
+        subject: remote.subject,
+        messages: [structuredClone(remote)],
+      }));
+    const modify = vi.fn(async () => {
+      await providerMutation;
+      remote.flags.read = true;
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: { getThread, modify },
+      onCacheChanged: vi.fn(),
+    });
+
+    const bodyLoad = runtime.getThread(account.id, remote.threadId);
+    await vi.waitFor(() => expect(getThread).toHaveBeenCalledTimes(1));
+    const mutation = runtime.modify(
+      [{ accountId: account.id, threadId: remote.threadId }],
+      { type: "markRead" },
+      false,
+    );
+    await vi.waitFor(() => expect(modify).toHaveBeenCalledTimes(1));
+    expect(cache.snapshotThread(account.id, remote.threadId)?.unread).toBe(0);
+
+    finishHydration({
+      id: remote.threadId,
+      subject: remote.subject,
+      messages: [structuredClone(remote)],
+    });
+    await bodyLoad;
+    expect(cache.snapshotThread(account.id, remote.threadId)?.unread).toBe(0);
+
+    finishProviderMutation();
+    await mutation;
+    expect(cache.snapshotThread(account.id, remote.threadId)?.unread).toBe(0);
+  });
+
   it("does not let an older failed mutation roll back a newer action", async () => {
     const cache = createCache();
     const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
