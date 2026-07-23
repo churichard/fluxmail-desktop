@@ -58,7 +58,14 @@ interface CachedThreadState {
   body?: CachedThreadBodyRow;
 }
 
-const CACHE_SCHEMA_VERSION = 3;
+export interface ScheduledDraftRef {
+  scheduleId: string;
+  accountId: string;
+  draftId: string;
+  sendAt: string;
+}
+
+const CACHE_SCHEMA_VERSION = 4;
 
 export class MailCache {
   readonly hasCachedMail: boolean;
@@ -147,6 +154,7 @@ export class MailCache {
         to_raw TEXT NOT NULL,
         cc_raw TEXT NOT NULL,
         bcc_raw TEXT NOT NULL,
+        provider_recipients_json TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (account_id, draft_id)
       );
       CREATE TEMP TABLE IF NOT EXISTS thread_mutation_owners (
@@ -156,6 +164,18 @@ export class MailCache {
         PRIMARY KEY (account_id, thread_id)
       );
     `);
+    const draftRecipientColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(draft_recipient_fields)").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name),
+    );
+    if (!draftRecipientColumns.has("provider_recipients_json")) {
+      this.db.exec(
+        "ALTER TABLE draft_recipient_fields ADD COLUMN provider_recipients_json TEXT NOT NULL DEFAULT ''",
+      );
+    }
     const storedVersion = Number(
       (
         this.db.prepare("SELECT value FROM cache_meta WHERE key = 'schema_version'").get() as
@@ -257,11 +277,54 @@ export class MailCache {
     return row.count;
   }
 
-  draftCount(accountIds?: string[]): number {
+  draftCount(accountIds?: string[], scheduledDrafts: ScheduledDraftRef[] = []): number {
     return this.countThreads({
       view: "drafts",
       ...(accountIds?.length ? { accountIds } : {}),
+      scheduledDrafts,
     });
+  }
+
+  listScheduledThreads(schedules: ScheduledDraftRef[], accountIds?: string[]): ThreadSummary[] {
+    const includedAccounts = accountIds?.length ? new Set(accountIds) : undefined;
+    const findDraft = this.db.prepare(
+      `SELECT threads.*, messages.payload_json
+       FROM messages
+       JOIN threads
+         ON threads.account_id = messages.account_id
+        AND threads.thread_id = messages.thread_id
+       WHERE messages.account_id = ?
+         AND json_extract(messages.payload_json, '$.draftId') = ?
+       LIMIT 1`,
+    );
+    return schedules
+      .flatMap((schedule) => {
+        if (includedAccounts && !includedAccounts.has(schedule.accountId)) return [];
+        const row = findDraft.get(schedule.accountId, schedule.draftId) as
+          | (CachedThreadRow & { payload_json: string })
+          | undefined;
+        if (!row) return [];
+        const message = JSON.parse(row.payload_json) as Message;
+        const recipients = [...message.to, ...(message.cc ?? []), ...(message.bcc ?? [])];
+        return [
+          {
+            ...toSummary(row),
+            scheduleId: schedule.scheduleId,
+            draftId: schedule.draftId,
+            subject: message.subject,
+            senderName:
+              recipients
+                .map((recipient) => recipient.name || recipient.email)
+                .filter(Boolean)
+                .join(", ") || "No recipients",
+            senderEmail: recipients[0]?.email ?? "",
+            snippet: message.snippet ?? "",
+            date: schedule.sendAt,
+            hasAttachments: Boolean(message.attachments?.length),
+          },
+        ];
+      })
+      .sort((left, right) => Date.parse(left.date) - Date.parse(right.date));
   }
 
   putMessages(
@@ -391,6 +454,7 @@ export class MailCache {
     label?: string;
     query?: string;
     resultSetKey?: string;
+    scheduledDrafts?: ScheduledDraftRef[];
     offset: number;
     limit: number;
   }): ThreadSummary[] {
@@ -415,7 +479,10 @@ export class MailCache {
       )`);
     }
     if (input.view === "starred") conditions.push("starred = 1");
-    if (input.view === "drafts") conditions.push("draft = 1");
+    if (input.view === "drafts") {
+      conditions.push("draft = 1");
+      addScheduledDraftExclusion(conditions, params, input.scheduledDrafts);
+    }
     if (input.view === "label" && input.label) {
       conditions.push(
         "EXISTS (SELECT 1 FROM json_each(threads.labels_json) AS label WHERE label.value = ?)",
@@ -460,7 +527,40 @@ export class MailCache {
     const rows = this.db
       .prepare(`SELECT * FROM threads ${where} ORDER BY date DESC LIMIT ? OFFSET ?`)
       .all(...params) as CachedThreadRow[];
-    return rows.map(toSummary);
+    const scheduledByDraft = new Map(
+      (input.scheduledDrafts ?? []).map((scheduled) => [
+        scheduledDraftKey(scheduled.accountId, scheduled.draftId),
+        scheduled,
+      ]),
+    );
+    const latestDraft = scheduledByDraft.size
+      ? this.db.prepare(
+          `SELECT json_extract(payload_json, '$.draftId') AS draft_id
+           FROM messages
+           WHERE account_id = ?
+             AND thread_id = ?
+             AND json_extract(payload_json, '$.flags.draft') = 1
+             AND json_extract(payload_json, '$.draftId') IS NOT NULL
+           ORDER BY date DESC, rowid DESC
+           LIMIT 1`,
+        )
+      : undefined;
+    return rows.map((row) => {
+      const summary = toSummary(row);
+      const draft = latestDraft?.get(row.account_id, row.thread_id) as
+        | { draft_id: string }
+        | undefined;
+      const scheduled = draft
+        ? scheduledByDraft.get(scheduledDraftKey(row.account_id, draft.draft_id))
+        : undefined;
+      return scheduled
+        ? {
+            ...summary,
+            scheduleId: scheduled.scheduleId,
+            draftId: scheduled.draftId,
+          }
+        : summary;
+    });
   }
 
   countThreads(input: {
@@ -470,6 +570,7 @@ export class MailCache {
     label?: string;
     query?: string;
     resultSetKey?: string;
+    scheduledDrafts?: ScheduledDraftRef[];
   }): number {
     if (input.query?.trim() && !input.resultSetKey)
       return this.listThreads({ ...input, offset: 0, limit: 1_000_000 }).length;
@@ -494,7 +595,10 @@ export class MailCache {
       )`);
     }
     if (input.view === "starred") conditions.push("starred = 1");
-    if (input.view === "drafts") conditions.push("draft = 1");
+    if (input.view === "drafts") {
+      conditions.push("draft = 1");
+      addScheduledDraftExclusion(conditions, params, input.scheduledDrafts);
+    }
     if (input.view === "label" && input.label) {
       conditions.push(
         "EXISTS (SELECT 1 FROM json_each(threads.labels_json) AS label WHERE label.value = ?)",
@@ -765,24 +869,54 @@ export class MailCache {
     );
   }
 
-  putDraftRecipientFields(accountId: string, draftId: string, fields: DraftRecipientFields): void {
+  putDraftRecipientFields(
+    accountId: string,
+    draftId: string,
+    fields: DraftRecipientFields,
+    draft: Pick<Message, "to" | "cc" | "bcc">,
+  ): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO draft_recipient_fields(
-          account_id, draft_id, to_raw, cc_raw, bcc_raw
-        ) VALUES (?, ?, ?, ?, ?)`,
+          account_id, draft_id, to_raw, cc_raw, bcc_raw, provider_recipients_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(accountId, draftId, fields.to, fields.cc, fields.bcc);
+      .run(accountId, draftId, fields.to, fields.cc, fields.bcc, draftRecipientSignature(draft));
   }
 
   getDraftRecipientFields(accountId: string, draftId: string): DraftRecipientFields | undefined {
     const row = this.db
       .prepare(
-        `SELECT to_raw, cc_raw, bcc_raw
+        `SELECT to_raw, cc_raw, bcc_raw, provider_recipients_json
          FROM draft_recipient_fields
          WHERE account_id = ? AND draft_id = ?`,
       )
-      .get(accountId, draftId) as { to_raw: string; cc_raw: string; bcc_raw: string } | undefined;
+      .get(accountId, draftId) as
+      | {
+          to_raw: string;
+          cc_raw: string;
+          bcc_raw: string;
+          provider_recipients_json: string;
+        }
+      | undefined;
+    if (!row) return undefined;
+    const message = this.db
+      .prepare(
+        `SELECT payload_json
+         FROM messages
+         WHERE account_id = ? AND json_extract(payload_json, '$.draftId') = ?
+         ORDER BY date DESC, rowid DESC
+         LIMIT 1`,
+      )
+      .get(accountId, draftId) as { payload_json: string } | undefined;
+    if (
+      !message ||
+      row.provider_recipients_json !==
+        draftRecipientSignature(JSON.parse(message.payload_json) as Message)
+    ) {
+      this.deleteDraftRecipientFields(accountId, draftId);
+      return undefined;
+    }
     return row ? { to: row.to_raw, cc: row.cc_raw, bcc: row.bcc_raw } : undefined;
   }
 
@@ -1134,8 +1268,55 @@ function toSummary(row: CachedThreadRow): ThreadSummary {
   };
 }
 
+function scheduledDraftKey(accountId: string, draftId: string): string {
+  return JSON.stringify([accountId, draftId]);
+}
+
+function draftRecipientSignature(draft: Pick<Message, "to" | "cc" | "bcc">): string {
+  const signature = (addresses: Message["to"] | undefined) =>
+    (addresses ?? []).map((address) => [
+      address.email.trim().toLowerCase(),
+      address.name?.trim() ?? "",
+    ]);
+  return JSON.stringify({
+    to: signature(draft.to),
+    cc: signature(draft.cc),
+    bcc: signature(draft.bcc),
+  });
+}
+
+function addScheduledDraftExclusion(
+  conditions: string[],
+  params: Array<string | number>,
+  scheduledDrafts: ScheduledDraftRef[] | undefined,
+): void {
+  if (!scheduledDrafts?.length) return;
+  conditions.push(`EXISTS (
+    SELECT 1
+    FROM messages AS draft_messages
+    WHERE draft_messages.account_id = threads.account_id
+      AND draft_messages.thread_id = threads.thread_id
+      AND json_extract(draft_messages.payload_json, '$.flags.draft') = 1
+      AND json_array(
+        draft_messages.account_id,
+        json_extract(draft_messages.payload_json, '$.draftId')
+      ) NOT IN (SELECT value FROM json_each(?))
+  )`);
+  params.push(
+    JSON.stringify(
+      scheduledDrafts.map((draft) => JSON.stringify([draft.accountId, draft.draftId])),
+    ),
+  );
+}
+
 function viewFolderRole(view: MailboxView): string | undefined {
-  if (view === "all" || view === "starred" || view === "label" || view === "search")
+  if (
+    view === "all" ||
+    view === "starred" ||
+    view === "scheduled" ||
+    view === "label" ||
+    view === "search"
+  )
     return undefined;
   return view;
 }

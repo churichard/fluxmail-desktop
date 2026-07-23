@@ -85,7 +85,13 @@ export function ThreadListPane(props: Props) {
     props.view,
     selectedThreads.every((thread) => props.permanentDeleteAccountIds.has(thread.accountId)),
   );
-  const groups = useMemo(() => groupThreadsByDate(props.threads), [props.threads]);
+  const groups = useMemo(
+    () =>
+      props.view === "scheduled"
+        ? groupScheduledThreadsByDate(props.threads)
+        : groupThreadsByDate(props.threads),
+    [props.threads, props.view],
+  );
   const entries = useMemo(
     () =>
       groups.flatMap((group) => [
@@ -142,13 +148,15 @@ export function ThreadListPane(props: Props) {
                 {selectedThreads.length} selected
               </span>
               <div className="selection-actions">
-                <IconButton
-                  label={mailboxMoveLabel(props.view)}
-                  shortcut={KEYBOARD_SHORTCUTS.archive}
-                  onClick={() => void props.onModify(mailboxMoveAction(props.view))}
-                >
-                  {props.view === "trash" ? <Undo2 size={16} /> : <Archive size={16} />}
-                </IconButton>
+                {props.view !== "scheduled" ? (
+                  <IconButton
+                    label={mailboxMoveLabel(props.view)}
+                    shortcut={KEYBOARD_SHORTCUTS.archive}
+                    onClick={() => void props.onModify(mailboxMoveAction(props.view))}
+                  >
+                    {props.view === "trash" ? <Undo2 size={16} /> : <Archive size={16} />}
+                  </IconButton>
+                ) : null}
                 {deleteAction ? (
                   <IconButton
                     label={mailboxDeleteLabel(props.view)}
@@ -181,20 +189,22 @@ export function ThreadListPane(props: Props) {
                     <Tag size={16} />
                   </MenuButton>
                 ) : null}
-                <MenuButton
-                  label="More actions"
-                  align="right"
-                  options={[
-                    {
-                      id: "spam",
-                      label: "Mark as spam",
-                      icon: <ShieldAlert size={15} />,
-                      onSelect: () => void props.onModify({ type: "move", folder: "spam" }),
-                    },
-                  ]}
-                >
-                  <MoreHorizontal size={17} />
-                </MenuButton>
+                {props.view !== "scheduled" ? (
+                  <MenuButton
+                    label="More actions"
+                    align="right"
+                    options={[
+                      {
+                        id: "spam",
+                        label: "Mark as spam",
+                        icon: <ShieldAlert size={15} />,
+                        onSelect: () => void props.onModify({ type: "move", folder: "spam" }),
+                      },
+                    ]}
+                  >
+                    <MoreHorizontal size={17} />
+                  </MenuButton>
+                ) : null}
               </div>
             </>
           ) : (
@@ -240,7 +250,12 @@ export function ThreadListPane(props: Props) {
                   onCheck={() => props.onToggleSelection(thread)}
                   moveLabel={mailboxMoveLabel(props.view)}
                   restore={props.view === "trash"}
-                  onMove={() => void props.onModify(mailboxMoveAction(props.view), [thread])}
+                  onMove={
+                    props.view === "scheduled"
+                      ? undefined
+                      : () => void props.onModify(mailboxMoveAction(props.view), [thread])
+                  }
+                  draftLabel={props.view === "scheduled" ? "Scheduled" : "Draft"}
                   onToggleRead={() =>
                     void props.onModify({ type: thread.unread ? "markRead" : "markUnread" }, [
                       thread,
@@ -263,7 +278,7 @@ export function ThreadListPane(props: Props) {
             }}
           />
         ) : (
-          <EmptyList />
+          <EmptyList scheduled={props.view === "scheduled"} />
         )}
         <OverlayScrollbar scroller={scroller} fadeClass="thread-fade" />
       </div>
@@ -280,6 +295,7 @@ export function ThreadRow({
   moveLabel,
   restore,
   onMove,
+  draftLabel = "Draft",
   onToggleRead,
   onStar,
 }: {
@@ -290,7 +306,8 @@ export function ThreadRow({
   onCheck(): void;
   moveLabel: string;
   restore: boolean;
-  onMove(): void;
+  onMove?: () => void;
+  draftLabel?: string;
   onToggleRead(): void;
   onStar(): void;
 }) {
@@ -316,7 +333,7 @@ export function ThreadRow({
             <time>{formatListDate(thread.date)}</time>
           </div>
           <div className="subject-line">
-            {thread.draft ? <span className="thread-draft-label">Draft</span> : null}
+            {thread.draft ? <span className="thread-draft-label">{draftLabel}</span> : null}
             <span className="truncate">{thread.subject || "(no subject)"}</span>
             {thread.messageCount > 1 ? (
               <span className="message-count">{thread.messageCount}</span>
@@ -329,13 +346,15 @@ export function ThreadRow({
         </div>
       </button>
       <div className="row-actions">
-        <RowAction
-          label={`${moveLabel} conversation`}
-          shortcut={KEYBOARD_SHORTCUTS.archive}
-          onClick={onMove}
-        >
-          {restore ? <Undo2 size={15} /> : <Archive size={15} />}
-        </RowAction>
+        {onMove ? (
+          <RowAction
+            label={`${moveLabel} conversation`}
+            shortcut={KEYBOARD_SHORTCUTS.archive}
+            onClick={onMove}
+          >
+            {restore ? <Undo2 size={15} /> : <Archive size={15} />}
+          </RowAction>
+        ) : null}
         <RowAction
           label={thread.unread ? "Mark conversation read" : "Mark conversation unread"}
           shortcut={KEYBOARD_SHORTCUTS.toggleRead}
@@ -411,12 +430,12 @@ function ThreadSkeleton() {
   );
 }
 
-function EmptyList() {
+function EmptyList({ scheduled }: { scheduled: boolean }) {
   return (
     <div className="empty-list">
       <Mail size={30} />
-      <h2>Nothing here</h2>
-      <p>This mailbox is empty.</p>
+      <h2>{scheduled ? "No scheduled emails" : "Nothing here"}</h2>
+      <p>{scheduled ? "Emails you schedule will appear here." : "This mailbox is empty."}</p>
     </div>
   );
 }
@@ -453,6 +472,35 @@ export function groupThreadsByDate(
     const items = groups.get(label)!;
     return items.length ? [{ label, threads: items }] : [];
   });
+}
+
+export function groupScheduledThreadsByDate(
+  threads: ThreadSummary[],
+  now = new Date(),
+): Array<{ label: string; threads: ThreadSummary[] }> {
+  const groups = new Map<string, ThreadSummary[]>();
+  const today = startOfDay(now);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayAfterTomorrow = new Date(tomorrow);
+  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+  for (const thread of threads) {
+    const date = new Date(thread.date);
+    const label =
+      date >= today && date < tomorrow
+        ? "Today"
+        : date >= tomorrow && date < dayAfterTomorrow
+          ? "Tomorrow"
+          : new Intl.DateTimeFormat(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            }).format(date);
+    const group = groups.get(label) ?? [];
+    group.push(thread);
+    groups.set(label, group);
+  }
+  return [...groups].map(([label, items]) => ({ label, threads: items }));
 }
 
 function dateGroupLabel(date: Date, now: Date): string {

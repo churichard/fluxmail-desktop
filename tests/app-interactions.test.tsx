@@ -13,6 +13,7 @@ import type {
 
 const closeDraft = vi.hoisted(() => vi.fn<() => boolean | Promise<boolean>>(() => true));
 const openFind = vi.hoisted(() => vi.fn());
+const composeDeliverySequence = vi.hoisted(() => ({ current: 0 }));
 
 vi.mock("../src/renderer/components/Sidebar", () => ({
   Sidebar: ({
@@ -20,13 +21,14 @@ vi.mock("../src/renderer/components/Sidebar", () => ({
     onViewChange,
   }: {
     onSettings(): void;
-    onViewChange(view: "starred" | "all" | "drafts"): void;
+    onViewChange(view: "starred" | "all" | "drafts" | "scheduled"): void;
   }) => (
     <aside>
       Sidebar
       <button onClick={() => onViewChange("starred")}>Starred</button>
       <button onClick={() => onViewChange("all")}>All mail</button>
       <button onClick={() => onViewChange("drafts")}>Drafts</button>
+      <button onClick={() => onViewChange("scheduled")}>Scheduled</button>
       <button onClick={onSettings}>Settings</button>
     </aside>
   ),
@@ -60,7 +62,7 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
       <button onClick={onSearch}>Run search</button>
       {threads.map((thread) => (
         <div
-          key={thread.id}
+          key={thread.scheduleId ?? thread.id}
           data-testid={`thread-${thread.id}`}
           data-unread={String(thread.unread)}
         >
@@ -131,14 +133,20 @@ vi.mock("../src/renderer/components/ComposeDialog", async () => {
         {
           seed,
           onSent,
+          onError,
         }: {
           seed: { subject?: string; threadId?: string; replyToMessageId?: string };
-          onSent(delivery: {
-            kind: "undo";
-            scheduleId: string;
-            draftId: string;
-            sendAt: string;
-          }): void;
+          onSent(
+            delivery:
+              | {
+                  kind: "undo";
+                  scheduleId: string;
+                  draftId: string;
+                  sendAt: string;
+                }
+              | { kind: "sent" },
+          ): void;
+          onError(message: string): void;
         },
         ref,
       ) => {
@@ -150,17 +158,20 @@ vi.mock("../src/renderer/components/ComposeDialog", async () => {
             <span data-testid="compose-reply-target">{seed.replyToMessageId}</span>
             <button>Compose action</button>
             <button
-              onClick={() =>
+              onClick={() => {
+                const sequence = (composeDeliverySequence.current += 1);
                 onSent({
                   kind: "undo",
-                  scheduleId: "schedule-1",
-                  draftId: "draft-1",
+                  scheduleId: `schedule-${sequence}`,
+                  draftId: `draft-${sequence}`,
                   sendAt: new Date(Date.now() + 10_000).toISOString(),
-                })
-              }
+                });
+              }}
             >
               Finish compose
             </button>
+            <button onClick={() => onSent({ kind: "sent" })}>Finish immediate compose</button>
+            <button onClick={() => onError("Could not send this message")}>Fail compose</button>
           </section>
         );
       },
@@ -188,6 +199,7 @@ beforeEach(() => {
   closeDraft.mockReset();
   closeDraft.mockReturnValue(true);
   openFind.mockReset();
+  composeDeliverySequence.current = 0;
 });
 
 afterEach(() => {
@@ -234,6 +246,130 @@ describe("App thread navigation", () => {
     );
   });
 
+  it("opens the Scheduled mailbox", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled" }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ view: "scheduled" }),
+      ),
+    );
+  });
+
+  it("cancels a scheduled delivery before opening its draft editor", async () => {
+    const scheduled = {
+      ...thread("scheduled-thread", "Scheduled reply", true),
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+    };
+    installApi(
+      [scheduled],
+      vi.fn(async () => draftThread(scheduled)),
+    );
+    let finishCancel!: (value: { draftId: string }) => void;
+    vi.mocked(window.fluxmail.drafts.cancelScheduled).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCancel = resolve;
+        }),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: scheduled.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled" }));
+    fireEvent.click(await screen.findByRole("button", { name: scheduled.subject }));
+
+    expect(window.fluxmail.drafts.cancelScheduled).toHaveBeenCalledWith({
+      scheduleId: scheduled.scheduleId,
+    });
+    expect(screen.getByText("No conversation")).toBeTruthy();
+
+    finishCancel({ draftId: scheduled.draftId });
+
+    expect(await screen.findByText(`Reading ${scheduled.subject}`)).toBeTruthy();
+  });
+
+  it("cancels a scheduled delivery before opening it from All Mail", async () => {
+    const scheduled = {
+      ...thread("scheduled-thread", "Scheduled reply", true),
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+    };
+    installApi(
+      [scheduled],
+      vi.fn(async () => draftThread(scheduled)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: scheduled.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: "All mail" }));
+    fireEvent.click(await screen.findByRole("button", { name: scheduled.subject }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.drafts.cancelScheduled).toHaveBeenCalledWith({
+        scheduleId: scheduled.scheduleId,
+      }),
+    );
+    expect(await screen.findByText(`Reading ${scheduled.subject}`)).toBeTruthy();
+  });
+
+  it("deletes only the selected scheduled draft", async () => {
+    const scheduled = {
+      ...thread("shared-thread", "Scheduled reply", true),
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+    };
+    installApi(
+      [scheduled],
+      vi.fn(async () => draftThread(scheduled)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: scheduled.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled" }));
+    fireEvent.click(await screen.findByRole("button", { name: `Discard ${scheduled.subject}` }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.drafts.delete).toHaveBeenCalledWith({
+        accountId: scheduled.accountId,
+        draftId: scheduled.draftId,
+      }),
+    );
+    expect(window.fluxmail.mail.modify).not.toHaveBeenCalled();
+  });
+
+  it("does not archive a scheduled draft with the keyboard shortcut", async () => {
+    const scheduled = {
+      ...thread("shared-thread", "Scheduled reply", true),
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+    };
+    installApi(
+      [scheduled],
+      vi.fn(async () => draftThread(scheduled)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: scheduled.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: "Scheduled" }));
+    fireEvent.click(await screen.findByRole("button", { name: scheduled.subject }));
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(window.fluxmail.mail.modify).not.toHaveBeenCalled();
+  });
+
   it("keeps the undo timer running while switching mailboxes", async () => {
     installApi(
       [],
@@ -250,11 +386,80 @@ describe("App thread navigation", () => {
     expect(screen.getByRole("status").textContent).toContain("Message sent.");
 
     fireEvent.click(screen.getByRole("button", { name: "Starred" }));
-    await act(async () => vi.advanceTimersByTime(10_500));
+    await act(async () => vi.advanceTimersByTime(9_999));
+    expect(screen.getByRole("status").textContent).toContain("Message sent.");
+    await act(async () => vi.advanceTimersByTime(1));
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(window.fluxmail.sync.refresh).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+
+  it("keeps every overlapping undo send available", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Finish compose" }));
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Finish compose" }));
+
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+    const undoButtons = screen.getAllByRole("button", { name: "Undo" });
+    expect(undoButtons).toHaveLength(2);
+    fireEvent.click(undoButtons[0]!);
+    await act(async () => Promise.resolve());
+
+    expect(window.fluxmail.drafts.cancelScheduled).toHaveBeenCalledWith({
+      scheduleId: "schedule-1",
+    });
+    expect(screen.getByText("Sending canceled. The message is in Drafts.")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+  });
+
+  it("shows compose errors while an undo notice is active", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Finish compose" }));
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Fail compose" }));
+
+    expect(screen.getByRole("status").textContent).toContain("Message sent.");
+    expect(screen.getByRole("alert").textContent).toContain("Could not send this message");
+  });
+
+  it("dismisses an ordinary toast after five seconds", async () => {
+    installApi(
+      [],
+      vi.fn(async () => mailThread(thread("thread", "Thread", false))),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByText("0 conversations");
+    vi.useFakeTimers();
+
+    fireEvent.keyDown(window, { key: "c" });
+    fireEvent.click(screen.getByRole("button", { name: "Finish immediate compose" }));
+    expect(screen.getByRole("status").textContent).toContain("Message sent.");
+
+    await act(async () => vi.advanceTimersByTime(4_999));
+    expect(screen.getByRole("status").textContent).toContain("Message sent.");
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("opens a draft conversation in the reading pane instead of compose", async () => {
@@ -790,6 +995,28 @@ describe("App thread navigation", () => {
     expect(screen.getByText("Action undone")).toBeTruthy();
   });
 
+  it("dismisses a conversation action toast after five seconds", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await act(async () => Promise.resolve());
+    expect(screen.getByRole("status").textContent).toContain("Starred");
+
+    await act(async () => vi.advanceTimersByTime(4_999));
+    expect(screen.getByRole("status").textContent).toContain("Starred");
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("reruns an active provider search after undo", async () => {
     const current = thread("thread-1", "Current conversation", false);
     const api = installApi(
@@ -1048,8 +1275,9 @@ function installApi(
     folders: [],
     unreadCount: 0,
     draftCount: 1,
+    scheduledCount: 0,
     countsByAccount: {
-      "account-1": { unreadCount: 0, draftCount: 1 },
+      "account-1": { unreadCount: 0, draftCount: 1, scheduledCount: 0 },
     },
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },
@@ -1096,7 +1324,11 @@ function installApi(
         prepare: vi.fn(async () => []),
         release: vi.fn(async () => undefined),
       },
-      drafts: { recipientFields: vi.fn(async () => undefined) },
+      drafts: {
+        delete: vi.fn(async () => undefined),
+        cancelScheduled: vi.fn(async () => ({ draftId: "draft-1" })),
+        recipientFields: vi.fn(async () => undefined),
+      },
       sync: { refresh: vi.fn(async () => undefined) },
       analytics: { trackFeature: vi.fn(async () => undefined) },
       system: {

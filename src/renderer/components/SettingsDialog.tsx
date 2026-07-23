@@ -1,11 +1,28 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ExternalLink, Monitor, Moon, RefreshCw, Sun, Trash2, X } from "lucide-react";
+import {
+  ChevronsUpDown,
+  ExternalLink,
+  Monitor,
+  Moon,
+  RefreshCw,
+  Sun,
+  Trash2,
+  X,
+} from "lucide-react";
 import type {
   AppearancePreference,
   BootstrapState,
   UndoSendDelaySeconds,
 } from "../../shared/contracts";
-import { IconButton, SelectionCheckbox } from "./Controls";
+import { IconButton, MenuButton, SelectionCheckbox } from "./Controls";
+
+const UNDO_SEND_OPTIONS = [
+  { value: 0, label: "Off" },
+  { value: 5, label: "5 seconds" },
+  { value: 10, label: "10 seconds" },
+  { value: 20, label: "20 seconds" },
+  { value: 30, label: "30 seconds" },
+] as const satisfies ReadonlyArray<{ value: UndoSendDelaySeconds; label: string }>;
 
 interface Props {
   state: BootstrapState;
@@ -583,26 +600,36 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
           </section>
           <section>
             <h2>Sending</h2>
-            <label className="setting-select-row">
+            <div className="setting-select-row">
               <span>
                 <strong>Undo send</strong>
                 <small>Delay delivery so you have time to cancel a sent message.</small>
               </span>
-              <select
-                aria-label="Undo send"
-                value={state.preferences.undoSendDelaySeconds}
+              <MenuButton
+                label="Undo send"
+                className="setting-select-menu"
+                triggerClassName="account-picker-trigger setting-select-trigger"
+                menuClassName="setting-select-options"
+                align="right"
+                tooltip={false}
                 disabled={undoSendBusy}
-                onChange={(event) =>
-                  void updateUndoSendDelay(Number(event.target.value) as UndoSendDelaySeconds)
-                }
+                options={UNDO_SEND_OPTIONS.map((option) => ({
+                  id: String(option.value),
+                  label: option.label,
+                  selected: state.preferences.undoSendDelaySeconds === option.value,
+                  onSelect: () => void updateUndoSendDelay(option.value),
+                }))}
               >
-                <option value={0}>Off</option>
-                <option value={5}>5 seconds</option>
-                <option value={10}>10 seconds</option>
-                <option value={20}>20 seconds</option>
-                <option value={30}>30 seconds</option>
-              </select>
-            </label>
+                <span>
+                  {
+                    UNDO_SEND_OPTIONS.find(
+                      (option) => option.value === state.preferences.undoSendDelaySeconds,
+                    )?.label
+                  }
+                </span>
+                <ChevronsUpDown size={14} />
+              </MenuButton>
+            </div>
           </section>
           <section>
             <h2>Privacy</h2>

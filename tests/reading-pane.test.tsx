@@ -206,6 +206,66 @@ describe("ReadingPane", () => {
     expect(screen.getByText("Reply to everyone")).toBeTruthy();
   });
 
+  it("scrolls to the inline composer and offers scheduled send", async () => {
+    const thread = detail("Reply subject", "message-1");
+    thread.messages[0]!.to.push({ email: "teammate@example.com" });
+    const getThread = vi.fn(async () => thread);
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          pick: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+        },
+      } as unknown as FluxmailDesktopApi,
+    });
+    const { container } = renderPane(summary());
+    await screen.findByText("Reply subject");
+    const scroller = container.querySelector<HTMLElement>(".conversation-scroll")!;
+    let scrollTop = 0;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1_200 },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(scrollTop).toBe(1_200);
+    expect(container.querySelector(".quick-reply .send-button .lucide-send")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "More send options" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    scrollTop = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Reply all" }));
+    expect(scrollTop).toBe(1_200);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    scrollTop = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    await screen.findByRole("textbox", { name: "To" });
+    expect(scrollTop).toBe(1_200);
+    fireEvent.change(screen.getByRole("textbox", { name: "To" }), {
+      target: { value: "friend@example.com" },
+    });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(
+      (screen.getByRole("button", { name: "More send options" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   it("restores a saved reply draft inline with its reply target", async () => {
     const thread = detail("Saved reply", "original-message");
     thread.messages.push({
@@ -257,6 +317,97 @@ describe("ReadingPane", () => {
       ),
     );
     expect(onDraftFinished).toHaveBeenCalledOnce();
+  });
+
+  it("opens the scheduled draft selected within a shared conversation", async () => {
+    const thread = detail("Original subject", "original-message");
+    thread.messages.push(
+      {
+        ...thread.messages[0]!,
+        id: "first-draft-message",
+        draftId: "first-draft",
+        subject: "First scheduled reply",
+        body: { text: "First body" },
+        flags: { read: true, starred: false, draft: true },
+      },
+      {
+        ...thread.messages[0]!,
+        id: "second-draft-message",
+        draftId: "second-draft",
+        subject: "Second scheduled reply",
+        body: { text: "Second body" },
+        flags: { read: true, starred: false, draft: true },
+      },
+    );
+    const getThread = vi.fn(async () => thread);
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+        },
+      } as unknown as FluxmailDesktopApi,
+    });
+    const onError = vi.fn();
+    const onQuickReplyDirtyChange = vi.fn();
+    const scheduledPane = (selected: ThreadSummary) => (
+      <ReadingPane
+        view="scheduled"
+        thread={selected}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={onError}
+        onQuickReplyDirtyChange={onQuickReplyDirtyChange}
+        undoSendDelaySeconds={0}
+      />
+    );
+    const { rerender } = render(
+      scheduledPane(
+        summary({
+          draft: true,
+          draftId: "first-draft",
+          scheduleId: "first-schedule",
+          messageCount: 3,
+        }),
+      ),
+    );
+
+    expect(((await screen.findByLabelText("Subject")) as HTMLInputElement).value).toBe(
+      "First scheduled reply",
+    );
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toBe(
+      "First body",
+    );
+
+    rerender(
+      scheduledPane(
+        summary({
+          draft: true,
+          draftId: "second-draft",
+          scheduleId: "second-schedule",
+          messageCount: 3,
+        }),
+      ),
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Subject") as HTMLInputElement).value).toBe(
+        "Second scheduled reply",
+      ),
+    );
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toBe(
+      "Second body",
+    );
+    await act(async () => {
+      cleanup();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
   });
 
   it("keeps an edited draft mounted when its refreshed summary date changes", async () => {
@@ -548,7 +699,7 @@ describe("ReadingPane", () => {
 function renderPane(
   thread: ThreadSummary,
   options: {
-    view?: "inbox" | "trash";
+    view?: "inbox" | "trash" | "scheduled";
     onModify?: (action: ModifyActionInput) => Promise<void>;
     quickReplyDiscardVersion?: number;
     allowPermanentDelete?: boolean;

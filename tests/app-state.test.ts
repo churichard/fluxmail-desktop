@@ -104,6 +104,17 @@ describe("background page reloads", () => {
     expect(loadNext).toHaveBeenNthCalledWith(1, "1");
     expect(loadNext).toHaveBeenNthCalledWith(2, "2");
   });
+
+  it("keeps scheduled pages ordered from the next delivery to the latest", async () => {
+    const soonest = { ...thread("soonest"), date: "2026-07-20T12:00:00Z" };
+    const middle = { ...thread("middle"), date: "2026-07-21T12:00:00Z" };
+    const latest = { ...thread("latest"), date: "2026-07-22T12:00:00Z" };
+    const loadNext = vi.fn().mockResolvedValue(page([middle, latest], undefined, 3));
+
+    const result = await loadThreadPages(page([soonest], "1", 3), 3, loadNext, "ascending");
+
+    expect(result.items.map((item) => item.id)).toEqual(["soonest", "middle", "latest"]);
+  });
 });
 
 describe("reply recipients", () => {

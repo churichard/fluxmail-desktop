@@ -59,6 +59,7 @@ import {
 } from "../mail-actions";
 import type { TrackingPixelDetail } from "../email/tracking-pixels";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { SendControls } from "./SendControls";
 
 interface Props {
   view: MailboxView;
@@ -148,6 +149,11 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     findInputRef.current?.select();
   }, [findOpen]);
 
+  useLayoutEffect(() => {
+    if (!composer || !scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [composer, scroller]);
+
   const closeFind = useCallback(() => {
     setFindOpen(false);
     setFindQuery("");
@@ -236,7 +242,9 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   );
 
   useEffect(() => {
-    const nextThreadKey = thread ? `${thread.accountId}:${thread.id}` : undefined;
+    const nextThreadKey = thread
+      ? `${thread.accountId}:${thread.id}:${thread.scheduleId ?? thread.draftId ?? ""}`
+      : undefined;
     if (nextThreadKey && nextThreadKey === loadedThreadKey.current && draftSeedRef.current) return;
     loadedThreadKey.current = nextThreadKey;
     closeFind();
@@ -254,7 +262,12 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         setDetail(result);
         const draft = [...result.messages]
           .reverse()
-          .find((message) => message.flags.draft && message.draftId);
+          .find(
+            (message) =>
+              message.flags.draft &&
+              message.draftId &&
+              (!thread.draftId || message.draftId === thread.draftId),
+          );
         if (!draft?.draftId) {
           if (thread.draft) onDraftMissing?.(thread);
           return;
@@ -310,8 +323,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onError,
     thread?.accountId,
     thread?.date,
+    thread?.draftId,
     thread?.id,
     thread?.messageCount,
+    thread?.scheduleId,
   ]);
 
   if (!thread)
@@ -350,13 +365,15 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     <section className="reading-pane">
       <header className="reading-toolbar">
         <div className="toolbar-group">
-          <IconButton
-            label={mailboxMoveLabel(view)}
-            shortcut={KEYBOARD_SHORTCUTS.archive}
-            onClick={() => void onModify(mailboxMoveAction(view))}
-          >
-            {view === "trash" ? <Undo2 size={17} /> : <Archive size={17} />}
-          </IconButton>
+          {view !== "scheduled" ? (
+            <IconButton
+              label={mailboxMoveLabel(view)}
+              shortcut={KEYBOARD_SHORTCUTS.archive}
+              onClick={() => void onModify(mailboxMoveAction(view))}
+            >
+              {view === "trash" ? <Undo2 size={17} /> : <Archive size={17} />}
+            </IconButton>
+          ) : null}
           {deleteAction ? (
             <IconButton
               label={mailboxDeleteLabel(view)}
@@ -385,19 +402,21 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               <Tag size={16} />
             </MenuButton>
           ) : null}
-          <MenuButton
-            label="More actions"
-            options={[
-              {
-                id: "spam",
-                label: "Mark as spam",
-                icon: <ShieldAlert size={15} />,
-                onSelect: () => void onModify({ type: "move", folder: "spam" }),
-              },
-            ]}
-          >
-            <MoreHorizontal size={17} />
-          </MenuButton>
+          {view !== "scheduled" ? (
+            <MenuButton
+              label="More actions"
+              options={[
+                {
+                  id: "spam",
+                  label: "Mark as spam",
+                  icon: <ShieldAlert size={15} />,
+                  onSelect: () => void onModify({ type: "move", folder: "spam" }),
+                },
+              ]}
+            >
+              <MoreHorizontal size={17} />
+            </MenuButton>
+          ) : null}
         </div>
         <IconButton
           label={thread.starred ? "Unstar" : "Star"}
@@ -746,6 +765,7 @@ function InlineComposer({
   const [html, setHtml] = useState("<p></p>");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [deliveryKind, setDeliveryKind] = useState<ComposeDelivery["kind"]>("undo");
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [attachments, setAttachments] = useState(initialAttachments);
   const [attachmentsChanged, setAttachmentsChanged] = useState(false);
@@ -792,7 +812,7 @@ function InlineComposer({
     };
   }, [onDirtyChange, releaseAttachments]);
 
-  const send = async () => {
+  const send = async (timing?: { sendAt: string }) => {
     const toField = parseAddressField(to);
     const ccField = parseAddressField(cc);
     const bccField = parseAddressField(bcc);
@@ -808,6 +828,8 @@ function InlineComposer({
         !bccField.addresses.length)
     )
       return;
+    const kind = timing ? "scheduled" : hasUndoSendDelay(undoSendDelaySeconds) ? "undo" : "sent";
+    setDeliveryKind(kind);
     setSending(true);
     try {
       if (forwarding) {
@@ -822,14 +844,16 @@ function InlineComposer({
           html,
           attachments,
           includeAttachments: false,
-          ...(hasUndoSendDelay(undoSendDelaySeconds)
-            ? {
-                delaySeconds: undoSendDelaySeconds,
-              }
-            : {}),
+          ...(timing
+            ? timing
+            : hasUndoSendDelay(undoSendDelaySeconds)
+              ? {
+                  delaySeconds: undoSendDelaySeconds,
+                }
+              : {}),
         });
         releaseAttachments();
-        onSent(delivery ? { ...delivery, kind: "undo" } : { kind: "sent" });
+        onSent(delivery ? { ...delivery, kind: timing ? "scheduled" : "undo" } : { kind: "sent" });
       } else {
         const input = {
           accountId,
@@ -841,7 +865,11 @@ function InlineComposer({
           replyAll: mode === "replyAll",
           attachments,
         };
-        if (hasUndoSendDelay(undoSendDelaySeconds)) {
+        if (timing) {
+          const delivery = await window.fluxmail.drafts.schedule({ ...input, ...timing });
+          releaseAttachments();
+          onSent({ ...delivery, kind: "scheduled" });
+        } else if (hasUndoSendDelay(undoSendDelaySeconds)) {
           const delivery = await window.fluxmail.drafts.schedule({
             ...input,
             delaySeconds: undoSendDelaySeconds,
@@ -860,6 +888,9 @@ function InlineComposer({
       setSending(false);
     }
   };
+
+  const sendDisabled =
+    (!forwarding && !text.trim()) || (forwarding && !to.trim() && !cc.trim() && !bcc.trim());
   return (
     <div
       className="quick-reply"
@@ -1021,17 +1052,14 @@ function InlineComposer({
           <button className="text-button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            className="primary-button"
-            disabled={
-              sending ||
-              (!forwarding && !text.trim()) ||
-              (forwarding && !to.trim() && !cc.trim() && !bcc.trim())
-            }
-            onClick={() => void send()}
-          >
-            {sending ? "Sending..." : "Send"}
-          </button>
+          <SendControls
+            sending={sending}
+            deliveryKind={deliveryKind}
+            disabled={sendDisabled}
+            onSend={() => void send()}
+            onSchedule={(sendAt) => void send({ sendAt })}
+            onError={onError}
+          />
         </div>
       </div>
     </div>

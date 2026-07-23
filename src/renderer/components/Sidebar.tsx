@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import {
   ChevronDown,
   ChevronsUpDown,
+  Clock3,
   FileText,
   Inbox,
   Mail,
@@ -27,6 +28,7 @@ interface SidebarProps {
   activeLabel?: string;
   unreadCount: number;
   draftCount: number;
+  scheduledCount: number;
   collapsed: boolean;
   onAccountChange(value?: string): void;
   onViewChange(view: MailboxView, label?: string): void;
@@ -44,6 +46,7 @@ const SYSTEM_ITEMS: Array<{
   { view: "starred", label: "Starred", icon: Star },
   { view: "sent", label: "Sent", icon: Send },
   { view: "drafts", label: "Drafts", icon: FileText },
+  { view: "scheduled", label: "Scheduled", icon: Clock3 },
   { view: "all", label: "All mail", icon: Mail },
   { view: "spam", label: "Spam", icon: ShieldAlert },
   { view: "trash", label: "Trash", icon: Trash2 },
@@ -127,6 +130,9 @@ export function Sidebar(props: SidebarProps) {
                 ) : null}
                 {item.view === "drafts" && props.draftCount > 0 ? (
                   <span className="nav-count">{props.draftCount}</span>
+                ) : null}
+                {item.view === "scheduled" && props.scheduledCount > 0 ? (
+                  <span className="nav-count">{props.scheduledCount}</span>
                 ) : null}
               </button>
             );

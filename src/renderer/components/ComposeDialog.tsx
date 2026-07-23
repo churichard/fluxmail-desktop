@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { CalendarClock, ChevronDown, Ellipsis, Paperclip, Send, Trash2, X } from "lucide-react";
+import { Ellipsis, Paperclip, Trash2, X } from "lucide-react";
 import {
   addressSchema,
   hasUndoSendDelay,
@@ -21,6 +21,7 @@ import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEdito
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { SendControls } from "./SendControls";
 
 export type ComposeDelivery =
   | { kind: "sent" }
@@ -93,8 +94,6 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   const [sending, setSending] = useState(false);
   const [deliveryKind, setDeliveryKind] = useState<ComposeDelivery["kind"]>("undo");
   const [saving, setSaving] = useState(false);
-  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
-  const [scheduledAt, setScheduledAt] = useState(() => defaultScheduleTime());
   const [quotedMessage, setQuotedMessage] = useState<MailMessage>();
   const [quoteOpen, setQuoteOpen] = useState(false);
   const revision = useRef(0);
@@ -369,16 +368,6 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
     } finally {
       setSending(false);
     }
-  };
-
-  const schedule = () => {
-    const date = new Date(scheduledAt);
-    if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-      onError("Choose a send time in the future.");
-      return;
-    }
-    setSendOptionsOpen(false);
-    void deliver("scheduled", { sendAt: date.toISOString() });
   };
 
   const close = async (): Promise<boolean> => {
@@ -669,43 +658,13 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
         </div>
       ) : null}
       <footer>
-        <div className="send-controls">
-          <button
-            className="primary-button send-button"
-            disabled={sending}
-            onClick={() => void send()}
-          >
-            <Send size={16} />
-            {sending ? (deliveryKind === "scheduled" ? "Scheduling..." : "Sending...") : "Send"}
-          </button>
-          <button
-            type="button"
-            className="primary-button send-options-button"
-            disabled={sending}
-            aria-label="More send options"
-            aria-expanded={sendOptionsOpen}
-            onClick={() => setSendOptionsOpen((value) => !value)}
-          >
-            <ChevronDown size={15} />
-          </button>
-          {sendOptionsOpen ? (
-            <div className="send-options-popover" role="dialog" aria-label="Schedule send">
-              <label>
-                <span>Send at</span>
-                <input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  min={localDateTimeValue(new Date(Date.now() + 60_000))}
-                  onChange={(event) => setScheduledAt(event.target.value)}
-                />
-              </label>
-              <button type="button" className="secondary-button" onClick={schedule}>
-                <CalendarClock size={15} />
-                Schedule
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <SendControls
+          sending={sending}
+          deliveryKind={deliveryKind}
+          onSend={() => void send()}
+          onSchedule={(sendAt) => void deliver("scheduled", { sendAt })}
+          onError={onError}
+        />
         <MailEditorToolbar
           editor={editor}
           onAttach={() =>
@@ -810,17 +769,6 @@ function htmlFromText(value: string): string {
     (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character]!,
   );
   return `<p>${escaped.replaceAll("\n", "<br>")}</p>`;
-}
-
-function defaultScheduleTime(): string {
-  const date = new Date(Date.now() + 60 * 60 * 1_000);
-  date.setMinutes(Math.ceil(date.getMinutes() / 5) * 5, 0, 0);
-  return localDateTimeValue(date);
-}
-
-function localDateTimeValue(date: Date): string {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 export function replyRecipient(accountEmail: string, message: MailMessage): string {

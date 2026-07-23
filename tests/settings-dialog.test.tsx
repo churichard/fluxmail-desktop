@@ -106,11 +106,14 @@ describe("SettingsDialog undo send", () => {
     const setUndoSendDelaySeconds = vi.fn(async () => 0 as const);
     installApi(undefined, undefined, setUndoSendDelaySeconds);
     render(<SettingsHarness />);
+    const trigger = screen.getByRole("button", { name: "Undo send" });
 
-    fireEvent.change(screen.getByLabelText("Undo send"), { target: { value: "0" } });
+    expect(trigger).toHaveTextContent("10 seconds");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Off" }));
 
     await waitFor(() => expect(setUndoSendDelaySeconds).toHaveBeenCalledWith(0));
-    expect(screen.getByLabelText("Undo send")).toHaveValue("0");
+    expect(trigger).toHaveTextContent("Off");
   });
 });
 
@@ -194,6 +197,7 @@ function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
     folders: [],
     unreadCount: 0,
     draftCount: 0,
+    scheduledCount: 0,
     countsByAccount: {},
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },

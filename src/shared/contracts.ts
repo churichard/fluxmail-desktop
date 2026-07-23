@@ -5,6 +5,7 @@ export const mailboxViewSchema = z.enum([
   "starred",
   "sent",
   "drafts",
+  "scheduled",
   "all",
   "spam",
   "trash",
@@ -77,6 +78,8 @@ export type MailMessage = z.infer<typeof messageSchema>;
 
 export const threadSummarySchema = z.object({
   id: z.string(),
+  scheduleId: z.string().optional(),
+  draftId: z.string().optional(),
   accountId: z.string(),
   accountEmail: z.string(),
   subject: z.string(),
@@ -357,10 +360,12 @@ export const bootstrapSchema = z.object({
   folders: z.array(folderSchema),
   unreadCount: z.number().int().nonnegative(),
   draftCount: z.number().int().nonnegative(),
+  scheduledCount: z.number().int().nonnegative(),
   countsByAccount: z.record(
     z.object({
       unreadCount: z.number().int().nonnegative(),
       draftCount: z.number().int().nonnegative(),
+      scheduledCount: z.number().int().nonnegative(),
     }),
   ),
   sync: syncStateSchema,

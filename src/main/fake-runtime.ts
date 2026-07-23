@@ -30,6 +30,8 @@ import {
   DEMO_ACCOUNT_NAME,
 } from "./demo-fixtures";
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 const account: AccountInfo = {
   id: DEMO_ACCOUNT_ID,
   email: DEMO_ACCOUNT_EMAIL,
@@ -132,7 +134,7 @@ export class FakeFluxmailRuntime {
   private readonly draftRecipientValues = new Map<string, DraftRecipientFields>();
   private readonly scheduled = new Map<
     string,
-    { draftId: string; timer: ReturnType<typeof setTimeout> }
+    { draftId: string; sendAt: string; visible: boolean; timer: ReturnType<typeof setTimeout> }
   >();
   private latestUndo?: { token: string; threadIds: string[]; messages: Message[] };
   private mutationSequence = 0;
@@ -183,12 +185,14 @@ export class FakeFluxmailRuntime {
       accounts: this.accounts(),
       folders: await this.folders(),
       unreadCount: this.inboxUnreadCount(),
-      draftCount: this.messages.filter((message) => message.flags.draft).length,
+      draftCount: this.draftCount(),
+      scheduledCount: this.scheduledCount(),
       countsByAccount: this.connected
         ? {
             [account.id]: {
               unreadCount: this.inboxUnreadCount(),
-              draftCount: this.messages.filter((message) => message.flags.draft).length,
+              draftCount: this.draftCount(),
+              scheduledCount: this.scheduledCount(),
             },
           }
         : {},
@@ -246,27 +250,77 @@ export class FakeFluxmailRuntime {
   async listThreads(raw: ThreadListInput, _forceProviderSearch = false): Promise<ThreadPage> {
     const input = { pageSize: 100, ...raw };
     const offset = Number(input.cursor ?? 0);
-    const all = this.summaries().filter((thread) => {
-      if (input.accountIds?.length && !input.accountIds.includes(thread.accountId)) return false;
-      if (input.view === "starred" && !thread.starred) return false;
-      if (input.view === "label" && input.label && !thread.labels.includes(input.label))
-        return false;
-      if (
-        input.view === "search" &&
-        thread.folderRoles.some((role) => role === "spam" || role === "trash")
-      )
-        return false;
-      if (
-        !["all", "starred", "label", "search"].includes(input.view) &&
-        !thread.folderRoles.includes(input.view)
-      )
-        return false;
-      const query = input.query?.trim().toLowerCase();
-      return (
-        !query ||
-        `${thread.senderName} ${thread.subject} ${thread.snippet}`.toLowerCase().includes(query)
+    const scheduledDraftIds = new Set([...this.scheduled.values()].map((item) => item.draftId));
+    const scheduledByDraft = new Map(
+      [...this.scheduled.entries()]
+        .filter(([, item]) => item.visible)
+        .map(([scheduleId, item]) => [item.draftId, { scheduleId, sendAt: item.sendAt }]),
+    );
+    const summaries = this.summaries();
+    const summariesByThread = new Map(summaries.map((thread) => [thread.id, thread]));
+    const visibleThreads =
+      input.view === "scheduled"
+        ? [...scheduledByDraft.entries()].flatMap(([draftId, schedule]) => {
+            const draft = this.messages.find((message) => message.draftId === draftId);
+            const thread = draft ? summariesByThread.get(draft.threadId) : undefined;
+            if (!draft || !thread) return [];
+
+            const recipients = [...draft.to, ...(draft.cc ?? []), ...(draft.bcc ?? [])];
+            return [
+              {
+                ...thread,
+                scheduleId: schedule.scheduleId,
+                draftId,
+                subject: draft.subject,
+                senderName:
+                  recipients.map((recipient) => recipient.name || recipient.email).join(", ") ||
+                  "No recipients",
+                senderEmail: recipients[0]?.email ?? "",
+                snippet: draft.snippet ?? "",
+                date: schedule.sendAt,
+                hasAttachments: Boolean(draft.attachments?.length),
+              },
+            ];
+          })
+        : summaries;
+    const all = visibleThreads
+      .filter((thread) => {
+        if (input.accountIds?.length && !input.accountIds.includes(thread.accountId)) return false;
+        if (input.view === "scheduled") return true;
+        if (input.view === "starred" && !thread.starred) return false;
+        if (input.view === "label" && input.label && !thread.labels.includes(input.label))
+          return false;
+        if (
+          input.view === "search" &&
+          thread.folderRoles.some((role) => role === "spam" || role === "trash")
+        )
+          return false;
+        if (
+          !["all", "starred", "label", "search"].includes(input.view) &&
+          !thread.folderRoles.includes(input.view)
+        )
+          return false;
+        if (
+          input.view === "drafts" &&
+          !this.messages.some(
+            (message) =>
+              message.threadId === thread.id &&
+              message.flags.draft &&
+              !scheduledDraftIds.has(message.draftId ?? ""),
+          )
+        )
+          return false;
+        const query = input.query?.trim().toLowerCase();
+        return (
+          !query ||
+          `${thread.senderName} ${thread.subject} ${thread.snippet}`.toLowerCase().includes(query)
+        );
+      })
+      .sort((left, right) =>
+        input.view === "scheduled"
+          ? Date.parse(left.date) - Date.parse(right.date)
+          : Date.parse(right.date) - Date.parse(left.date),
       );
-    });
     const items = all.slice(offset, offset + input.pageSize);
     return {
       items,
@@ -308,6 +362,19 @@ export class FakeFluxmailRuntime {
         const delay = Number(process.env.FLUXMAIL_DESKTOP_FAKE_ARCHIVE_DELAY_MS ?? 0);
         if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       }
+      if (action.type === "discardDraft")
+        for (const [scheduleId, item] of this.scheduled)
+          if (
+            this.messages.some(
+              (message) =>
+                ids.has(message.threadId) &&
+                message.flags.draft &&
+                message.draftId === item.draftId,
+            )
+          ) {
+            clearTimeout(item.timer);
+            this.scheduled.delete(scheduleId);
+          }
       if (action.type === "discardDraft")
         this.messages = this.messages.filter(
           (message) => !ids.has(message.threadId) || !message.flags.draft,
@@ -402,7 +469,10 @@ export class FakeFluxmailRuntime {
   }
 
   async deleteDraft(_accountId: string, draftId: string): Promise<void> {
+    this.cancelFakeSchedulesForDraft(draftId);
+    this.messages = this.messages.filter((message) => message.draftId !== draftId);
     this.draftRecipientValues.delete(draftId);
+    this.options.onCacheChanged();
   }
 
   draftRecipientFields(_accountId: string, draftId: string): DraftRecipientFields | undefined {
@@ -410,6 +480,11 @@ export class FakeFluxmailRuntime {
   }
 
   async send(input: ComposeInput): Promise<{ id: string; threadId: string }> {
+    if (input.draftId) {
+      this.cancelFakeSchedulesForDraft(input.draftId);
+      this.messages = this.messages.filter((message) => message.draftId !== input.draftId);
+      this.draftRecipientValues.delete(input.draftId);
+    }
     const id = `sent-${this.messages.length + 1}`;
     this.messages.push({
       id,
@@ -432,9 +507,10 @@ export class FakeFluxmailRuntime {
     input: ScheduledSendInput,
   ): Promise<{ scheduleId: string; draftId: string; sendAt: string }> {
     const draft = await this.saveDraft(input);
+    this.cancelFakeSchedulesForDraft(draft.draftId);
     const sendAt = fakeScheduledSendAt(input);
     const scheduleId = `test-schedule-${draft.draftId}`;
-    this.scheduleFakeDraft(scheduleId, draft.draftId, sendAt, () => {
+    this.scheduleFakeDraft(scheduleId, draft.draftId, sendAt, !input.delaySeconds, () => {
       this.messages = this.messages.filter((message) => message.draftId !== draft.draftId);
       void this.send({ ...input, draftId: undefined });
     });
@@ -450,6 +526,7 @@ export class FakeFluxmailRuntime {
     if (!item) throw new Error("This message has already been sent or canceled.");
     clearTimeout(item.timer);
     this.scheduled.delete(scheduleId);
+    this.options.onCacheChanged();
     return { draftId: item.draftId };
   }
 
@@ -504,7 +581,7 @@ export class FakeFluxmailRuntime {
       input.delaySeconds ? { delaySeconds: input.delaySeconds } : { sendAt: input.sendAt! },
     );
     const scheduleId = `test-schedule-${id}`;
-    this.scheduleFakeDraft(scheduleId, draftId, sendAt, () => {
+    this.scheduleFakeDraft(scheduleId, draftId, sendAt, !input.delaySeconds, () => {
       const draft = this.messages.find((message) => message.draftId === draftId);
       if (!draft) return;
       delete draft.draftId;
@@ -519,16 +596,34 @@ export class FakeFluxmailRuntime {
     scheduleId: string,
     draftId: string,
     sendAt: string,
+    visible: boolean,
     send: () => void,
   ): void {
-    const timer = setTimeout(
-      () => {
-        this.scheduled.delete(scheduleId);
-        send();
-      },
-      Math.max(0, Date.parse(sendAt) - Date.now()),
-    );
-    this.scheduled.set(scheduleId, { draftId, timer });
+    const armTimer = (): ReturnType<typeof setTimeout> => {
+      const remainingMs = Math.max(0, Date.parse(sendAt) - Date.now());
+      return setTimeout(
+        () => {
+          if (remainingMs > MAX_TIMER_DELAY_MS) {
+            const current = this.scheduled.get(scheduleId);
+            if (current) current.timer = armTimer();
+            return;
+          }
+          this.scheduled.delete(scheduleId);
+          send();
+        },
+        Math.min(remainingMs, MAX_TIMER_DELAY_MS),
+      );
+    };
+    this.scheduled.set(scheduleId, { draftId, sendAt, visible, timer: armTimer() });
+    this.options.onCacheChanged();
+  }
+
+  private cancelFakeSchedulesForDraft(draftId: string): void {
+    for (const [scheduleId, item] of this.scheduled) {
+      if (item.draftId !== draftId) continue;
+      clearTimeout(item.timer);
+      this.scheduled.delete(scheduleId);
+    }
   }
 
   async attachment(
@@ -604,6 +699,21 @@ export class FakeFluxmailRuntime {
     return this.summaries().filter(
       (thread) => thread.folderRoles.includes("inbox") && thread.unread,
     ).length;
+  }
+
+  private scheduledCount(): number {
+    return [...this.scheduled.values()].filter((item) => item.visible).length;
+  }
+
+  private draftCount(): number {
+    const scheduledDraftIds = new Set([...this.scheduled.values()].map((item) => item.draftId));
+    return new Set(
+      this.messages.flatMap((message) =>
+        message.flags.draft && message.draftId && !scheduledDraftIds.has(message.draftId)
+          ? [message.threadId]
+          : [],
+      ),
+    ).size;
   }
 }
 
