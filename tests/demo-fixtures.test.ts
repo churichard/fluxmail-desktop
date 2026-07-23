@@ -12,6 +12,7 @@ const anchor = new Date(2026, 6, 20, 12, 0, 0);
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("desktop demo fixtures", () => {
@@ -107,6 +108,79 @@ describe("desktop demo fixtures", () => {
     expect(hiring.totalCount).toBeGreaterThan(0);
     expect(hiring.items.every((thread) => thread.labels.includes("Hiring/Eng"))).toBe(true);
     expect(runtime.unreadCount()).toBeGreaterThan(1);
+  });
+
+  it("shows scheduled drafts until they are canceled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-23T12:00:00.000Z");
+    const runtime = new FakeFluxmailRuntime({
+      analytics: {
+        status: vi.fn(() => ({ enabled: false, lockedByEnvironment: false })),
+      } as unknown as DesktopAnalytics,
+      onCacheChanged() {},
+      onLicenseChanged() {},
+    });
+    const delivery = await runtime.schedule({
+      accountId: DEMO_ACCOUNT_ID,
+      to: [{ name: "Jamie", email: "jamie@example.com" }],
+      subject: "Tomorrow's update",
+      text: "Scheduled body",
+      sendAt: "2026-07-24T12:00:00.000Z",
+    });
+
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 1,
+      items: [
+        {
+          senderName: "Jamie",
+          subject: "Tomorrow's update",
+          date: "2026-07-24T12:00:00.000Z",
+        },
+      ],
+    });
+    await expect(runtime.bootstrap({ status: "idle" })).resolves.toMatchObject({
+      scheduledCount: 1,
+      countsByAccount: {
+        [DEMO_ACCOUNT_ID]: { scheduledCount: 1 },
+      },
+    });
+
+    await runtime.cancelScheduled(delivery.scheduleId);
+
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 0,
+      items: [],
+    });
+
+    const deletedDelivery = await runtime.schedule({
+      accountId: DEMO_ACCOUNT_ID,
+      to: [{ email: "jamie@example.com" }],
+      subject: "Delete scheduled draft",
+      text: "Delete this before delivery",
+      sendAt: "2026-07-25T12:00:00.000Z",
+    });
+    await runtime.deleteDraft(DEMO_ACCOUNT_ID, deletedDelivery.draftId);
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 0,
+      items: [],
+    });
+
+    const undoDelivery = await runtime.schedule({
+      accountId: DEMO_ACCOUNT_ID,
+      to: [{ email: "jamie@example.com" }],
+      subject: "Undo window",
+      text: "Not an explicit schedule",
+      delaySeconds: 10,
+    });
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 0,
+      items: [],
+    });
+    await expect(runtime.bootstrap({ status: "idle" })).resolves.toMatchObject({
+      scheduledCount: 0,
+    });
+    await runtime.cancelScheduled(undoDelivery.scheduleId);
+    await runtime.shutdown();
   });
 
   it("keeps sent messages in Sent when archiving a mixed conversation", async () => {

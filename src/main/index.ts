@@ -35,6 +35,8 @@ import {
   composeAttachmentSchema,
   composeInputSchema,
   draftDeleteInputSchema,
+  draftRecipientFieldsInputSchema,
+  draftRecipientFieldsSchema,
   draftResultSchema,
   featureEventSchema,
   imageRelayInputSchema,
@@ -49,7 +51,12 @@ import {
   mailUndoResultSchema,
   sendInputSchema,
   sendResultSchema,
+  scheduledSendCancelInputSchema,
+  scheduledSendCancelResultSchema,
+  scheduledSendInputSchema,
+  scheduledSendResultSchema,
   telemetryStatusSchema,
+  undoSendDelaySecondsSchema,
   threadListInputSchema,
   threadPageSchema,
   threadSchema,
@@ -388,6 +395,7 @@ function registerIpc(): void {
         openNextAfterArchive: requirePreferences().openNextAfterArchive(),
         blockRemoteImages: requirePreferences().blockRemoteImages(),
         imageRelay: requirePreferences().imageRelay(),
+        undoSendDelaySeconds: requirePreferences().undoSendDelaySeconds(),
       },
     };
   });
@@ -450,8 +458,12 @@ function registerIpc(): void {
   handle(IPC.mailUndo, mailUndoInputSchema, mailUndoResultSchema, async ({ token }) =>
     requireRuntime().undo(token),
   );
-  handle(IPC.mailForward, mailForwardInputSchema, z.void(), async ({ target, ...input }) =>
-    requireRuntime().forward({ accountId: target.accountId, ...input }),
+  handle(
+    IPC.mailForward,
+    mailForwardInputSchema,
+    scheduledSendResultSchema.optional(),
+    async ({ target, ...input }) =>
+      requireRuntime().forward({ accountId: target.accountId, ...input }),
   );
   handle(IPC.draftSave, composeInputSchema, draftResultSchema, async (input) =>
     requireRuntime().saveDraft(input),
@@ -459,8 +471,23 @@ function registerIpc(): void {
   handle(IPC.draftDelete, draftDeleteInputSchema, z.void(), async (input) =>
     requireRuntime().deleteDraft(input.accountId, input.draftId),
   );
+  handle(
+    IPC.draftRecipientFields,
+    draftRecipientFieldsInputSchema,
+    draftRecipientFieldsSchema.optional(),
+    (input) => requireRuntime().draftRecipientFields(input.accountId, input.draftId),
+  );
   handle(IPC.draftSend, sendInputSchema, sendResultSchema, async (input) =>
     requireRuntime().send(input),
+  );
+  handle(IPC.draftSchedule, scheduledSendInputSchema, scheduledSendResultSchema, (input) =>
+    requireRuntime().schedule(input),
+  );
+  handle(
+    IPC.draftCancelScheduled,
+    scheduledSendCancelInputSchema,
+    scheduledSendCancelResultSchema,
+    (input) => requireRuntime().cancelScheduled(input.scheduleId),
   );
   handle(IPC.attachmentPick, z.undefined(), z.array(composeAttachmentSchema), pickAttachments);
   handle(
@@ -518,6 +545,12 @@ function registerIpc(): void {
   );
   handle(IPC.preferencesImageRelaySet, z.boolean(), z.boolean(), (enabled) =>
     requirePreferences().setImageRelay(enabled),
+  );
+  handle(
+    IPC.preferencesUndoSendDelaySet,
+    undoSendDelaySecondsSchema,
+    undoSendDelaySecondsSchema,
+    (delay) => requirePreferences().setUndoSendDelaySeconds(delay),
   );
   handle(IPC.imagesProxy, imageRelayInputSchema, imageRelayResultSchema, (urls) =>
     requireImageRelay().proxy(urls),

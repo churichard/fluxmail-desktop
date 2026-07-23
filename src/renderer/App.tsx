@@ -12,6 +12,7 @@ import type {
   AppError,
   AppEvent,
   BootstrapState,
+  MailModifyResult,
   MailboxView,
   ModifyActionInput,
   ThreadPage,
@@ -27,6 +28,7 @@ import {
 import {
   ComposeDialog,
   type ComposeDialogHandle,
+  type ComposeDelivery,
   type ComposeSeed,
 } from "./components/ComposeDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -35,6 +37,13 @@ import { FluxmailLogoMark } from "./components/FluxmailLogoMark";
 import { mailboxDeleteAction, mailboxMoveAction } from "./mail-actions";
 
 const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_TOAST_DURATION_MS = 5_000;
+
+interface DeliveryNotice {
+  id: string;
+  message: string;
+  delivery?: ComposeDelivery;
+}
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
@@ -54,6 +63,7 @@ export function App() {
   const [quickReplyDiscardVersion, setQuickReplyDiscardVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [deliveryNotices, setDeliveryNotices] = useState<DeliveryNotice[]>([]);
   const [actionNotice, setActionNotice] = useState<string>();
   const [startupError, setStartupError] = useState<AppError>();
   const [sidebarWidth, setSidebarWidth] = useState(228);
@@ -63,6 +73,10 @@ export function App() {
   const composeDialogRef = useRef<ComposeDialogHandle>(null);
   const readingPaneRef = useRef<ReadingPaneHandle>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
+  const deliveryTimers = useRef(new Map<string, number>());
+  const deliveryNoticeSequence = useRef(0);
+  const errorTimer = useRef<number | undefined>(undefined);
+  const actionTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
   const quickReplyDirty = useRef(false);
   const latestUndo = useRef<{ token: string; targetKeys: Set<string> } | undefined>(undefined);
@@ -71,6 +85,51 @@ export function App() {
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
   const mailboxContextRef = useRef(mailboxContext);
   const selectedThreadRef = useRef<ThreadSummary | undefined>(undefined);
+  const dismissError = useCallback(() => {
+    window.clearTimeout(errorTimer.current);
+    errorTimer.current = undefined;
+    setError(undefined);
+  }, []);
+  const showError = useCallback((message: string) => {
+    window.clearTimeout(errorTimer.current);
+    setError(message);
+    errorTimer.current = window.setTimeout(() => {
+      errorTimer.current = undefined;
+      setError(undefined);
+    }, DEFAULT_TOAST_DURATION_MS);
+  }, []);
+  const dismissActionNotice = useCallback(() => {
+    window.clearTimeout(actionTimer.current);
+    actionTimer.current = undefined;
+    setActionNotice(undefined);
+  }, []);
+  const showActionNotice = useCallback((message: string) => {
+    window.clearTimeout(actionTimer.current);
+    setActionNotice(message);
+    actionTimer.current = window.setTimeout(() => {
+      actionTimer.current = undefined;
+      setActionNotice(undefined);
+    }, DEFAULT_TOAST_DURATION_MS);
+  }, []);
+  const clearDeliveryTimer = useCallback((id: string) => {
+    const timer = deliveryTimers.current.get(id);
+    if (timer !== undefined) window.clearTimeout(timer);
+    deliveryTimers.current.delete(id);
+  }, []);
+  const dismissDeliveryNotice = useCallback(
+    (id: string) => {
+      clearDeliveryTimer(id);
+      setDeliveryNotices((current) => current.filter((notice) => notice.id !== id));
+    },
+    [clearDeliveryTimer],
+  );
+  const setDeliveryTimer = useCallback((id: string, callback: () => void, delay: number) => {
+    const timer = window.setTimeout(() => {
+      deliveryTimers.current.delete(id);
+      callback();
+    }, delay);
+    deliveryTimers.current.set(id, timer);
+  }, []);
   useLayoutEffect(() => {
     mailboxContextRef.current = mailboxContext;
   }, [mailboxContext]);
@@ -113,10 +172,12 @@ export function App() {
     ? (bootstrap?.countsByAccount[accountId] ?? {
         unreadCount: 0,
         draftCount: 0,
+        scheduledCount: 0,
       })
     : {
         unreadCount: bootstrap?.unreadCount ?? 0,
         draftCount: bootstrap?.draftCount ?? 0,
+        scheduledCount: bootstrap?.scheduledCount ?? 0,
       };
   const availableLabels = useMemo(
     () => [
@@ -153,9 +214,9 @@ export function App() {
         pageSize: DEFAULT_PAGE_SIZE,
       });
     } catch (caught) {
-      setError(errorMessage(caught));
+      showError(errorMessage(caught));
     }
-  }, [accountIds, label, submittedSearch, view]);
+  }, [accountIds, label, showError, submittedSearch, view]);
 
   const loadThreads = useCallback(
     async (options?: {
@@ -184,16 +245,24 @@ export function App() {
           cursor: append ? cursor : undefined,
           pageSize: DEFAULT_PAGE_SIZE,
         };
+        const sortOrder =
+          !submittedSearch && view === "scheduled"
+            ? ("ascending" as const)
+            : ("descending" as const);
         let page = options?.forceSearch
           ? await window.fluxmail.mail.search(input)
           : await window.fluxmail.mail.listThreads(input);
         if (!append && options?.preservePages) {
-          page = await loadThreadPages(page, loadedThreadCount.current, async (nextCursor) =>
-            window.fluxmail.mail.listThreads({
-              ...input,
-              refresh: undefined,
-              cursor: nextCursor,
-            }),
+          page = await loadThreadPages(
+            page,
+            loadedThreadCount.current,
+            async (nextCursor) =>
+              window.fluxmail.mail.listThreads({
+                ...input,
+                refresh: undefined,
+                cursor: nextCursor,
+              }),
+            sortOrder,
           );
         }
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
@@ -201,7 +270,7 @@ export function App() {
           setThreads((current) => {
             if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current)
               return current;
-            const next = append ? mergeThreads(current, page.items) : page.items;
+            const next = append ? mergeThreads(current, page.items, sortOrder) : page.items;
             loadedThreadCount.current = Math.max(DEFAULT_PAGE_SIZE, next.length);
             return next;
           });
@@ -222,7 +291,7 @@ export function App() {
         });
       } catch (caught) {
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
-        setError(errorMessage(caught));
+        showError(errorMessage(caught));
       } finally {
         if (request === listRequest.current && mailboxContext === mailboxContextRef.current) {
           setLoading(false);
@@ -230,7 +299,98 @@ export function App() {
         }
       }
     },
-    [accountIds, cursor, label, mailboxContext, submittedSearch, view],
+    [accountIds, cursor, label, mailboxContext, showError, submittedSearch, view],
+  );
+
+  const showDelivery = useCallback(
+    (delivery: ComposeDelivery) => {
+      const id =
+        delivery.kind === "sent"
+          ? `sent-${(deliveryNoticeSequence.current += 1)}`
+          : delivery.scheduleId;
+      clearDeliveryTimer(id);
+      if (delivery.kind === "sent") {
+        setDeliveryNotices((current) => [...current, { id, message: "Message sent." }]);
+        setDeliveryTimer(
+          id,
+          () => setDeliveryNotices((current) => current.filter((notice) => notice.id !== id)),
+          DEFAULT_TOAST_DURATION_MS,
+        );
+        return;
+      }
+      const sendDate = new Date(delivery.sendAt);
+      if (delivery.kind === "scheduled") void loadBootstrap();
+      const notice = {
+        id,
+        delivery,
+        message:
+          delivery.kind === "undo"
+            ? "Message sent."
+            : `Message scheduled for ${sendDate.toLocaleString([], {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })}.`,
+      };
+      setDeliveryNotices((current) => [
+        ...current.filter((candidate) => candidate.id !== id),
+        notice,
+      ]);
+      const visibleFor =
+        delivery.kind === "undo"
+          ? Math.max(0, sendDate.getTime() - Date.now())
+          : DEFAULT_TOAST_DURATION_MS;
+      setDeliveryTimer(
+        id,
+        () => {
+          setDeliveryNotices((current) => current.filter((candidate) => candidate.id !== id));
+          if (delivery.kind === "undo") void refreshMail().then(() => loadThreads({ quiet: true }));
+        },
+        visibleFor,
+      );
+    },
+    [clearDeliveryTimer, loadBootstrap, loadThreads, refreshMail, setDeliveryTimer],
+  );
+
+  const cancelDelivery = useCallback(
+    async (notice: DeliveryNotice) => {
+      const delivery = notice.delivery;
+      if (!delivery || delivery.kind === "sent") return;
+      try {
+        await window.fluxmail.drafts.cancelScheduled({ scheduleId: delivery.scheduleId });
+        clearDeliveryTimer(notice.id);
+        setDeliveryNotices((current) =>
+          current.map((candidate) =>
+            candidate.id === notice.id
+              ? {
+                  id: notice.id,
+                  message: "Sending canceled. The message is in Drafts.",
+                }
+              : candidate,
+          ),
+        );
+        setDeliveryTimer(
+          notice.id,
+          () =>
+            setDeliveryNotices((current) =>
+              current.filter((candidate) => candidate.id !== notice.id),
+            ),
+          DEFAULT_TOAST_DURATION_MS,
+        );
+        void loadBootstrap();
+        void loadThreads({ quiet: true });
+      } catch (caught) {
+        dismissDeliveryNotice(notice.id);
+        showError(errorMessage(caught));
+      }
+    },
+    [
+      clearDeliveryTimer,
+      dismissDeliveryNotice,
+      loadBootstrap,
+      loadThreads,
+      setDeliveryTimer,
+      showError,
+    ],
   );
 
   useEffect(() => {
@@ -303,6 +463,16 @@ export function App() {
     };
   }, [closeReadingDraft, composeSeed, loadBootstrap, loadThreads, selectedThread, settingsOpen]);
 
+  useEffect(
+    () => () => {
+      for (const timer of deliveryTimers.current.values()) window.clearTimeout(timer);
+      deliveryTimers.current.clear();
+      window.clearTimeout(errorTimer.current);
+      window.clearTimeout(actionTimer.current);
+    },
+    [],
+  );
+
   const openCompose = useCallback(async () => {
     const account = accountId
       ? bootstrap?.accounts.find((candidate) => candidate.id === accountId)
@@ -369,11 +539,11 @@ export function App() {
     const entry = latestUndo.current;
     if (!entry) return;
     latestUndo.current = undefined;
-    setActionNotice(undefined);
+    dismissActionNotice();
     try {
       const result = await window.fluxmail.mail.undo({ token: entry.token });
       if (!result.undone) return;
-      setActionNotice("Action undone");
+      showActionNotice("Action undone");
       await Promise.all([
         loadBootstrap(),
         loadThreads({
@@ -384,9 +554,16 @@ export function App() {
         }),
       ]);
     } catch (caught) {
-      setError(errorMessage(caught));
+      showError(errorMessage(caught));
     }
-  }, [loadBootstrap, loadThreads, submittedSearch]);
+  }, [
+    dismissActionNotice,
+    loadBootstrap,
+    loadThreads,
+    showActionNotice,
+    showError,
+    submittedSearch,
+  ]);
 
   const markThreadRead = useCallback(
     async (thread: ThreadSummary) => {
@@ -408,7 +585,7 @@ export function App() {
       }
       if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
         latestUndo.current = undefined;
-        setActionNotice(undefined);
+        dismissActionNotice();
       }
       try {
         await window.fluxmail.mail.modify({
@@ -432,10 +609,10 @@ export function App() {
             current ? adjustUnreadCount(current, thread.accountId, 1) : current,
           );
         }
-        setError(errorMessage(caught));
+        showError(errorMessage(caught));
       }
     },
-    [invalidateThreadLoads],
+    [dismissActionNotice, invalidateThreadLoads, showError],
   );
 
   const activateThread = useCallback(
@@ -489,7 +666,7 @@ export function App() {
       const request = canUndo ? ++modifySequence.current : modifySequence.current;
       if (canUndo || supersedesCurrentUndo) {
         latestUndo.current = undefined;
-        setActionNotice(undefined);
+        dismissActionNotice();
       }
       const preserveQuickReply = Boolean(
         quickReplyDirty.current && selectedThread && targetKeys.has(threadKey(selectedThread)),
@@ -513,16 +690,26 @@ export function App() {
         }
       }
       try {
-        const result = await window.fluxmail.mail.modify({
-          targets: targets.map((thread) => ({
-            accountId: thread.accountId,
-            threadId: thread.id,
-          })),
-          action,
-        });
+        const result: MailModifyResult =
+          !submittedSearch && view === "scheduled" && action.type === "discardDraft"
+            ? await Promise.all(
+                targets.map((thread) =>
+                  window.fluxmail.drafts.delete({
+                    accountId: thread.accountId,
+                    draftId: thread.draftId!,
+                  }),
+                ),
+              ).then(() => ({}))
+            : await window.fluxmail.mail.modify({
+                targets: targets.map((thread) => ({
+                  accountId: thread.accountId,
+                  threadId: thread.id,
+                })),
+                action,
+              });
         if (result.undoToken && request === modifySequence.current) {
           latestUndo.current = { token: result.undoToken, targetKeys };
-          setActionNotice(actionSuccessMessage(action, targets.length));
+          showActionNotice(actionSuccessMessage(action, targets.length));
         }
         if (!optimisticRemoval && mailboxContext === mailboxContextRef.current)
           setSelection(new Set());
@@ -564,11 +751,12 @@ export function App() {
             return current;
           });
         }
-        setError(errorMessage(caught));
+        showError(errorMessage(caught));
       }
     },
     [
       bootstrap?.preferences.openNextAfterArchive,
+      dismissActionNotice,
       invalidateThreadLoads,
       loadThreads,
       mailboxContext,
@@ -576,6 +764,8 @@ export function App() {
       prepareReadingNavigation,
       selectedThread,
       selection,
+      showActionNotice,
+      showError,
       submittedSearch,
       threads,
       view,
@@ -588,9 +778,17 @@ export function App() {
       if (!changesThread) return;
       const canNavigate = prepareReadingNavigation();
       if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
+      if (thread.scheduleId) {
+        try {
+          await window.fluxmail.drafts.cancelScheduled({ scheduleId: thread.scheduleId });
+        } catch (caught) {
+          showError(errorMessage(caught));
+          return;
+        }
+      }
       activateThread(thread);
     },
-    [activateThread, prepareReadingNavigation, selectedThread],
+    [activateThread, prepareReadingNavigation, selectedThread, showError],
   );
 
   const handleDraftMissing = useCallback((missingThread: ThreadSummary) => {
@@ -659,7 +857,7 @@ export function App() {
           : undefined;
       if (event.key.toLowerCase() === "c") void openCompose();
       const activeView = submittedSearch ? "search" : view;
-      if (event.key.toLowerCase() === "e")
+      if (event.key.toLowerCase() === "e" && activeView !== "scheduled")
         void modify(mailboxMoveAction(activeView), actionTargets);
       const deleteAction = mailboxDeleteAction(
         activeView,
@@ -752,6 +950,7 @@ export function App() {
         activeLabel={label}
         unreadCount={selectedCounts.unreadCount}
         draftCount={selectedCounts.draftCount}
+        scheduledCount={selectedCounts.scheduledCount}
         collapsed={sidebarCollapsed}
         onAccountChange={changeAccount}
         onViewChange={changeView}
@@ -839,8 +1038,10 @@ export function App() {
         onModify={(action) =>
           selectedThread ? modify(action, [selectedThread]) : Promise.resolve()
         }
-        onError={setError}
+        onError={showError}
         onQuickReplyDirtyChange={handleQuickReplyDirtyChange}
+        onDelivery={showDelivery}
+        undoSendDelaySeconds={bootstrap.preferences.undoSendDelaySeconds}
         quickReplyDiscardVersion={quickReplyDiscardVersion}
         onDraftMissing={handleDraftMissing}
         onDraftFinished={handleDraftFinished}
@@ -853,12 +1054,14 @@ export function App() {
           blockRemoteImages={bootstrap.preferences.blockRemoteImages}
           imageRelay={bootstrap.preferences.imageRelay}
           imageRelayAvailable={imageRelayAvailable}
+          undoSendDelaySeconds={bootstrap.preferences.undoSendDelaySeconds}
           onClose={() => setComposeSeed(null)}
-          onSent={() => {
+          onSent={(delivery) => {
             setComposeSeed(null);
+            showDelivery(delivery);
             void loadThreads();
           }}
-          onError={setError}
+          onError={showError}
         />
       ) : null}
       {settingsOpen ? (
@@ -866,27 +1069,45 @@ export function App() {
           state={bootstrap}
           onClose={() => setSettingsOpen(false)}
           onState={setBootstrap}
-          onError={setError}
+          onError={showError}
         />
       ) : null}
-      {error ? (
-        <div className="toast" role="alert">
-          <span>{error}</span>
-          <button onClick={() => setError(undefined)} aria-label="Dismiss message">
-            ×
-          </button>
-        </div>
-      ) : actionNotice ? (
-        <div className="toast" role="status">
-          <span>{actionNotice}</span>
-          {latestUndo.current ? (
-            <button className="toast-action" onClick={() => void undoLatest()}>
-              Undo
-            </button>
+      {deliveryNotices.length || error || actionNotice ? (
+        <div className="toast-stack">
+          {error ? (
+            <div className="toast" role="alert">
+              <span>{error}</span>
+              <button onClick={dismissError} aria-label="Dismiss message">
+                ×
+              </button>
+            </div>
           ) : null}
-          <button onClick={() => setActionNotice(undefined)} aria-label="Dismiss message">
-            ×
-          </button>
+          {deliveryNotices.map((notice) => (
+            <div className="toast" role="status" key={notice.id}>
+              <span>{notice.message}</span>
+              {notice.delivery && notice.delivery.kind !== "sent" ? (
+                <button className="toast-action" onClick={() => void cancelDelivery(notice)}>
+                  {notice.delivery.kind === "undo" ? "Undo" : "Cancel"}
+                </button>
+              ) : null}
+              <button onClick={() => dismissDeliveryNotice(notice.id)} aria-label="Dismiss message">
+                ×
+              </button>
+            </div>
+          ))}
+          {actionNotice ? (
+            <div className="toast" role="status">
+              <span>{actionNotice}</span>
+              {latestUndo.current ? (
+                <button className="toast-action" onClick={() => void undoLatest()}>
+                  Undo
+                </button>
+              ) : null}
+              <button onClick={dismissActionNotice} aria-label="Dismiss message">
+                ×
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -943,23 +1164,33 @@ function PaneResizer({
   );
 }
 
-export function mergeThreads(current: ThreadSummary[], incoming: ThreadSummary[]): ThreadSummary[] {
+type ThreadSortOrder = "ascending" | "descending";
+
+export function mergeThreads(
+  current: ThreadSummary[],
+  incoming: ThreadSummary[],
+  sortOrder: ThreadSortOrder = "descending",
+): ThreadSummary[] {
   const map = new Map(current.map((thread) => [threadKey(thread), thread]));
   for (const thread of incoming) map.set(threadKey(thread), thread);
-  return [...map.values()].sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+  const direction = sortOrder === "ascending" ? 1 : -1;
+  return [...map.values()].sort(
+    (left, right) => direction * (Date.parse(left.date) - Date.parse(right.date)),
+  );
 }
 
 export async function loadThreadPages(
   firstPage: ThreadPage,
   minimumItems: number,
   loadNext: (cursor: string) => Promise<ThreadPage>,
+  sortOrder: ThreadSortOrder = "descending",
 ): Promise<ThreadPage> {
   let items = firstPage.items;
   let nextCursor = firstPage.nextCursor;
   let totalCount = firstPage.totalCount;
   while (nextCursor && items.length < minimumItems) {
     const page = await loadNext(nextCursor);
-    items = mergeThreads(items, page.items);
+    items = mergeThreads(items, page.items, sortOrder);
     nextCursor = page.nextCursor;
     totalCount = page.totalCount;
   }
@@ -971,8 +1202,8 @@ export async function loadThreadPages(
   };
 }
 
-export function threadKey(thread: Pick<ThreadSummary, "accountId" | "id">): string {
-  return `${thread.accountId}:${thread.id}`;
+export function threadKey(thread: Pick<ThreadSummary, "accountId" | "id" | "scheduleId">): string {
+  return `${thread.accountId}:${thread.scheduleId ?? thread.id}`;
 }
 
 export function reconcileAccountSelection(
@@ -1010,6 +1241,7 @@ export function shouldOptimisticallyRemoveFromView(
   return (
     (view === "inbox" && action.type === "archive") ||
     (view === "drafts" && action.type === "discardDraft") ||
+    (view === "scheduled" && action.type === "discardDraft") ||
     (view === "trash" && ["untrash", "delete"].includes(action.type))
   );
 }
@@ -1072,6 +1304,7 @@ function viewTitle(view: MailboxView, label?: string): string {
     starred: "Starred",
     sent: "Sent",
     drafts: "Drafts",
+    scheduled: "Scheduled",
     all: "All mail",
     spam: "Spam",
     trash: "Trash",

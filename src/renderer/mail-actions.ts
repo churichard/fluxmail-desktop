@@ -10,7 +10,7 @@ export function mailboxDeleteAction(
   view: MailboxView,
   allowPermanentDelete = false,
 ): ModifyActionInput | undefined {
-  if (view === "drafts") return { type: "discardDraft" };
+  if (view === "drafts" || view === "scheduled") return { type: "discardDraft" };
   if (view === "trash") return allowPermanentDelete ? { type: "delete" } : undefined;
   return { type: "trash" };
 }
@@ -21,5 +21,6 @@ export function mailboxMoveLabel(view: MailboxView): string {
 
 export function mailboxDeleteLabel(view: MailboxView): string {
   if (view === "drafts") return "Discard draft";
+  if (view === "scheduled") return "Cancel and discard";
   return view === "trash" ? "Delete permanently" : "Trash";
 }

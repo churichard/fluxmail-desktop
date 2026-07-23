@@ -12,11 +12,12 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   writeFileSync(
     path.join(dataDirectory, "desktop-preferences.json"),
     JSON.stringify({
-      version: 4,
+      version: 5,
       appearance: "system",
       dockBadge: true,
       blockRemoteImages: true,
       imageRelay: false,
+      undoSendDelaySeconds: 10,
     }),
   );
   const electronApp = await electron.launch({
@@ -757,7 +758,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       }),
     ).toBeGreaterThan(0);
     await messageFrame.locator("#email-root").evaluate((root) => {
-      root.innerHTML = "<p>Welcome to Fluxmail</p>";
+      root.innerHTML = '<div style="height:1800px">Welcome to Fluxmail</div>';
     });
 
     const messageActions = page.locator(".reply-actions");
@@ -769,10 +770,28 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "aria-keyshortcuts",
       "F",
     );
+    await conversationScroll.evaluate((element) => {
+      element.scrollTop = 0;
+    });
     await page.getByRole("button", { name: "Reply", exact: true }).click();
+    await expect
+      .poll(() =>
+        conversationScroll.evaluate(
+          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+      )
+      .toBeLessThanOrEqual(1);
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
     ).toBeVisible();
+    const quickReplySend = page
+      .locator(".quick-reply")
+      .getByRole("button", { name: "Send", exact: true });
+    const quickReplySendOptions = page
+      .locator(".quick-reply")
+      .getByRole("button", { name: "More send options" });
+    await expect(quickReplySend).toBeDisabled();
+    await expect(quickReplySendOptions).toBeDisabled();
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Underline" }),
     ).toHaveAttribute("aria-keyshortcuts", "Meta+U");
@@ -798,6 +817,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       element.scrollTop = Math.max(0, element.scrollTop - 80);
     });
     expect(Math.abs((await placeholderOffset()) - placeholderOffsetBeforeScroll)).toBeLessThan(1);
+    await page.locator(".quick-reply").locator('[contenteditable="true"]').fill("Reply later.");
+    await expect(quickReplySend).toBeEnabled();
+    await expect(quickReplySendOptions).toBeEnabled();
+    await quickReplySendOptions.click();
+    await expect(
+      page.locator(".quick-reply").getByRole("dialog", { name: "Schedule send" }),
+    ).toBeVisible();
+    await quickReplySendOptions.click();
     await expect(
       page.locator(".quick-reply").getByRole("button", { name: "Show quoted message" }),
     ).toBeVisible();
@@ -860,6 +887,17 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     );
     await expect(resumedDraft.locator(".compose-attachments")).toContainText("launch-notes.pdf");
     await expect(resumedDraft.getByText("Saved", { exact: true })).toBeVisible();
+    await resumedDraft.getByRole("button", { name: "Edit recipients" }).click();
+    await resumedDraft
+      .locator(".recipient-row")
+      .filter({ hasText: /^To/ })
+      .locator("input")
+      .fill("r");
+    await inboxNav.click();
+    await expect(resumedDraft).toBeHidden();
+    await draftsNav.click();
+    await launchDraft.locator(".thread-open").click();
+    await expect(resumedDraft.locator(".recipient-summary")).toContainText("r");
     await inboxNav.click();
     await expect(resumedDraft).toBeHidden();
 
@@ -912,8 +950,66 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "border-top-width",
       "0px",
     );
+    await compose.getByRole("button", { name: "More send options" }).click();
+    const schedulePopover = compose.getByRole("dialog", { name: "Schedule send" });
+    await expect(schedulePopover).toBeVisible();
+    expect(
+      await schedulePopover.evaluate((popover) => {
+        const input = popover.querySelector("input")!.getBoundingClientRect();
+        const button = popover.querySelector("button")!.getBoundingClientRect();
+        return {
+          separateRows: button.top >= input.bottom,
+          contained: button.right <= popover.getBoundingClientRect().right,
+        };
+      }),
+    ).toEqual({ separateRows: true, contained: true });
+    await compose.getByRole("button", { name: "More send options" }).click();
     await page.keyboard.press("Meta+Enter");
     await expect(compose).toBeHidden();
+    const undoToast = page.getByRole("status").filter({ hasText: "Message sent." });
+    await expect(undoToast).toContainText("Message sent.");
+    await undoToast.getByRole("button", { name: "Undo" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Sending canceled. The message is in Drafts." }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Compose" }).click();
+    const scheduledCompose = page.getByRole("dialog", { name: "New message" });
+    await scheduledCompose
+      .locator(".recipient-row")
+      .filter({ hasText: /^To/ })
+      .locator("input")
+      .fill("jamie@example.com");
+    await scheduledCompose
+      .locator("label")
+      .filter({ hasText: /^Subject/ })
+      .locator("input")
+      .fill("Scheduled desktop test");
+    await scheduledCompose.locator('[contenteditable="true"]').fill("Send this tomorrow.");
+    await scheduledCompose.getByRole("button", { name: "More send options" }).click();
+    const scheduledPopover = scheduledCompose.getByRole("dialog", { name: "Schedule send" });
+    const tomorrow = await page.evaluate(() => {
+      const date = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+      const offset = date.getTimezoneOffset() * 60_000;
+      return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+    });
+    await scheduledPopover.locator('input[type="datetime-local"]').fill(tomorrow);
+    await scheduledPopover.getByRole("button", { name: "Schedule" }).click();
+    await expect(scheduledCompose).toBeHidden();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Message scheduled for" }),
+    ).toBeVisible();
+
+    await page.locator(".sidebar").getByRole("button", { name: "Scheduled" }).click();
+    await expect(page.getByRole("heading", { name: "Scheduled", exact: true })).toBeVisible();
+    const scheduledRow = page.locator(".thread-row", { hasText: "Scheduled desktop test" });
+    await expect(scheduledRow).toBeVisible();
+    await expect(scheduledRow.locator(".sender")).toHaveText("jamie@example.com");
+    await expect(scheduledRow.locator(".thread-draft-label")).toHaveText("Scheduled");
+    await expect
+      .poll(() => page.evaluate(async () => (await window.fluxmail.bootstrap()).scheduledCount))
+      .toBe(1);
+    await expect(page.locator(".sidebar .nav-item", { hasText: "Scheduled" })).toContainText("1");
 
     await electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]?.setSize(1040, 680),
@@ -943,9 +1039,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Accounts",
       "Appearance",
       "Behavior",
+      "Sending",
       "Privacy",
       "About",
     ]);
+    const undoSendMenu = settings.getByRole("button", { name: "Undo send" });
+    await expect(undoSendMenu).toContainText("10 seconds");
+    await undoSendMenu.click();
+    await settings.getByRole("menuitem", { name: "Off" }).click();
+    await expect(undoSendMenu).toContainText("Off");
     const settingsContent = settings.locator(".settings-content");
     const sharedDataFormat = settings.locator(".settings-about span", {
       hasText: "Shared data format",
@@ -1073,6 +1175,19 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       accountActionAlignment.identityRight,
     );
     expect(accountActionAlignment.rowRight - accountActionAlignment.actionsRight).toBeLessThan(14);
+    await settings.getByRole("button", { name: "Close settings" }).click();
+    await page.getByRole("button", { name: "Compose" }).click();
+    const immediateCompose = page.getByRole("dialog", { name: "New message" });
+    await immediateCompose
+      .locator(".recipient-row")
+      .filter({ hasText: /^To/ })
+      .locator("input")
+      .fill("friend@example.com");
+    await immediateCompose.locator('[contenteditable="true"]').fill("Send now.");
+    await immediateCompose.getByRole("button", { name: "Send", exact: true }).click();
+    const sentToast = page.getByRole("status").filter({ hasText: "Message sent." });
+    await expect(sentToast).toContainText("Message sent.");
+    await expect(sentToast.getByRole("button", { name: "Undo" })).toHaveCount(0);
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

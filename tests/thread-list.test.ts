@@ -2,7 +2,11 @@
 import { createElement } from "react";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getSelectionReadAction, ThreadRow } from "../src/renderer/components/ThreadListPane";
+import {
+  getSelectionReadAction,
+  groupScheduledThreadsByDate,
+  ThreadRow,
+} from "../src/renderer/components/ThreadListPane";
 import { calculateScrollThumb } from "../src/renderer/components/OverlayScrollbar";
 import type { ThreadSummary } from "../src/shared/contracts";
 
@@ -58,6 +62,43 @@ describe("thread row activation", () => {
     );
 
     expect(getByText("Draft").classList.contains("thread-draft-label")).toBe(true);
+  });
+
+  it("labels drafts in the scheduled mailbox", () => {
+    const { getByText, queryByRole } = render(
+      createElement(ThreadRow, {
+        thread: { ...testThread, draft: true },
+        active: false,
+        checked: false,
+        onOpen: vi.fn(),
+        onCheck: vi.fn(),
+        moveLabel: "Archive",
+        restore: false,
+        draftLabel: "Scheduled",
+        onToggleRead: vi.fn(),
+        onStar: vi.fn(),
+      }),
+    );
+
+    expect(getByText("Scheduled").classList.contains("thread-draft-label")).toBe(true);
+    expect(queryByRole("button", { name: "Archive conversation" })).toBeNull();
+  });
+});
+
+describe("scheduled date groups", () => {
+  it("separates today, tomorrow, and later dates", () => {
+    const now = new Date("2026-07-23T12:00:00");
+    const groups = groupScheduledThreadsByDate(
+      [
+        { ...testThread, id: "today", date: "2026-07-23T14:00:00" },
+        { ...testThread, id: "tomorrow", date: "2026-07-24T09:00:00" },
+        { ...testThread, id: "later", date: "2026-07-26T09:00:00" },
+      ],
+      now,
+    );
+
+    expect(groups.slice(0, 2).map((group) => group.label)).toEqual(["Today", "Tomorrow"]);
+    expect(groups[2]?.threads[0]?.id).toBe("later");
   });
 });
 

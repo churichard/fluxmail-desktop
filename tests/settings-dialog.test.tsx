@@ -101,6 +101,22 @@ describe("SettingsDialog private image relay", () => {
   });
 });
 
+describe("SettingsDialog undo send", () => {
+  it("can turn undo send off", async () => {
+    const setUndoSendDelaySeconds = vi.fn(async () => 0 as const);
+    installApi(undefined, undefined, setUndoSendDelaySeconds);
+    render(<SettingsHarness />);
+    const trigger = screen.getByRole("button", { name: "Undo send" });
+
+    expect(trigger).toHaveTextContent("10 seconds");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Off" }));
+
+    await waitFor(() => expect(setUndoSendDelaySeconds).toHaveBeenCalledWith(0));
+    expect(trigger).toHaveTextContent("Off");
+  });
+});
+
 describe("SettingsDialog archive behavior", () => {
   it("updates the enabled-by-default archive setting", async () => {
     const setOpenNextAfterArchive = vi.fn(async (enabled: boolean) => enabled);
@@ -154,14 +170,15 @@ function installApi(
   activate: (key: string) => Promise<{
     outcome: "activated" | "saved_for_retry";
     license: BootstrapState["license"];
-  }>,
+  }> = vi.fn(),
   setOpenNextAfterArchive: (enabled: boolean) => Promise<boolean> = async (enabled) => enabled,
+  setUndoSendDelaySeconds = vi.fn(),
 ): void {
   Object.defineProperty(window, "fluxmail", {
     configurable: true,
     value: {
       license: { activate },
-      preferences: { setOpenNextAfterArchive },
+      preferences: { setOpenNextAfterArchive, setUndoSendDelaySeconds },
       analytics: { trackFeature: vi.fn(async () => undefined) },
       system: { openExternal: vi.fn(async () => undefined) },
     } as unknown as FluxmailDesktopApi,
@@ -180,6 +197,7 @@ function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
     folders: [],
     unreadCount: 0,
     draftCount: 0,
+    scheduledCount: 0,
     countsByAccount: {},
     sync: { status: "idle" },
     telemetry: { enabled: false, lockedByEnvironment: false },
@@ -189,6 +207,7 @@ function bootstrapState(canUsePrivateImageRelay: boolean): BootstrapState {
       openNextAfterArchive: true,
       blockRemoteImages: true,
       imageRelay: true,
+      undoSendDelaySeconds: 10,
     },
     license: {
       plan: "personal",

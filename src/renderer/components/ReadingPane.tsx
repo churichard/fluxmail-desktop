@@ -27,18 +27,21 @@ import {
   X,
   Undo2,
 } from "lucide-react";
-import type {
+import {
+  hasUndoSendDelay,
+  type ComposeAttachment,
   MailMessage,
   MailThread,
   MailboxView,
   ModifyActionInput,
-  ComposeAttachment,
   ThreadSummary,
+  UndoSendDelaySeconds,
 } from "../../shared/contracts";
 import {
   ComposeDialog,
   formatAddresses,
   parseAddressField,
+  type ComposeDelivery,
   type ComposeDialogHandle,
   type ComposeSeed,
 } from "./ComposeDialog";
@@ -56,6 +59,7 @@ import {
 } from "../mail-actions";
 import type { TrackingPixelDetail } from "../email/tracking-pixels";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { SendControls } from "./SendControls";
 
 interface Props {
   view: MailboxView;
@@ -68,6 +72,8 @@ interface Props {
   onModify(action: ModifyActionInput): Promise<void>;
   onError(message: string): void;
   onQuickReplyDirtyChange(dirty: boolean): void;
+  onDelivery?(delivery: ComposeDelivery): void;
+  undoSendDelaySeconds?: UndoSendDelaySeconds;
   quickReplyDiscardVersion?: number;
   onDraftMissing?(thread: ThreadSummary): void;
   onDraftFinished?(): void;
@@ -98,6 +104,8 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onModify,
     onError,
     onQuickReplyDirtyChange,
+    onDelivery,
+    undoSendDelaySeconds = 10,
     quickReplyDiscardVersion,
     onDraftMissing,
     onDraftFinished,
@@ -140,6 +148,11 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     findInputRef.current?.focus();
     findInputRef.current?.select();
   }, [findOpen]);
+
+  useLayoutEffect(() => {
+    if (!composer || !scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [composer, scroller]);
 
   const closeFind = useCallback(() => {
     setFindOpen(false);
@@ -229,7 +242,9 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   );
 
   useEffect(() => {
-    const nextThreadKey = thread ? `${thread.accountId}:${thread.id}` : undefined;
+    const nextThreadKey = thread
+      ? `${thread.accountId}:${thread.id}:${thread.scheduleId ?? thread.draftId ?? ""}`
+      : undefined;
     if (nextThreadKey && nextThreadKey === loadedThreadKey.current && draftSeedRef.current) return;
     loadedThreadKey.current = nextThreadKey;
     closeFind();
@@ -247,19 +262,30 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         setDetail(result);
         const draft = [...result.messages]
           .reverse()
-          .find((message) => message.flags.draft && message.draftId);
+          .find(
+            (message) =>
+              message.flags.draft &&
+              message.draftId &&
+              (!thread.draftId || message.draftId === thread.draftId),
+          );
         if (!draft?.draftId) {
           if (thread.draft) onDraftMissing?.(thread);
           return;
         }
         const replyTarget = [...result.messages].reverse().find((message) => !message.flags.draft);
-        const initialAttachments = draft.attachments?.length
-          ? await window.fluxmail.attachments.prepare({
-              accountId: thread.accountId,
-              messageId: draft.id,
-              attachments: draft.attachments,
-            })
-          : [];
+        const [initialAttachments, recipientFields] = await Promise.all([
+          draft.attachments?.length
+            ? window.fluxmail.attachments.prepare({
+                accountId: thread.accountId,
+                messageId: draft.id,
+                attachments: draft.attachments,
+              })
+            : Promise.resolve([]),
+          window.fluxmail.drafts.recipientFields({
+            accountId: thread.accountId,
+            draftId: draft.draftId,
+          }),
+        ]);
         if (canceled) {
           if (initialAttachments.length)
             void window.fluxmail.attachments
@@ -270,9 +296,9 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         setDraftSeed({
           accountId: thread.accountId,
           draftId: draft.draftId,
-          to: formatAddresses(draft.to),
-          cc: formatAddresses(draft.cc),
-          bcc: formatAddresses(draft.bcc),
+          to: recipientFields?.to ?? formatAddresses(draft.to),
+          cc: recipientFields?.cc ?? formatAddresses(draft.cc),
+          bcc: recipientFields?.bcc ?? formatAddresses(draft.bcc),
           subject: draft.subject,
           initialHtml: draft.body?.html,
           initialText: draft.body?.text,
@@ -297,8 +323,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onError,
     thread?.accountId,
     thread?.date,
+    thread?.draftId,
     thread?.id,
     thread?.messageCount,
+    thread?.scheduleId,
   ]);
 
   if (!thread)
@@ -337,13 +365,15 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     <section className="reading-pane">
       <header className="reading-toolbar">
         <div className="toolbar-group">
-          <IconButton
-            label={mailboxMoveLabel(view)}
-            shortcut={KEYBOARD_SHORTCUTS.archive}
-            onClick={() => void onModify(mailboxMoveAction(view))}
-          >
-            {view === "trash" ? <Undo2 size={17} /> : <Archive size={17} />}
-          </IconButton>
+          {view !== "scheduled" ? (
+            <IconButton
+              label={mailboxMoveLabel(view)}
+              shortcut={KEYBOARD_SHORTCUTS.archive}
+              onClick={() => void onModify(mailboxMoveAction(view))}
+            >
+              {view === "trash" ? <Undo2 size={17} /> : <Archive size={17} />}
+            </IconButton>
+          ) : null}
           {deleteAction ? (
             <IconButton
               label={mailboxDeleteLabel(view)}
@@ -372,19 +402,21 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               <Tag size={16} />
             </MenuButton>
           ) : null}
-          <MenuButton
-            label="More actions"
-            options={[
-              {
-                id: "spam",
-                label: "Mark as spam",
-                icon: <ShieldAlert size={15} />,
-                onSelect: () => void onModify({ type: "move", folder: "spam" }),
-              },
-            ]}
-          >
-            <MoreHorizontal size={17} />
-          </MenuButton>
+          {view !== "scheduled" ? (
+            <MenuButton
+              label="More actions"
+              options={[
+                {
+                  id: "spam",
+                  label: "Mark as spam",
+                  icon: <ShieldAlert size={15} />,
+                  onSelect: () => void onModify({ type: "move", folder: "spam" }),
+                },
+              ]}
+            >
+              <MoreHorizontal size={17} />
+            </MenuButton>
+          ) : null}
         </div>
         <IconButton
           label={thread.starred ? "Unstar" : "Star"}
@@ -502,6 +534,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               blockRemoteImages={blockRemoteImages}
               imageRelay={imageRelay}
               imageRelayAvailable={imageRelayAvailable}
+              undoSendDelaySeconds={undoSendDelaySeconds}
               onClose={() => {
                 setDraftSeed(undefined);
                 setDetail((current) =>
@@ -514,9 +547,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
                 );
                 onDraftFinished?.();
               }}
-              onSent={() => {
+              onSent={(delivery) => {
                 setDraftSeed(undefined);
                 onDraftFinished?.();
+                onDelivery?.(delivery);
               }}
               onError={onError}
             />
@@ -558,7 +592,11 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               imageRelay={imageRelay}
               imageRelayAvailable={imageRelayAvailable}
               onCancel={closeComposer}
-              onSent={closeComposer}
+              onSent={(delivery) => {
+                closeComposer();
+                onDelivery?.(delivery);
+              }}
+              undoSendDelaySeconds={undoSendDelaySeconds}
               onError={onError}
               onDirtyChange={handleComposerDirtyChange}
               blockRemoteImages={blockRemoteImages}
@@ -694,6 +732,7 @@ function InlineComposer({
   onError,
   onDirtyChange,
   blockRemoteImages,
+  undoSendDelaySeconds,
 }: {
   accountId: string;
   threadId: string;
@@ -703,10 +742,11 @@ function InlineComposer({
   imageRelay: boolean;
   imageRelayAvailable: boolean;
   onCancel(): void;
-  onSent(): void;
+  onSent(delivery: ComposeDelivery): void;
   onError(message: string): void;
   onDirtyChange(dirty: boolean): void;
   blockRemoteImages: boolean;
+  undoSendDelaySeconds: UndoSendDelaySeconds;
 }) {
   const forwarding = mode === "forward";
   const initialSubject = forwarding
@@ -725,6 +765,7 @@ function InlineComposer({
   const [html, setHtml] = useState("<p></p>");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [deliveryKind, setDeliveryKind] = useState<ComposeDelivery["kind"]>("undo");
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [attachments, setAttachments] = useState(initialAttachments);
   const [attachmentsChanged, setAttachmentsChanged] = useState(false);
@@ -771,7 +812,7 @@ function InlineComposer({
     };
   }, [onDirtyChange, releaseAttachments]);
 
-  const send = async () => {
+  const send = async (timing?: { sendAt: string }) => {
     const toField = parseAddressField(to);
     const ccField = parseAddressField(cc);
     const bccField = parseAddressField(bcc);
@@ -787,10 +828,12 @@ function InlineComposer({
         !bccField.addresses.length)
     )
       return;
+    const kind = timing ? "scheduled" : hasUndoSendDelay(undoSendDelaySeconds) ? "undo" : "sent";
+    setDeliveryKind(kind);
     setSending(true);
     try {
       if (forwarding) {
-        await window.fluxmail.mail.forward({
+        const delivery = await window.fluxmail.mail.forward({
           target: { accountId, threadId },
           messageId: message.id,
           to: toField.addresses,
@@ -801,9 +844,18 @@ function InlineComposer({
           html,
           attachments,
           includeAttachments: false,
+          ...(timing
+            ? timing
+            : hasUndoSendDelay(undoSendDelaySeconds)
+              ? {
+                  delaySeconds: undoSendDelaySeconds,
+                }
+              : {}),
         });
+        releaseAttachments();
+        onSent(delivery ? { ...delivery, kind: timing ? "scheduled" : "undo" } : { kind: "sent" });
       } else {
-        await window.fluxmail.drafts.send({
+        const input = {
           accountId,
           to: [],
           subject,
@@ -812,16 +864,33 @@ function InlineComposer({
           replyToMessageId: message.id,
           replyAll: mode === "replyAll",
           attachments,
-        });
+        };
+        if (timing) {
+          const delivery = await window.fluxmail.drafts.schedule({ ...input, ...timing });
+          releaseAttachments();
+          onSent({ ...delivery, kind: "scheduled" });
+        } else if (hasUndoSendDelay(undoSendDelaySeconds)) {
+          const delivery = await window.fluxmail.drafts.schedule({
+            ...input,
+            delaySeconds: undoSendDelaySeconds,
+          });
+          releaseAttachments();
+          onSent({ ...delivery, kind: "undo" });
+        } else {
+          await window.fluxmail.drafts.send(input);
+          releaseAttachments();
+          onSent({ kind: "sent" });
+        }
       }
-      releaseAttachments();
-      onSent();
     } catch (error) {
       onError(error instanceof Error ? error.message : "Fluxmail could not send this message.");
     } finally {
       setSending(false);
     }
   };
+
+  const sendDisabled =
+    (!forwarding && !text.trim()) || (forwarding && !to.trim() && !cc.trim() && !bcc.trim());
   return (
     <div
       className="quick-reply"
@@ -983,17 +1052,14 @@ function InlineComposer({
           <button className="text-button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            className="primary-button"
-            disabled={
-              sending ||
-              (!forwarding && !text.trim()) ||
-              (forwarding && !to.trim() && !cc.trim() && !bcc.trim())
-            }
-            onClick={() => void send()}
-          >
-            {sending ? "Sending..." : "Send"}
-          </button>
+          <SendControls
+            sending={sending}
+            deliveryKind={deliveryKind}
+            disabled={sendDisabled}
+            onSend={() => void send()}
+            onSchedule={(sendAt) => void send({ sendAt })}
+            onError={onError}
+          />
         </div>
       </div>
     </div>

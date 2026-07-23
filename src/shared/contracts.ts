@@ -5,6 +5,7 @@ export const mailboxViewSchema = z.enum([
   "starred",
   "sent",
   "drafts",
+  "scheduled",
   "all",
   "spam",
   "trash",
@@ -77,6 +78,8 @@ export type MailMessage = z.infer<typeof messageSchema>;
 
 export const threadSummarySchema = z.object({
   id: z.string(),
+  scheduleId: z.string().optional(),
+  draftId: z.string().optional(),
   accountId: z.string(),
   accountEmail: z.string(),
   subject: z.string(),
@@ -178,6 +181,13 @@ export const composeAttachmentSchema = z.object({
 });
 export type ComposeAttachment = z.infer<typeof composeAttachmentSchema>;
 
+export const draftRecipientFieldsSchema = z.object({
+  to: z.string().max(10_000),
+  cc: z.string().max(10_000),
+  bcc: z.string().max(10_000),
+});
+export type DraftRecipientFields = z.infer<typeof draftRecipientFieldsSchema>;
+
 export const composeInputSchema = z.object({
   accountId: z.string(),
   draftId: z.string().optional(),
@@ -190,11 +200,18 @@ export const composeInputSchema = z.object({
   replyToMessageId: z.string().optional(),
   replyAll: z.boolean().optional(),
   attachments: z.array(composeAttachmentSchema).max(20).optional(),
+  recipientFields: draftRecipientFieldsSchema.optional(),
 });
 export const sendInputSchema = composeInputSchema.refine((value) => Boolean(value.text?.trim()), {
   message: "Write a message before sending.",
 });
 export type ComposeInput = z.infer<typeof composeInputSchema>;
+const scheduledSendDelaySecondsSchema = z.union([
+  z.literal(5),
+  z.literal(10),
+  z.literal(20),
+  z.literal(30),
+]);
 
 export const mailForwardInputSchema = z
   .object({
@@ -209,10 +226,15 @@ export const mailForwardInputSchema = z
     html: z.string().optional(),
     attachments: z.array(composeAttachmentSchema).max(20).optional(),
     includeAttachments: z.boolean().optional(),
+    sendAt: z.string().datetime().optional(),
+    delaySeconds: scheduledSendDelaySecondsSchema.optional(),
   })
   .refine((value) => Boolean(value.to.length || value.cc?.length || value.bcc?.length), {
     message: "Add at least one recipient before forwarding.",
     path: ["to"],
+  })
+  .refine((value) => !(value.sendAt && value.delaySeconds), {
+    message: "Choose a send time or an undo delay.",
   });
 
 export const draftResultSchema = z.object({
@@ -223,10 +245,32 @@ export const sendResultSchema = z.object({
   id: z.string(),
   threadId: z.string(),
 });
+export const scheduledSendResultSchema = z.object({
+  scheduleId: z.string(),
+  draftId: z.string(),
+  sendAt: z.string().datetime(),
+});
+export type ScheduledSendResult = z.infer<typeof scheduledSendResultSchema>;
+export const scheduledSendInputSchema = z.union([
+  composeInputSchema.extend({
+    sendAt: z.string().datetime(),
+    delaySeconds: z.never().optional(),
+  }),
+  composeInputSchema.extend({
+    sendAt: z.never().optional(),
+    delaySeconds: scheduledSendDelaySecondsSchema,
+  }),
+]);
+export type ScheduledSendInput = z.infer<typeof scheduledSendInputSchema>;
+export const scheduledSendCancelInputSchema = z.object({ scheduleId: z.string() });
+export const scheduledSendCancelResultSchema = z.object({
+  draftId: z.string(),
+});
 export const draftDeleteInputSchema = z.object({
   accountId: z.string(),
   draftId: z.string(),
 });
+export const draftRecipientFieldsInputSchema = draftDeleteInputSchema;
 export const attachmentSaveInputSchema = z.object({
   accountId: z.string(),
   messageId: z.string(),
@@ -260,6 +304,19 @@ export type TelemetryStatus = z.infer<typeof telemetryStatusSchema>;
 
 export const appearancePreferenceSchema = z.enum(["system", "light", "dark"]);
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
+export const undoSendDelaySecondsSchema = z.union([
+  z.literal(0),
+  z.literal(5),
+  z.literal(10),
+  z.literal(20),
+  z.literal(30),
+]);
+export type UndoSendDelaySeconds = z.infer<typeof undoSendDelaySecondsSchema>;
+export function hasUndoSendDelay(
+  delay: UndoSendDelaySeconds,
+): delay is Exclude<UndoSendDelaySeconds, 0> {
+  return delay !== 0;
+}
 
 export const licenseKeySchema = z.string().trim().min(1).max(200);
 
@@ -303,10 +360,12 @@ export const bootstrapSchema = z.object({
   folders: z.array(folderSchema),
   unreadCount: z.number().int().nonnegative(),
   draftCount: z.number().int().nonnegative(),
+  scheduledCount: z.number().int().nonnegative(),
   countsByAccount: z.record(
     z.object({
       unreadCount: z.number().int().nonnegative(),
       draftCount: z.number().int().nonnegative(),
+      scheduledCount: z.number().int().nonnegative(),
     }),
   ),
   sync: syncStateSchema,
@@ -317,6 +376,7 @@ export const bootstrapSchema = z.object({
     openNextAfterArchive: z.boolean(),
     blockRemoteImages: z.boolean(),
     imageRelay: z.boolean(),
+    undoSendDelaySeconds: undoSendDelaySecondsSchema,
   }),
   license: licenseStatusSchema,
 });
@@ -413,12 +473,20 @@ export interface FluxmailDesktopApi {
       html?: string;
       attachments?: ComposeAttachment[];
       includeAttachments?: boolean;
-    }): Promise<void>;
+      sendAt?: string;
+      delaySeconds?: Exclude<UndoSendDelaySeconds, 0>;
+    }): Promise<ScheduledSendResult | undefined>;
   };
   drafts: {
     save(input: ComposeInput): Promise<{ draftId: string; messageId: string }>;
     delete(input: { accountId: string; draftId: string }): Promise<void>;
     send(input: ComposeInput): Promise<{ id: string; threadId: string }>;
+    schedule(input: ScheduledSendInput): Promise<ScheduledSendResult>;
+    cancelScheduled(input: { scheduleId: string }): Promise<{ draftId: string }>;
+    recipientFields(input: {
+      accountId: string;
+      draftId: string;
+    }): Promise<DraftRecipientFields | undefined>;
   };
   attachments: {
     pick(): Promise<ComposeAttachment[]>;
@@ -447,6 +515,7 @@ export interface FluxmailDesktopApi {
     setOpenNextAfterArchive(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
     setImageRelay(enabled: boolean): Promise<boolean>;
+    setUndoSendDelaySeconds(delay: UndoSendDelaySeconds): Promise<UndoSendDelaySeconds>;
   };
   images: {
     proxy(urls: z.infer<typeof imageRelayInputSchema>): Promise<Record<string, string>>;
@@ -479,6 +548,9 @@ export const IPC = {
   draftSave: "fluxmail:draft:save",
   draftDelete: "fluxmail:draft:delete",
   draftSend: "fluxmail:draft:send",
+  draftSchedule: "fluxmail:draft:schedule",
+  draftCancelScheduled: "fluxmail:draft:cancel-scheduled",
+  draftRecipientFields: "fluxmail:draft:recipient-fields",
   attachmentPick: "fluxmail:attachment:pick",
   attachmentPrepare: "fluxmail:attachment:prepare",
   attachmentRelease: "fluxmail:attachment:release",
@@ -493,6 +565,7 @@ export const IPC = {
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   licenseActivate: "fluxmail:license:activate",
   preferencesImageRelaySet: "fluxmail:preferences:image-relay:set",
+  preferencesUndoSendDelaySet: "fluxmail:preferences:undo-send-delay:set",
   imagesProxy: "fluxmail:images:proxy",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",

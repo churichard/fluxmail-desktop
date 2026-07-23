@@ -166,6 +166,7 @@ export function MenuButton({
   menuClassName = "",
   align = "left",
   tooltip: tooltipEnabled = true,
+  disabled = false,
   shortcut,
 }: {
   label: string;
@@ -176,6 +177,7 @@ export function MenuButton({
   menuClassName?: string;
   align?: "left" | "right";
   tooltip?: boolean;
+  disabled?: boolean;
   shortcut?: KeyboardShortcutHint;
 }) {
   const [open, setOpen] = useState(false);
@@ -232,6 +234,7 @@ export function MenuButton({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-describedby={tooltip.visible ? tooltipId : undefined}
+        disabled={disabled}
         onClick={() => {
           tooltip.hide();
           setOpen((value) => !value);

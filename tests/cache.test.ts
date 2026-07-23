@@ -84,6 +84,275 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("lists scheduled drafts by send time and shows their recipients", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({
+        id: "later-message",
+        threadId: "later-thread",
+        draftId: "later-draft",
+        to: [{ name: "Jamie", email: "jamie@example.com" }],
+        subject: "Later",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+      message({
+        id: "sooner-message",
+        threadId: "sooner-thread",
+        draftId: "sooner-draft",
+        to: [{ email: "sam@example.com" }],
+        subject: "Sooner",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    expect(
+      cache.listScheduledThreads([
+        {
+          scheduleId: "later-schedule",
+          accountId: primary.id,
+          draftId: "later-draft",
+          sendAt: "2026-07-25T12:00:00Z",
+        },
+        {
+          scheduleId: "sooner-schedule",
+          accountId: primary.id,
+          draftId: "sooner-draft",
+          sendAt: "2026-07-24T12:00:00Z",
+        },
+      ]),
+    ).toMatchObject([
+      {
+        id: "sooner-thread",
+        senderName: "sam@example.com",
+        date: "2026-07-24T12:00:00Z",
+      },
+      {
+        id: "later-thread",
+        senderName: "Jamie",
+        date: "2026-07-25T12:00:00Z",
+      },
+    ]);
+    cache.close();
+  });
+
+  it("shows Cc and Bcc recipients for scheduled drafts without To recipients", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({
+        id: "recipient-message",
+        threadId: "recipient-thread",
+        draftId: "recipient-draft",
+        to: [],
+        cc: [{ email: "cc@example.com" }],
+        bcc: [{ name: "Private", email: "bcc@example.com" }],
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    expect(
+      cache.listScheduledThreads([
+        {
+          scheduleId: "recipient-schedule",
+          accountId: primary.id,
+          draftId: "recipient-draft",
+          sendAt: "2026-07-24T12:00:00Z",
+        },
+      ]),
+    ).toMatchObject([
+      {
+        senderName: "cc@example.com, Private",
+        senderEmail: "cc@example.com",
+      },
+    ]);
+    cache.close();
+  });
+
+  it("excludes active schedules from the Drafts mailbox and count", () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "scheduled",
+      accountId: primary.id,
+      draftId: "scheduled-draft",
+      sendAt: "2026-07-24T12:00:00Z",
+    };
+    cache.putMessages(primary, [
+      message({
+        id: "scheduled-message",
+        threadId: "scheduled-thread",
+        draftId: scheduled.draftId,
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+      message({
+        id: "ordinary-message",
+        threadId: "ordinary-thread",
+        draftId: "ordinary-draft",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    expect(
+      cache
+        .listThreads({
+          view: "drafts",
+          scheduledDrafts: [scheduled],
+          offset: 0,
+          limit: 20,
+        })
+        .map((thread) => thread.id),
+    ).toEqual(["ordinary-thread"]);
+    expect(cache.draftCount(undefined, [scheduled])).toBe(1);
+    cache.close();
+  });
+
+  it("opens the ordinary draft when a newer scheduled draft shares its conversation", () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "scheduled",
+      accountId: primary.id,
+      draftId: "scheduled-draft",
+      sendAt: "2026-07-24T12:00:00Z",
+    };
+    cache.putMessages(primary, [
+      message({
+        id: "ordinary-message",
+        threadId: "shared-thread",
+        draftId: "ordinary-draft",
+        date: "2026-07-23T10:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+      message({
+        id: "scheduled-message",
+        threadId: "shared-thread",
+        draftId: scheduled.draftId,
+        date: "2026-07-23T11:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    const [draft] = cache.listThreads({
+      view: "drafts",
+      scheduledDrafts: [scheduled],
+      offset: 0,
+      limit: 20,
+    });
+
+    expect(draft).toMatchObject({
+      id: "shared-thread",
+      draftId: "ordinary-draft",
+    });
+    expect(draft).not.toHaveProperty("scheduleId");
+    cache.close();
+  });
+
+  it("identifies the scheduled draft a generic mailbox would open", () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "scheduled",
+      accountId: primary.id,
+      draftId: "scheduled-draft",
+      sendAt: "2026-07-24T12:00:00Z",
+    };
+    cache.putMessages(primary, [
+      message({
+        id: "original-message",
+        threadId: "shared-thread",
+        date: "2026-07-23T10:00:00Z",
+      }),
+      message({
+        id: "scheduled-message",
+        threadId: "shared-thread",
+        draftId: scheduled.draftId,
+        date: "2026-07-23T11:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    expect(
+      cache.listThreads({
+        view: "all",
+        scheduledDrafts: [scheduled],
+        offset: 0,
+        limit: 20,
+      }),
+    ).toMatchObject([
+      {
+        id: "shared-thread",
+        scheduleId: scheduled.scheduleId,
+        draftId: scheduled.draftId,
+      },
+    ]);
+    cache.close();
+  });
+
+  it("keeps scheduled drafts in the same conversation distinct", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [
+      message({
+        id: "first-message",
+        threadId: "shared-thread",
+        draftId: "first-draft",
+        to: [{ email: "first@example.com" }],
+        subject: "First scheduled reply",
+        snippet: "First body",
+        date: "2026-07-23T10:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+      message({
+        id: "second-message",
+        threadId: "shared-thread",
+        draftId: "second-draft",
+        to: [{ email: "second@example.com" }],
+        subject: "Second scheduled reply",
+        snippet: "Second body",
+        date: "2026-07-23T11:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    expect(
+      cache.listScheduledThreads([
+        {
+          scheduleId: "first-schedule",
+          accountId: primary.id,
+          draftId: "first-draft",
+          sendAt: "2026-07-24T12:00:00Z",
+        },
+        {
+          scheduleId: "second-schedule",
+          accountId: primary.id,
+          draftId: "second-draft",
+          sendAt: "2026-07-25T12:00:00Z",
+        },
+      ]),
+    ).toMatchObject([
+      {
+        id: "shared-thread",
+        scheduleId: "first-schedule",
+        draftId: "first-draft",
+        subject: "First scheduled reply",
+        senderName: "first@example.com",
+      },
+      {
+        id: "shared-thread",
+        scheduleId: "second-schedule",
+        draftId: "second-draft",
+        subject: "Second scheduled reply",
+        senderName: "second@example.com",
+      },
+    ]);
+    cache.close();
+  });
+
   it("enumerates and removes all cached state for a disconnected account", () => {
     const cache = createCache();
     cache.putMessages(primary, [message({ id: "primary", threadId: "primary-thread" })]);
@@ -111,6 +380,70 @@ describe("MailCache", () => {
     expect(cache.draftCount()).toBe(1);
     expect(cache.messageIds(primary.id, "old-thread")).toEqual([]);
     expect(cache.messageIds(primary.id, "new-thread")).toEqual(["new-message"]);
+    cache.close();
+  });
+
+  it("preserves raw draft recipient fields until the draft is deleted", () => {
+    const cache = createCache();
+    const draft = message({
+      id: "draft-message",
+      threadId: "draft-thread",
+      draftId: "draft-1",
+      to: [{ email: "valid@example.com" }],
+      folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    cache.putMessages(primary, [draft]);
+    cache.putDraftRecipientFields(
+      primary.id,
+      "draft-1",
+      {
+        to: "valid@example.com, unfinished@",
+        cc: "",
+        bcc: "",
+      },
+      draft,
+    );
+
+    expect(cache.getDraftRecipientFields(primary.id, "draft-1")).toEqual({
+      to: "valid@example.com, unfinished@",
+      cc: "",
+      bcc: "",
+    });
+    expect(cache.hasDraft(primary.id, "draft-1")).toBe(true);
+
+    cache.deleteDraft(primary, "draft-1");
+    expect(cache.getDraftRecipientFields(primary.id, "draft-1")).toBeUndefined();
+    expect(cache.hasDraft(primary.id, "draft-1")).toBe(false);
+    cache.close();
+  });
+
+  it("drops raw recipient text after the provider recipients change", () => {
+    const cache = createCache();
+    const localDraft = message({
+      id: "draft-message",
+      threadId: "draft-thread",
+      draftId: "draft-1",
+      to: [{ email: "original@example.com" }],
+      folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    cache.putMessages(primary, [localDraft]);
+    cache.putDraftRecipientFields(
+      primary.id,
+      "draft-1",
+      { to: "original@example.com", cc: "", bcc: "" },
+      localDraft,
+    );
+
+    cache.putMessages(primary, [
+      {
+        ...localDraft,
+        to: [{ email: "updated@example.com" }],
+      },
+    ]);
+
+    expect(cache.getDraftRecipientFields(primary.id, "draft-1")).toBeUndefined();
     cache.close();
   });
 

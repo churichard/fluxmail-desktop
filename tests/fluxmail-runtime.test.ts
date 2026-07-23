@@ -31,6 +31,7 @@ const account = {
 const directories: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
@@ -1359,6 +1360,44 @@ describe("FluxmailRuntime conversation mutations", () => {
     expect(cache.accountIds()).toEqual([]);
   });
 
+  it("clears scheduled reconciliation timers when their account is removed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const cache = createCache();
+    const listScheduled = vi.fn(() => {
+      throw new Error("The removed account should not be queried.");
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        listScheduled,
+        createDraft: vi.fn(async () => draftMessage()),
+        scheduleSend: vi.fn(async (_accountId, input) => ({
+          scheduleId: "schedule-1",
+          accountId: account.id,
+          draftId: input.draftId,
+          sendAt: "2026-07-21T12:00:05.000Z",
+          status: "pending" as const,
+          attempts: 0,
+        })),
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Scheduled subject",
+      text: "Scheduled body",
+      sendAt: "2026-07-21T12:00:05.000Z",
+    });
+    runtime.removeAccount(account.id);
+
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(listScheduled).not.toHaveBeenCalled();
+  });
+
   it("keeps the latest requested undo when account mutations finish out of order", async () => {
     const secondAccount: AccountInfo = {
       id: "account-2",
@@ -1890,6 +1929,607 @@ describe("FluxmailRuntime draft mutations", () => {
     expect(send).toHaveBeenCalledWith(account.id, { draftId: "draft-1" });
   });
 
+  it("creates a provider draft before scheduling delivery", async () => {
+    const createDraft = vi.fn(async () => draftMessage());
+    const scheduleSend = vi.fn(async (_accountId, input, sendAt) => ({
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: input.draftId,
+      sendAt,
+      status: "pending",
+      attempts: 0,
+    }));
+    const putMessages = vi.fn();
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntime({
+      service: { createDraft, scheduleSend },
+      cache: { putMessages },
+      onCacheChanged,
+    });
+
+    const result = await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Scheduled subject",
+      text: "Scheduled body",
+      sendAt: "2026-07-21T13:30:00.000Z",
+    });
+
+    expect(createDraft).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({ body: { text: "Scheduled body" } }),
+    );
+    expect(scheduleSend).toHaveBeenCalledWith(
+      account.id,
+      { draftId: "draft-1" },
+      "2026-07-21T13:30:00.000Z",
+    );
+    expect(result).toEqual({
+      scheduleId: "schedule-1",
+      draftId: "draft-1",
+      sendAt: "2026-07-21T13:30:00.000Z",
+    });
+    expect(putMessages).toHaveBeenCalled();
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
+  it("deletes a newly created draft when scheduling it fails", async () => {
+    const schedulingError = new Error("Could not create the schedule.");
+    const draft = draftMessage();
+    const deleteDraft = vi.fn(async () => undefined);
+    const deleteCachedDraft = vi.fn();
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        createDraft: vi.fn(async () => draft),
+        scheduleSend: vi.fn(async () => {
+          throw schedulingError;
+        }),
+        deleteDraft,
+      },
+      cache: { putMessages: vi.fn(), deleteDraft: deleteCachedDraft },
+      onCacheChanged,
+    });
+
+    await expect(
+      runtime.schedule({
+        accountId: account.id,
+        to: [{ email: "friend@example.com" }],
+        subject: "Scheduled subject",
+        text: "Scheduled body",
+        sendAt: "2026-07-21T13:30:00.000Z",
+      }),
+    ).rejects.toBe(schedulingError);
+
+    expect(deleteDraft).toHaveBeenCalledWith(account.id, draft.draftId);
+    expect(deleteCachedDraft).toHaveBeenCalledWith(account, draft.draftId);
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed schedule's draft visible when provider cleanup fails", async () => {
+    const schedulingError = new Error("Could not create the schedule.");
+    const draft = draftMessage();
+    const runtime = createRuntime({
+      service: {
+        createDraft: vi.fn(async () => draft),
+        scheduleSend: vi.fn(async () => {
+          throw schedulingError;
+        }),
+        deleteDraft: vi.fn(async () => {
+          throw new Error("Could not delete the draft.");
+        }),
+      },
+      cache: { putMessages: vi.fn(), deleteDraft: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await expect(
+      runtime.schedule({
+        accountId: account.id,
+        to: [{ email: "friend@example.com" }],
+        subject: "Scheduled subject",
+        text: "Scheduled body",
+        sendAt: "2026-07-21T13:30:00.000Z",
+      }),
+    ).rejects.toBe(schedulingError);
+  });
+
+  it("replaces an existing schedule before rescheduling its draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const oldSchedule = {
+      scheduleId: "old-schedule",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T13:00:00.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    const cancelScheduled = vi.fn(() => ({
+      scheduleId: oldSchedule.scheduleId,
+      draftId: oldSchedule.draftId,
+      draftKept: true as const,
+    }));
+    const scheduleSend = vi.fn(async (_accountId, input, sendAt) => ({
+      scheduleId: "new-schedule",
+      accountId: account.id,
+      draftId: input.draftId,
+      sendAt,
+      status: "pending" as const,
+      attempts: 0,
+    }));
+    const runtime = createRuntime({
+      service: {
+        listScheduled: vi.fn(() => [oldSchedule]),
+        updateDraft: vi.fn(async () => draftMessage()),
+        cancelScheduled,
+        scheduleSend,
+      },
+      cache: { putMessages: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      draftId: oldSchedule.draftId,
+      to: [{ email: "friend@example.com" }],
+      subject: "Updated schedule",
+      text: "Updated body",
+      sendAt: "2026-07-21T14:00:00.000Z",
+    });
+
+    expect(cancelScheduled).toHaveBeenCalledWith(oldSchedule.scheduleId);
+    expect(cancelScheduled.mock.invocationCallOrder[0]).toBeLessThan(
+      scheduleSend.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("restores the existing schedule when its replacement fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const oldSchedule = {
+      scheduleId: "old-schedule",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T13:00:00.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    const replacementError = new Error("Could not create the replacement schedule.");
+    const scheduleSend = vi
+      .fn()
+      .mockRejectedValueOnce(replacementError)
+      .mockImplementationOnce(async (_accountId, input, sendAt) => ({
+        scheduleId: "restored-schedule",
+        accountId: account.id,
+        draftId: input.draftId,
+        sendAt,
+        status: "pending" as const,
+        attempts: 0,
+      }));
+    const runtime = createRuntime({
+      service: {
+        listScheduled: vi.fn(() => [oldSchedule]),
+        updateDraft: vi.fn(async () => draftMessage()),
+        cancelScheduled: vi.fn(),
+        scheduleSend,
+      },
+      cache: { putMessages: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await expect(
+      runtime.schedule({
+        accountId: account.id,
+        draftId: oldSchedule.draftId,
+        to: [{ email: "friend@example.com" }],
+        subject: "Updated schedule",
+        text: "Updated body",
+        sendAt: "2026-07-21T14:00:00.000Z",
+      }),
+    ).rejects.toBe(replacementError);
+
+    expect(scheduleSend).toHaveBeenNthCalledWith(
+      2,
+      oldSchedule.accountId,
+      { draftId: oldSchedule.draftId },
+      oldSchedule.sendAt,
+    );
+  });
+
+  it("clamps long reconciliation timers instead of polling before the send date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const sendAt = "2026-09-01T12:00:00.000Z";
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    const runtime = createRuntime({
+      service: {
+        createDraft: vi.fn(async () => draftMessage()),
+        scheduleSend: vi.fn(async (_accountId, input) => ({
+          scheduleId: "schedule-1",
+          accountId: account.id,
+          draftId: input.draftId,
+          sendAt,
+          status: "pending" as const,
+          attempts: 0,
+        })),
+      },
+      cache: { putMessages: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Long schedule",
+      text: "Send this later",
+      sendAt,
+    });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
+  });
+
+  it("cancels an existing schedule before sending its draft immediately", async () => {
+    const oldSchedule = {
+      scheduleId: "old-schedule",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T13:00:00.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    const cancelScheduled = vi.fn(() => ({
+      scheduleId: oldSchedule.scheduleId,
+      draftId: oldSchedule.draftId,
+      draftKept: true as const,
+    }));
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "sent-thread" }));
+    const runtime = createRuntime({
+      service: {
+        listScheduled: vi.fn(() => [oldSchedule]),
+        updateDraft: vi.fn(async () => draftMessage()),
+        cancelScheduled,
+        send,
+        getThread: vi.fn(async () => ({
+          id: "sent-thread",
+          subject: "Sent now",
+          messages: [
+            draftMessage({
+              id: "sent-message",
+              threadId: "sent-thread",
+              draftId: undefined,
+              flags: { read: true, starred: false, draft: false },
+            }),
+          ],
+        })),
+      },
+      cache: { putMessages: vi.fn(), deleteDraft: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.send({
+      accountId: account.id,
+      draftId: oldSchedule.draftId,
+      to: [{ email: "friend@example.com" }],
+      subject: "Sent now",
+      text: "Updated body",
+    });
+
+    expect(cancelScheduled).toHaveBeenCalledWith(oldSchedule.scheduleId);
+    expect(cancelScheduled.mock.invocationCallOrder[0]).toBeLessThan(
+      send.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("lists pending scheduled drafts in send-time order", async () => {
+    const cache = createCache();
+    cache.setPageToken(account.id, "drafts::");
+    cache.putMessages(account, [
+      draftMessage({
+        id: "later-message",
+        threadId: "later-thread",
+        draftId: "later-draft",
+        to: [{ name: "Jamie", email: "jamie@example.com" }],
+        subject: "Later",
+      }),
+      draftMessage({
+        id: "sooner-message",
+        threadId: "sooner-thread",
+        draftId: "sooner-draft",
+        to: [{ email: "sam@example.com" }],
+        subject: "Sooner",
+      }),
+    ]);
+    const listScheduled = vi.fn(() => [
+      {
+        scheduleId: "later",
+        accountId: account.id,
+        draftId: "later-draft",
+        sendAt: "2026-07-25T12:00:00.000Z",
+        status: "pending" as const,
+        attempts: 0,
+      },
+      {
+        scheduleId: "sooner",
+        accountId: account.id,
+        draftId: "sooner-draft",
+        sendAt: "2026-07-24T12:00:00.000Z",
+        status: "pending" as const,
+        attempts: 0,
+      },
+    ]);
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: { listScheduled },
+      onCacheChanged: vi.fn(),
+    });
+
+    const page = await runtime.listThreads({ view: "scheduled" });
+
+    expect(page.items).toMatchObject([
+      {
+        id: "sooner-thread",
+        senderName: "sam@example.com",
+        date: "2026-07-24T12:00:00.000Z",
+      },
+      {
+        id: "later-thread",
+        senderName: "Jamie",
+        date: "2026-07-25T12:00:00.000Z",
+      },
+    ]);
+    expect(page.totalCount).toBe(2);
+    await expect(runtime.listThreads({ view: "drafts" })).resolves.toMatchObject({
+      items: [],
+      totalCount: 0,
+    });
+    cache.close();
+  });
+
+  it("hydrates an uncached scheduled draft before listing it", async () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-24T12:00:00.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    const listMessages = vi.fn(async () => ({
+      items: [
+        draftMessage({
+          draftId: scheduled.draftId,
+          subject: "Hydrated schedule",
+          to: [{ email: "friend@example.com" }],
+        }),
+      ],
+    }));
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        listScheduled: vi.fn(() => [scheduled]),
+        listMessages,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const page = await runtime.listThreads({
+      view: "scheduled",
+      backgroundRefresh: true,
+    });
+
+    expect(listMessages).toHaveBeenCalledOnce();
+    expect(page.items).toMatchObject([
+      {
+        scheduleId: scheduled.scheduleId,
+        draftId: scheduled.draftId,
+        subject: "Hydrated schedule",
+      },
+    ]);
+    cache.close();
+  });
+
+  it("marks an active scheduled draft when it appears in All Mail", async () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-24T12:00:00.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    cache.putMessages(account, [
+      draftMessage({
+        draftId: scheduled.draftId,
+        subject: "Scheduled in All Mail",
+      }),
+    ]);
+    cache.recordResultPage(account.id, "all::", ["draft-thread"], true);
+    cache.setPageToken(account.id, "all::");
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: { listScheduled: vi.fn(() => [scheduled]) },
+      onCacheChanged: vi.fn(),
+    });
+
+    const page = await runtime.listThreads({ view: "all" });
+
+    expect(page.items).toMatchObject([
+      {
+        scheduleId: scheduled.scheduleId,
+        draftId: scheduled.draftId,
+      },
+    ]);
+    cache.close();
+  });
+
+  it("starts the undo delay after the provider draft is ready", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const createDraft = vi.fn(async () => {
+      vi.setSystemTime("2026-07-21T12:00:20.000Z");
+      return draftMessage();
+    });
+    const scheduleSend = vi.fn(async (_accountId, input, sendAt) => ({
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: input.draftId,
+      sendAt,
+      status: "pending",
+      attempts: 0,
+    }));
+    const runtime = createRuntime({
+      service: { createDraft, scheduleSend },
+      cache: { putMessages: vi.fn() },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Scheduled subject",
+      text: "Scheduled body",
+      delaySeconds: 5,
+    });
+
+    expect(scheduleSend).toHaveBeenCalledWith(
+      account.id,
+      { draftId: "draft-1" },
+      "2026-07-21T12:00:25.000Z",
+    );
+  });
+
+  it("removes a delivered schedule from Drafts and caches its Sent thread", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const scheduled = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T12:00:05.000Z",
+      status: "sent" as const,
+      attempts: 0,
+      sentThreadId: "sent-thread",
+    };
+    const scheduleSend = vi.fn(async () => ({ ...scheduled, status: "pending" as const }));
+    const listScheduled = vi.fn(() => [scheduled]);
+    const getThread = vi.fn(async () => ({
+      id: "sent-thread",
+      subject: "Scheduled subject",
+      messages: [draftMessage({ id: "sent-message", threadId: "sent-thread" })],
+    }));
+    const deleteDraft = vi.fn();
+    const putThread = vi.fn();
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        createDraft: vi.fn(async () => draftMessage()),
+        scheduleSend,
+        listScheduled,
+        getThread,
+      },
+      cache: { putMessages: vi.fn(), deleteDraft, putThread },
+      onCacheChanged,
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Scheduled subject",
+      text: "Scheduled body",
+      delaySeconds: 5,
+    });
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(listScheduled).toHaveBeenCalledWith(account.id);
+    expect(deleteDraft).toHaveBeenCalledWith(account, "draft-1");
+    expect(getThread).toHaveBeenCalledWith(account.id, "sent-thread");
+    expect(putThread).toHaveBeenCalledWith(account, expect.objectContaining({ id: "sent-thread" }));
+    expect(onCacheChanged).toHaveBeenCalledTimes(3);
+  });
+
+  it("reveals an undo send when its delivery attempt will be retried", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T12:00:05.000Z",
+      status: "pending" as const,
+      attempts: 1,
+      lastError: "Network unavailable",
+    };
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        createDraft: vi.fn(async () => draftMessage()),
+        scheduleSend: vi.fn(async () => ({ ...scheduled, attempts: 0, lastError: undefined })),
+        listScheduled: vi.fn(() => [scheduled]),
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Retry this",
+      text: "Scheduled body",
+      delaySeconds: 5,
+    });
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    await expect(runtime.listThreads({ view: "scheduled" })).resolves.toMatchObject({
+      totalCount: 1,
+      items: [{ scheduleId: "schedule-1", draftId: "draft-1" }],
+    });
+    cache.close();
+  });
+
+  it("notifies the renderer when a scheduled send fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const failed = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T12:00:05.000Z",
+      status: "failed" as const,
+      attempts: 1,
+      lastError: "Draft no longer exists",
+    };
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        createDraft: vi.fn(async () => draftMessage()),
+        scheduleSend: vi.fn(async () => ({ ...failed, status: "pending" as const })),
+        listScheduled: vi.fn(() => [failed]),
+      },
+      cache: { putMessages: vi.fn() },
+      onCacheChanged,
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Scheduled subject",
+      text: "Scheduled body",
+      sendAt: failed.sendAt,
+    });
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(onCacheChanged).toHaveBeenCalledTimes(2);
+  });
+
   it("purges the cached draft after the provider deletes it", async () => {
     const providerDelete = vi.fn(async () => undefined);
     const cacheDelete = vi.fn();
@@ -1905,6 +2545,79 @@ describe("FluxmailRuntime draft mutations", () => {
     expect(providerDelete).toHaveBeenCalledWith(account.id, "draft-1");
     expect(cacheDelete).toHaveBeenCalledWith(account, "draft-1");
     expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a scheduled send before directly deleting its draft", async () => {
+    const cancelScheduled = vi.fn();
+    const providerDelete = vi.fn(async () => undefined);
+    const cacheDelete = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        listScheduled: vi.fn(() => [
+          {
+            scheduleId: "schedule-1",
+            accountId: account.id,
+            draftId: "draft-1",
+            sendAt: "2026-07-24T12:00:00.000Z",
+            status: "pending",
+            attempts: 0,
+          },
+        ]),
+        cancelScheduled,
+        deleteDraft: providerDelete,
+      },
+      cache: { deleteDraft: cacheDelete },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.deleteDraft(account.id, "draft-1");
+
+    expect(cancelScheduled).toHaveBeenCalledWith("schedule-1");
+    expect(providerDelete).toHaveBeenCalledWith(account.id, "draft-1");
+    expect(cancelScheduled.mock.invocationCallOrder[0]).toBeLessThan(
+      providerDelete.mock.invocationCallOrder[0]!,
+    );
+    expect(cacheDelete).toHaveBeenCalledWith(account, "draft-1");
+  });
+
+  it("cancels a scheduled send before discarding its draft", async () => {
+    const cancelScheduled = vi.fn();
+    const deleteDraft = vi.fn(async () => undefined);
+    const cacheDelete = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        listScheduled: vi.fn(() => [
+          {
+            scheduleId: "schedule-1",
+            accountId: account.id,
+            draftId: "draft-1",
+            sendAt: "2026-07-24T12:00:00.000Z",
+            status: "pending",
+            attempts: 0,
+          },
+        ]),
+        cancelScheduled,
+        deleteDraft,
+        getThread: vi.fn(async () => ({
+          id: "draft-thread",
+          subject: "Scheduled subject",
+          messages: [draftMessage()],
+        })),
+      },
+      cache: { deleteDraft: cacheDelete },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.modify([{ accountId: account.id, threadId: "draft-thread" }], {
+      type: "discardDraft",
+    });
+
+    expect(cancelScheduled).toHaveBeenCalledWith("schedule-1");
+    expect(deleteDraft).toHaveBeenCalledWith(account.id, "draft-1");
+    expect(cacheDelete).toHaveBeenCalledWith(account, "draft-1");
+    expect(cancelScheduled.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteDraft.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("refreshes the cached conversation after a direct reply", async () => {
@@ -1950,6 +2663,15 @@ describe("FluxmailRuntime draft mutations", () => {
       }),
     );
     expect(getThread).toHaveBeenCalledWith(account.id, "thread-1");
+    expect(send).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({
+        body: {
+          text: expect.stringContaining("> Original message"),
+          html: expect.stringContaining('class="gmail_quote gmail_quote_container"'),
+        },
+      }),
+    );
     expect(putThread).toHaveBeenCalledWith(account, expect.objectContaining({ id: "thread-1" }));
     expect(onCacheChanged).toHaveBeenCalledOnce();
   });
@@ -2035,6 +2757,86 @@ describe("FluxmailRuntime draft mutations", () => {
       account,
       expect.objectContaining({ id: "forward-thread" }),
     );
+    expect(onCacheChanged).toHaveBeenCalledOnce();
+  });
+
+  it("caches a provider draft before scheduling a forward", async () => {
+    const original = inboxMessage({ id: "original" });
+    const draft = draftMessage({ id: "forward-draft", threadId: "forward-thread" });
+    const createDraft = vi.fn(async () => draft);
+    const scheduleSend = vi.fn(async (_accountId, input, sendAt) => ({
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: input.draftId,
+      sendAt,
+      status: "pending",
+      attempts: 0,
+    }));
+    const putMessages = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        getMessage: vi.fn(async () => original),
+        createDraft,
+        scheduleSend,
+      },
+      cache: { putMessages },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.forward({
+      accountId: account.id,
+      messageId: original.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Fwd: Hello",
+      text: "See below",
+      sendAt: "2026-07-22T12:00:00.000Z",
+    });
+
+    expect(createDraft).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({ to: [{ email: "friend@example.com" }] }),
+    );
+    expect(putMessages).toHaveBeenCalledWith(account, [draft], { invalidateBodies: true });
+    expect(scheduleSend).toHaveBeenCalledWith(
+      account.id,
+      { draftId: draft.draftId },
+      "2026-07-22T12:00:00.000Z",
+    );
+  });
+
+  it("deletes a forward draft when scheduling it fails", async () => {
+    const schedulingError = new Error("Could not create the schedule.");
+    const original = inboxMessage({ id: "original" });
+    const draft = draftMessage({ id: "forward-draft", threadId: "forward-thread" });
+    const deleteDraft = vi.fn(async () => undefined);
+    const deleteCachedDraft = vi.fn();
+    const onCacheChanged = vi.fn();
+    const runtime = createRuntime({
+      service: {
+        getMessage: vi.fn(async () => original),
+        createDraft: vi.fn(async () => draft),
+        scheduleSend: vi.fn(async () => {
+          throw schedulingError;
+        }),
+        deleteDraft,
+      },
+      cache: { putMessages: vi.fn(), deleteDraft: deleteCachedDraft },
+      onCacheChanged,
+    });
+
+    await expect(
+      runtime.forward({
+        accountId: account.id,
+        messageId: original.id,
+        to: [{ email: "friend@example.com" }],
+        subject: "Fwd: Hello",
+        text: "See below",
+        sendAt: "2026-07-22T12:00:00.000Z",
+      }),
+    ).rejects.toBe(schedulingError);
+
+    expect(deleteDraft).toHaveBeenCalledWith(account.id, draft.draftId);
+    expect(deleteCachedDraft).toHaveBeenCalledWith(account, draft.draftId);
     expect(onCacheChanged).toHaveBeenCalledOnce();
   });
 });
@@ -2192,7 +2994,7 @@ function createRuntime(input: {
       },
       configuration: { setLicenseKey: vi.fn() },
       registry: { listAccounts: () => [account] },
-      service: input.service,
+      service: { listScheduled: vi.fn(() => []), ...input.service },
       scheduler: { stop: vi.fn() },
       licenseController: {
         stop: vi.fn(),
@@ -2248,7 +3050,7 @@ function createRuntimeWithCache(input: {
           if (index >= 0) runtimeAccounts.splice(index, 1);
         },
       },
-      service: input.service,
+      service: { listScheduled: vi.fn(() => []), ...input.service },
       scheduler: { stop: vi.fn() },
       licenseController: {
         stop: vi.fn(),

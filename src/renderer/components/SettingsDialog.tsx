@@ -1,7 +1,28 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ExternalLink, Monitor, Moon, RefreshCw, Sun, Trash2, X } from "lucide-react";
-import type { AppearancePreference, BootstrapState } from "../../shared/contracts";
-import { IconButton, SelectionCheckbox } from "./Controls";
+import {
+  ChevronsUpDown,
+  ExternalLink,
+  Monitor,
+  Moon,
+  RefreshCw,
+  Sun,
+  Trash2,
+  X,
+} from "lucide-react";
+import type {
+  AppearancePreference,
+  BootstrapState,
+  UndoSendDelaySeconds,
+} from "../../shared/contracts";
+import { IconButton, MenuButton, SelectionCheckbox } from "./Controls";
+
+const UNDO_SEND_OPTIONS = [
+  { value: 0, label: "Off" },
+  { value: 5, label: "5 seconds" },
+  { value: 10, label: "10 seconds" },
+  { value: 20, label: "20 seconds" },
+  { value: 30, label: "30 seconds" },
+] as const satisfies ReadonlyArray<{ value: UndoSendDelaySeconds; label: string }>;
 
 interface Props {
   state: BootstrapState;
@@ -15,6 +36,7 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [dockBadgeBusy, setDockBadgeBusy] = useState(false);
+  const [undoSendBusy, setUndoSendBusy] = useState(false);
   const [openNextAfterArchiveBusy, setOpenNextAfterArchiveBusy] = useState(false);
   const [blockRemoteImagesBusy, setBlockRemoteImagesBusy] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
@@ -130,6 +152,42 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
       onError(error instanceof Error ? error.message : "Could not change the Dock badge setting.");
     } finally {
       setDockBadgeBusy(false);
+    }
+  };
+  const updateUndoSendDelay = async (delay: UndoSendDelaySeconds) => {
+    if (undoSendBusy || delay === state.preferences.undoSendDelaySeconds) return;
+    const previous = state.preferences.undoSendDelaySeconds;
+    setUndoSendBusy(true);
+    onState((current) =>
+      current
+        ? {
+            ...current,
+            preferences: { ...current.preferences, undoSendDelaySeconds: delay },
+          }
+        : current,
+    );
+    try {
+      const value = await window.fluxmail.preferences.setUndoSendDelaySeconds(delay);
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, undoSendDelaySeconds: value },
+            }
+          : current,
+      );
+    } catch (error) {
+      onState((current) =>
+        current
+          ? {
+              ...current,
+              preferences: { ...current.preferences, undoSendDelaySeconds: previous },
+            }
+          : current,
+      );
+      onError(error instanceof Error ? error.message : "Could not change the undo send setting.");
+    } finally {
+      setUndoSendBusy(false);
     }
   };
   const updateOpenNextAfterArchive = async (enabled: boolean) => {
@@ -538,6 +596,39 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                   void updateOpenNextAfterArchive(!state.preferences.openNextAfterArchive)
                 }
               />
+            </div>
+          </section>
+          <section>
+            <h2>Sending</h2>
+            <div className="setting-select-row">
+              <span>
+                <strong>Undo send</strong>
+                <small>Delay delivery so you have time to cancel a sent message.</small>
+              </span>
+              <MenuButton
+                label="Undo send"
+                className="setting-select-menu"
+                triggerClassName="account-picker-trigger setting-select-trigger"
+                menuClassName="setting-select-options"
+                align="right"
+                tooltip={false}
+                disabled={undoSendBusy}
+                options={UNDO_SEND_OPTIONS.map((option) => ({
+                  id: String(option.value),
+                  label: option.label,
+                  selected: state.preferences.undoSendDelaySeconds === option.value,
+                  onSelect: () => void updateUndoSendDelay(option.value),
+                }))}
+              >
+                <span>
+                  {
+                    UNDO_SEND_OPTIONS.find(
+                      (option) => option.value === state.preferences.undoSendDelaySeconds,
+                    )?.label
+                  }
+                </span>
+                <ChevronsUpDown size={14} />
+              </MenuButton>
             </div>
           </section>
           <section>
