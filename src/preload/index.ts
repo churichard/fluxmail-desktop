@@ -24,6 +24,9 @@ import {
   licenseKeySchema,
   mailForwardInputSchema,
   mailModifyInputSchema,
+  mailModifyResultSchema,
+  mailUndoInputSchema,
+  mailUndoResultSchema,
   sendInputSchema,
   sendResultSchema,
   scheduledSendCancelInputSchema,
@@ -51,7 +54,8 @@ const api: FluxmailDesktopApi = {
     listThreads: (input) => invoke(IPC.mailList, input, threadListInputSchema, threadPageSchema),
     search: (input) => invoke(IPC.mailSearch, input, threadListInputSchema, threadPageSchema),
     getThread: (target) => invoke(IPC.mailThread, target, threadTargetSchema, threadSchema),
-    modify: (input) => invoke(IPC.mailModify, input, mailModifyInputSchema, z.void()),
+    modify: (input) => invoke(IPC.mailModify, input, mailModifyInputSchema, mailModifyResultSchema),
+    undo: (input) => invoke(IPC.mailUndo, input, mailUndoInputSchema, mailUndoResultSchema),
     forward: (input) =>
       invoke(IPC.mailForward, input, mailForwardInputSchema, scheduledSendResultSchema.optional()),
   },
@@ -110,6 +114,8 @@ const api: FluxmailDesktopApi = {
       ),
     setDockBadge: (enabled) =>
       invoke(IPC.preferencesDockBadgeSet, enabled, z.boolean(), z.boolean()),
+    setOpenNextAfterArchive: (enabled) =>
+      invoke(IPC.preferencesOpenNextAfterArchiveSet, enabled, z.boolean(), z.boolean()),
     setBlockRemoteImages: (enabled) =>
       invoke(IPC.preferencesBlockRemoteImagesSet, enabled, z.boolean(), z.boolean()),
     setImageRelay: (enabled) =>

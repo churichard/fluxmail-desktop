@@ -1,6 +1,16 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
+  ChevronDown,
+  ChevronUp,
   Ellipsis,
   Forward,
   LoaderCircle,
@@ -9,6 +19,7 @@ import {
   Paperclip,
   Reply,
   ReplyAll,
+  Search,
   Star,
   Tag,
   Trash2,
@@ -26,7 +37,14 @@ import {
   ThreadSummary,
   UndoSendDelaySeconds,
 } from "../../shared/contracts";
-import { parseAddressField, type ComposeDelivery } from "./ComposeDialog";
+import {
+  ComposeDialog,
+  formatAddresses,
+  parseAddressField,
+  type ComposeDelivery,
+  type ComposeDialogHandle,
+  type ComposeSeed,
+} from "./ComposeDialog";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { EmailHtml } from "./EmailHtml";
 import { TrackingPixelIndicator } from "./TrackingPixelIndicator";
@@ -56,12 +74,16 @@ interface Props {
   onDelivery?(delivery: ComposeDelivery): void;
   undoSendDelaySeconds?: UndoSendDelaySeconds;
   quickReplyDiscardVersion?: number;
+  onDraftMissing?(thread: ThreadSummary): void;
+  onDraftFinished?(): void;
 }
 
 export type InlineComposerMode = "reply" | "replyAll" | "forward";
 
 export interface ReadingPaneHandle {
   openComposer(mode: InlineComposerMode): void;
+  openFind(): void;
+  closeDraft(): boolean | Promise<boolean>;
 }
 
 interface InlineComposerState {
@@ -84,22 +106,53 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onDelivery,
     undoSendDelaySeconds = 10,
     quickReplyDiscardVersion,
+    onDraftMissing,
+    onDraftFinished,
   },
   ref,
 ) {
   const [detail, setDetail] = useState<MailThread>();
   const [loading, setLoading] = useState(false);
   const [composer, setComposer] = useState<InlineComposerState>();
+  const [draftSeed, setDraftSeed] = useState<ComposeSeed>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findMatchCounts, setFindMatchCounts] = useState<Record<string, number>>({});
+  const [activeFindMatch, setActiveFindMatch] = useState(0);
   const forwardRequest = useRef(0);
   const composerRef = useRef<InlineComposerState | undefined>(undefined);
+  const draftDialogRef = useRef<ComposeDialogHandle>(null);
+  const draftSeedRef = useRef<ComposeSeed | undefined>(undefined);
+  const loadedThreadKey = useRef<string | undefined>(undefined);
   const composerDirty = useRef(false);
+  const findInputRef = useRef<HTMLInputElement>(null);
   composerRef.current = composer;
+  draftSeedRef.current = draftSeed;
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
   const threadIdentityRef = useRef(threadIdentity);
   threadIdentityRef.current = threadIdentity;
   const handleScrollerRef = useCallback((element: HTMLDivElement | null) => {
     setScroller(element);
+  }, []);
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!findOpen) return;
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, [findOpen]);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindMatchCounts({});
+    setActiveFindMatch(0);
   }, []);
 
   useEffect(() => {
@@ -132,7 +185,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
 
   const openComposer = useCallback(
     async (mode: InlineComposerMode) => {
-      const message = detail?.messages.at(-1);
+      if (draftSeed) return;
+      const message = [...(detail?.messages ?? [])]
+        .reverse()
+        .find((candidate) => !candidate.flags.draft);
       if (!thread || !message) return;
       if (mode === "replyAll" && !shouldOfferReplyAll(thread.accountEmail, message)) return;
       if (!canReplaceComposer(mode)) return;
@@ -166,15 +222,26 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         }
       }
     },
-    [canReplaceComposer, detail, onError, thread],
+    [canReplaceComposer, detail, draftSeed, onError, thread],
   );
 
-  useImperativeHandle(ref, () => ({ openComposer: (mode) => void openComposer(mode) }), [
-    openComposer,
-  ]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      openComposer: (mode) => void openComposer(mode),
+      openFind,
+      closeDraft: () => draftDialogRef.current?.close() ?? true,
+    }),
+    [openComposer, openFind],
+  );
 
   useEffect(() => {
+    const nextThreadKey = thread ? `${thread.accountId}:${thread.id}` : undefined;
+    if (nextThreadKey && nextThreadKey === loadedThreadKey.current && draftSeedRef.current) return;
+    loadedThreadKey.current = nextThreadKey;
+    closeFind();
     setDetail(undefined);
+    setDraftSeed(undefined);
     composerDirty.current = false;
     setComposer(undefined);
     if (!thread) return;
@@ -182,8 +249,49 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     setLoading(true);
     void window.fluxmail.mail
       .getThread({ accountId: thread.accountId, threadId: thread.id })
-      .then((result) => {
-        if (!canceled) setDetail(result);
+      .then(async (result) => {
+        if (canceled) return;
+        setDetail(result);
+        const draft = [...result.messages]
+          .reverse()
+          .find((message) => message.flags.draft && message.draftId);
+        if (!draft?.draftId) {
+          if (thread.draft) onDraftMissing?.(thread);
+          return;
+        }
+        const replyTarget = [...result.messages].reverse().find((message) => !message.flags.draft);
+        const [initialAttachments, recipientFields] = await Promise.all([
+          draft.attachments?.length
+            ? window.fluxmail.attachments.prepare({
+                accountId: thread.accountId,
+                messageId: draft.id,
+                attachments: draft.attachments,
+              })
+            : Promise.resolve([]),
+          window.fluxmail.drafts.recipientFields({
+            accountId: thread.accountId,
+            draftId: draft.draftId,
+          }),
+        ]);
+        if (canceled) {
+          if (initialAttachments.length)
+            void window.fluxmail.attachments
+              .release(initialAttachments.map((attachment) => attachment.token))
+              .catch(() => undefined);
+          return;
+        }
+        setDraftSeed({
+          accountId: thread.accountId,
+          draftId: draft.draftId,
+          to: recipientFields?.to ?? formatAddresses(draft.to),
+          cc: recipientFields?.cc ?? formatAddresses(draft.cc),
+          bcc: recipientFields?.bcc ?? formatAddresses(draft.bcc),
+          subject: draft.subject,
+          initialHtml: draft.body?.html,
+          initialText: draft.body?.text,
+          ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
+          initialAttachments,
+        });
       })
       .catch((error) =>
         onError(
@@ -196,7 +304,15 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     return () => {
       canceled = true;
     };
-  }, [onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
+  }, [
+    closeFind,
+    onDraftMissing,
+    onError,
+    thread?.accountId,
+    thread?.date,
+    thread?.id,
+    thread?.messageCount,
+  ]);
 
   if (!thread)
     return (
@@ -214,11 +330,21 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         <p role="status">Opening conversation...</p>
       </section>
     );
-  const lastMessage = detail.messages.at(-1);
+  const messages = detail.messages.filter((message) => !message.flags.draft);
+  const totalFindMatches = messages.reduce(
+    (total, message) => total + (findMatchCounts[message.id] ?? 0),
+    0,
+  );
+  const lastMessage = messages.at(-1);
   const replyAllAvailable = Boolean(
     lastMessage && shouldOfferReplyAll(detail.accountEmail, lastMessage),
   );
   const deleteAction = mailboxDeleteAction(view, allowPermanentDelete);
+  const showNextFindMatch = (direction: 1 | -1) => {
+    if (!totalFindMatches) return;
+    setActiveFindMatch((current) => (current + direction + totalFindMatches) % totalFindMatches);
+  };
+  let findMatchOffset = 0;
 
   return (
     <section className="reading-pane">
@@ -281,6 +407,59 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
           <Star size={17} fill={thread.starred ? "currentColor" : "none"} />
         </IconButton>
       </header>
+      {findOpen ? (
+        <div className="message-find-bar" role="search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            ref={findInputRef}
+            aria-label="Find in conversation"
+            aria-keyshortcuts={KEYBOARD_SHORTCUTS.find.keys}
+            placeholder="Find in conversation"
+            value={findQuery}
+            onChange={(event) => {
+              setFindQuery(event.target.value);
+              setFindMatchCounts({});
+              setActiveFindMatch(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeFind();
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                showNextFindMatch(event.shiftKey ? -1 : 1);
+              }
+            }}
+          />
+          <span className="message-find-status" role="status" aria-live="polite">
+            {findQuery
+              ? totalFindMatches
+                ? `${activeFindMatch + 1} of ${totalFindMatches}`
+                : "No matches"
+              : null}
+          </span>
+          <button
+            type="button"
+            aria-label="Previous match"
+            disabled={!totalFindMatches}
+            onClick={() => showNextFindMatch(-1)}
+          >
+            <ChevronUp size={16} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next match"
+            disabled={!totalFindMatches}
+            onClick={() => showNextFindMatch(1)}
+          >
+            <ChevronDown size={16} />
+          </button>
+          <button type="button" aria-label="Close find" onClick={closeFind}>
+            <X size={16} />
+          </button>
+        </div>
+      ) : null}
       <div className="conversation-scroll-shell">
         <div ref={handleScrollerRef} className="conversation-scroll">
           <div className="conversation-title">
@@ -302,19 +481,61 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </div>
             ) : null}
           </div>
-          {detail.messages
-            .filter((message) => !message.flags.draft)
-            .map((message) => (
+          {messages.map((message) => {
+            const matchCount = findMatchCounts[message.id] ?? 0;
+            const localActiveFindMatch =
+              activeFindMatch >= findMatchOffset && activeFindMatch < findMatchOffset + matchCount
+                ? activeFindMatch - findMatchOffset
+                : undefined;
+            findMatchOffset += matchCount;
+            return (
               <MessageCard
                 key={message.id}
                 message={message}
                 blockRemoteImages={blockRemoteImages}
                 imageRelay={imageRelay}
                 imageRelayAvailable={imageRelayAvailable}
+                findQuery={findOpen ? findQuery : ""}
+                activeFindMatch={localActiveFindMatch}
+                onFindMatchCountChange={(count) =>
+                  setFindMatchCounts((current) =>
+                    current[message.id] === count ? current : { ...current, [message.id]: count },
+                  )
+                }
                 onError={onError}
               />
-            ))}
-          {lastMessage ? (
+            );
+          })}
+          {draftSeed ? (
+            <ComposeDialog
+              ref={draftDialogRef}
+              inline
+              seed={draftSeed}
+              accounts={[]}
+              blockRemoteImages={blockRemoteImages}
+              imageRelay={imageRelay}
+              imageRelayAvailable={imageRelayAvailable}
+              undoSendDelaySeconds={undoSendDelaySeconds}
+              onClose={() => {
+                setDraftSeed(undefined);
+                setDetail((current) =>
+                  current
+                    ? {
+                        ...current,
+                        messages: current.messages.filter((message) => !message.flags.draft),
+                      }
+                    : current,
+                );
+                onDraftFinished?.();
+              }}
+              onSent={(delivery) => {
+                setDraftSeed(undefined);
+                onDraftFinished?.();
+                onDelivery?.(delivery);
+              }}
+              onError={onError}
+            />
+          ) : lastMessage ? (
             <div className="reply-actions">
               <button
                 aria-keyshortcuts={KEYBOARD_SHORTCUTS.reply.keys}
@@ -341,7 +562,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </button>
             </div>
           ) : null}
-          {composer && lastMessage ? (
+          {!draftSeed && composer && lastMessage ? (
             <InlineComposer
               key={composer.mode}
               accountId={thread.accountId}
@@ -374,12 +595,18 @@ function MessageCard({
   blockRemoteImages,
   imageRelay,
   imageRelayAvailable,
+  findQuery,
+  activeFindMatch,
+  onFindMatchCountChange,
   onError,
 }: {
   message: MailMessage;
   blockRemoteImages: boolean;
   imageRelay: boolean;
   imageRelayAvailable: boolean;
+  findQuery: string;
+  activeFindMatch?: number;
+  onFindMatchCountChange(count: number): void;
   onError(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -387,14 +614,16 @@ function MessageCard({
   const senderName = message.from?.name || message.from?.email || "Unknown sender";
   const senderEmail =
     message.from?.email && message.from.email !== senderName ? message.from.email : undefined;
+  const contentExpanded = expanded || Boolean(findQuery);
   return (
     <article className="message-card">
       <div className="message-header">
         <button
           type="button"
           className="message-header-toggle"
-          aria-label={expanded ? "Collapse message" : "Expand message"}
-          aria-expanded={expanded}
+          aria-label={contentExpanded ? "Collapse message" : "Expand message"}
+          aria-expanded={contentExpanded}
+          disabled={Boolean(findQuery)}
           onClick={() => setExpanded((value) => !value)}
         />
         <span className="sender-avatar">{senderName.slice(0, 1).toUpperCase()}</span>
@@ -422,13 +651,16 @@ function MessageCard({
           }).format(new Date(message.date))}
         </time>
       </div>
-      {expanded ? (
+      {contentExpanded ? (
         <div className="message-body">
           <EmailHtml
             message={message}
             blockRemoteImages={blockRemoteImages}
             imageRelay={imageRelay}
             imageRelayAvailable={imageRelayAvailable}
+            findQuery={findQuery}
+            activeFindMatch={activeFindMatch}
+            onFindMatchCountChange={onFindMatchCountChange}
             onError={onError}
             onTrackingPixelsChange={setTrackingPixels}
           />

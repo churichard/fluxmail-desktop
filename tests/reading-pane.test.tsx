@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
-import { StrictMode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef, StrictMode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ReadingPane } from "../src/renderer/components/ReadingPane";
+import { ReadingPane, type ReadingPaneHandle } from "../src/renderer/components/ReadingPane";
 import type {
   FluxmailDesktopApi,
   MailThread,
@@ -36,6 +36,81 @@ describe("ReadingPane", () => {
     renderPane(summary());
 
     expect(screen.getByRole("status").textContent).toBe("Opening conversation...");
+  });
+
+  it("opens and closes the conversation find bar through its imperative handle", async () => {
+    const getThread = vi.fn(async () => detail("Searchable subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const ref = createRef<ReadingPaneHandle>();
+    render(
+      <ReadingPane
+        ref={ref}
+        view="inbox"
+        thread={summary()}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={vi.fn()}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+    await screen.findByText("Searchable subject");
+
+    act(() => ref.current?.openFind());
+
+    const input = screen.getByRole("textbox", { name: "Find in conversation" });
+    expect(input.getAttribute("aria-keyshortcuts")).toBe("Meta+F Control+F");
+    fireEvent.change(input, { target: { value: "missing" } });
+    expect(screen.getByRole("status").textContent).toBe("No matches");
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("textbox", { name: "Find in conversation" })).toBeNull();
+  });
+
+  it("keeps collapsed messages searchable and restores their collapsed state", async () => {
+    const getThread = vi.fn(async () => detail("Searchable subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const ref = createRef<ReadingPaneHandle>();
+    render(
+      <ReadingPane
+        ref={ref}
+        view="inbox"
+        thread={summary()}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={vi.fn()}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+    await screen.findByText("Searchable subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse message" }));
+    expect(screen.queryByText("Email body")).toBeNull();
+
+    act(() => ref.current?.openFind());
+    fireEvent.change(screen.getByRole("textbox", { name: "Find in conversation" }), {
+      target: { value: "Email" },
+    });
+
+    expect(screen.getByText("Email body")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Collapse message" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Find in conversation" }), {
+      key: "Escape",
+    });
+
+    expect(screen.queryByText("Email body")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand message" })).toBeTruthy();
   });
 
   it("reloads an open conversation when its message count changes", async () => {
@@ -129,6 +204,185 @@ describe("ReadingPane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reply all" }));
 
     expect(screen.getByText("Reply to everyone")).toBeTruthy();
+  });
+
+  it("restores a saved reply draft inline with its reply target", async () => {
+    const thread = detail("Saved reply", "original-message");
+    thread.messages.push({
+      ...thread.messages[0]!,
+      id: "draft-message",
+      draftId: "draft-1",
+      from: { email: "me@example.com" },
+      to: [{ email: "sender@example.com" }],
+      body: { html: "<p>Saved answer</p>", text: "Saved answer" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    const onDraftFinished = vi.fn();
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save: vi.fn(async () => ({ draftId: "draft-1", messageId: "draft-message" })),
+          delete: vi.fn(async () => undefined),
+          send,
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary({ draft: true, messageCount: 2 }), { onDraftFinished });
+
+    expect(await screen.findByRole("region", { name: "Draft" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "New message" })).toBeNull();
+    expect((screen.getByLabelText("Subject") as HTMLInputElement).value).toBe("Saved reply");
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toBe(
+      "Saved answer",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draftId: "draft-1",
+          replyToMessageId: "original-message",
+        }),
+      ),
+    );
+    expect(onDraftFinished).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an edited draft mounted when its refreshed summary date changes", async () => {
+    const thread = detail("Saved reply", "original-message");
+    thread.messages.push({
+      ...thread.messages[0]!,
+      id: "draft-message",
+      draftId: "draft-1",
+      to: [{ email: "sender@example.com" }],
+      body: { html: "<p>Saved answer</p>", text: "Saved answer" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    const getThread = vi.fn(async () => thread);
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save: vi.fn(async () => ({ draftId: "draft-1", messageId: "draft-message" })),
+          delete: vi.fn(async () => undefined),
+          send: vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" })),
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    const onModify = vi.fn(async () => undefined);
+    const onError = vi.fn();
+    const onQuickReplyDirtyChange = vi.fn();
+    const rendered = render(
+      <ReadingPane
+        view="inbox"
+        thread={summary({ draft: true, messageCount: 2 })}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={onModify}
+        onError={onError}
+        onQuickReplyDirtyChange={onQuickReplyDirtyChange}
+      />,
+    );
+    const subject = (await screen.findByLabelText("Subject")) as HTMLInputElement;
+    fireEvent.change(subject, { target: { value: "Edited subject" } });
+
+    rendered.rerender(
+      <ReadingPane
+        view="inbox"
+        thread={summary({
+          draft: true,
+          messageCount: 2,
+          date: "2026-07-16T13:00:00Z",
+        })}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={onModify}
+        onError={onError}
+        onQuickReplyDirtyChange={onQuickReplyDirtyChange}
+      />,
+    );
+
+    expect(screen.getByLabelText("Subject")).toBe(subject);
+    expect(subject.value).toBe("Edited subject");
+    expect(getThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the inline draft open when coordinated navigation cannot save it", async () => {
+    const thread = detail("Saved reply", "original-message");
+    thread.messages.push({
+      ...thread.messages[0]!,
+      id: "draft-message",
+      draftId: "draft-1",
+      to: [{ email: "sender@example.com" }],
+      body: { text: "Saved answer" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    const save = vi.fn(async () => {
+      throw new Error("Save failed");
+    });
+    const onError = vi.fn();
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save,
+          delete: vi.fn(async () => undefined),
+          send: vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" })),
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    const ref = createRef<ReadingPaneHandle>();
+    render(
+      <ReadingPane
+        ref={ref}
+        view="inbox"
+        thread={summary({ draft: true, messageCount: 2 })}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={onError}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText("Subject"), {
+      target: { value: "Unsaved edit" },
+    });
+
+    let closed = true;
+    await act(async () => {
+      closed = (await ref.current?.closeDraft()) ?? true;
+    });
+
+    expect(closed).toBe(false);
+    expect(screen.getByRole("region", { name: "Draft" })).toBeTruthy();
+    expect(onError).toHaveBeenCalledWith("Save failed");
   });
 
   it("shows the inline forward composer with the original attachments", async () => {
@@ -299,6 +553,7 @@ function renderPane(
     quickReplyDiscardVersion?: number;
     allowPermanentDelete?: boolean;
     strict?: boolean;
+    onDraftFinished?: () => void;
   } = {},
 ) {
   const pane = (
@@ -310,7 +565,9 @@ function renderPane(
       onModify={options.onModify ?? vi.fn(async () => undefined)}
       onError={vi.fn()}
       onQuickReplyDirtyChange={vi.fn()}
+      undoSendDelaySeconds={0}
       quickReplyDiscardVersion={options.quickReplyDiscardVersion}
+      onDraftFinished={options.onDraftFinished}
     />
   );
   return render(options.strict ? <StrictMode>{pane}</StrictMode> : pane);

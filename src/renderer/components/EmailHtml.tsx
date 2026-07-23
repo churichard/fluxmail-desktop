@@ -14,14 +14,20 @@ export function EmailHtml({
   blockRemoteImages = true,
   imageRelay = true,
   imageRelayAvailable = true,
+  findQuery = "",
+  activeFindMatch,
   onError,
+  onFindMatchCountChange,
   onTrackingPixelsChange,
 }: {
   message: MailMessage;
   blockRemoteImages?: boolean;
   imageRelay?: boolean;
   imageRelayAvailable?: boolean;
+  findQuery?: string;
+  activeFindMatch?: number;
   onError?(message: string): void;
+  onFindMatchCountChange?(count: number): void;
   onTrackingPixelsChange?(trackingPixels: TrackingPixelDetail[]): void;
 }) {
   const [remoteImages, setRemoteImages] = useState<{
@@ -37,6 +43,7 @@ export function EmailHtml({
     urls: Record<string, string>;
   }>({ messageId: message.id, urls: {} });
   const [height, setHeight] = useState(120);
+  const [frameVersion, setFrameVersion] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
   const clickCleanupRef = useRef<(() => void) | undefined>(undefined);
@@ -50,7 +57,9 @@ export function EmailHtml({
     imageRelayAvailable,
   );
   const currentPolicyKeyRef = useRef(policyKey);
+  const onFindMatchCountChangeRef = useRef(onFindMatchCountChange);
   currentPolicyKeyRef.current = policyKey;
+  onFindMatchCountChangeRef.current = onFindMatchCountChange;
   const currentRemoteImages =
     remoteImages.policyKey === policyKey
       ? remoteImages
@@ -159,6 +168,29 @@ export function EmailHtml({
     [onTrackingPixelsChange, rendered.trackingPixels],
   );
 
+  useEffect(() => {
+    const document = iframeRef.current?.contentDocument;
+    if (!document) return;
+    const matches = highlightEmailMatches(document, findQuery);
+    onFindMatchCountChangeRef.current?.(matches.length);
+    return () => clearEmailFindHighlights(document);
+  }, [findQuery, frameVersion, rendered.source]);
+
+  useEffect(() => {
+    const frame = iframeRef.current;
+    const document = frame?.contentDocument;
+    if (!document) return;
+    const active = activateEmailFindMatch(document, activeFindMatch);
+    if (frame && active) scrollEmailFindMatchIntoView(frame, active);
+  }, [activeFindMatch, findQuery, frameVersion, rendered.source]);
+
+  useEffect(
+    () => () => {
+      onFindMatchCountChangeRef.current?.(0);
+    },
+    [],
+  );
+
   return (
     <div className="email-html-wrap">
       {!loadImages && hasRemoteImages(rawHtml) ? (
@@ -183,6 +215,7 @@ export function EmailHtml({
         srcDoc={rendered.source}
         style={{ height }}
         onLoad={() => {
+          setFrameVersion((current) => current + 1);
           resizeObserverRef.current?.disconnect();
           frameResizeObserverRef.current?.disconnect();
           clickCleanupRef.current?.();
@@ -322,9 +355,257 @@ function buildEmailContent(
         link: "#315ecc",
       };
   return {
-    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
+    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}mark[data-fluxmail-find-match]{border-radius:2px;padding:0;background:#f9d65c;color:#191919;box-shadow:0 0 0 1px rgb(132 91 0 / .16)}mark[data-fluxmail-find-match].active{background:#f39a3b;box-shadow:0 0 0 2px rgb(181 90 0 / .4)}</style></head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
     trackingPixels: trackingReport.trackingPixels,
   };
+}
+
+const FIND_MATCH_ATTRIBUTE = "data-fluxmail-find-match";
+const FIND_TEXT_BOUNDARY = "\u0000";
+const BLOCK_TEXT_ELEMENTS = new Set([
+  "ADDRESS",
+  "ARTICLE",
+  "ASIDE",
+  "BLOCKQUOTE",
+  "BODY",
+  "DD",
+  "DIV",
+  "DL",
+  "DT",
+  "FIELDSET",
+  "FIGCAPTION",
+  "FIGURE",
+  "FOOTER",
+  "FORM",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "HEADER",
+  "HR",
+  "LI",
+  "MAIN",
+  "NAV",
+  "OL",
+  "P",
+  "PRE",
+  "SECTION",
+  "TABLE",
+  "TBODY",
+  "TD",
+  "TFOOT",
+  "TH",
+  "THEAD",
+  "TR",
+  "UL",
+]);
+
+interface FindTextSegment {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+interface FindNodeRange {
+  start: number;
+  end: number;
+  matchIndex: number;
+}
+
+export function highlightEmailMatches(document: Document, query: string): HTMLElement[] {
+  clearEmailFindHighlights(document);
+  if (!query) return [];
+  const root = document.getElementById("email-root") ?? document.body;
+  const segments: FindTextSegment[] = [];
+  let searchableText = "";
+  let previousNode: Text | undefined;
+  let previousBlock: Element | undefined;
+  const walker = document.createTreeWalker(root, document.defaultView?.NodeFilter.SHOW_TEXT ?? 4);
+  let current = walker.nextNode();
+  while (current) {
+    const node = current as Text;
+    if (node.data && isVisibleFindText(node, root)) {
+      const block = findTextBlock(node, root);
+      if (
+        segments.length &&
+        (block !== previousBlock || (previousNode && hasLineBreakBetween(previousNode, node, root)))
+      )
+        searchableText += FIND_TEXT_BOUNDARY;
+      const start = searchableText.length;
+      searchableText += node.data;
+      segments.push({ node, start, end: searchableText.length });
+      previousNode = node;
+      previousBlock = block;
+    }
+    current = walker.nextNode();
+  }
+
+  const pattern = new RegExp(escapeRegularExpression(query), "giu");
+  const nodeRanges = new Map<Text, FindNodeRange[]>();
+  const logicalMatches = [...searchableText.matchAll(pattern)];
+  let firstSegment = 0;
+  logicalMatches.forEach((match, matchIndex) => {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    while (firstSegment < segments.length && segments[firstSegment].end <= matchStart)
+      firstSegment += 1;
+    for (
+      let segmentIndex = firstSegment;
+      segmentIndex < segments.length && segments[segmentIndex].start < matchEnd;
+      segmentIndex += 1
+    ) {
+      const segment = segments[segmentIndex];
+      const start = Math.max(matchStart, segment.start) - segment.start;
+      const end = Math.min(matchEnd, segment.end) - segment.start;
+      if (start >= end) continue;
+      const ranges = nodeRanges.get(segment.node) ?? [];
+      ranges.push({ start, end, matchIndex });
+      nodeRanges.set(segment.node, ranges);
+    }
+  });
+
+  const matches: Array<HTMLElement | undefined> = Array.from({
+    length: logicalMatches.length,
+  });
+  for (const { node } of segments) {
+    const ranges = nodeRanges.get(node);
+    if (!ranges?.length) continue;
+    const fragment = document.createDocumentFragment();
+    let offset = 0;
+    for (const range of ranges) {
+      if (range.start > offset) fragment.append(node.data.slice(offset, range.start));
+      const mark = document.createElement("mark");
+      mark.setAttribute(FIND_MATCH_ATTRIBUTE, String(range.matchIndex));
+      mark.textContent = node.data.slice(range.start, range.end);
+      fragment.append(mark);
+      matches[range.matchIndex] ??= mark;
+      offset = range.end;
+    }
+    if (offset < node.data.length) fragment.append(node.data.slice(offset));
+    node.replaceWith(fragment);
+  }
+  return matches.filter((match): match is HTMLElement => Boolean(match));
+}
+
+export function clearEmailFindHighlights(document: Document): void {
+  const parents = new Set<Node>();
+  for (const mark of document.querySelectorAll<HTMLElement>(`mark[${FIND_MATCH_ATTRIBUTE}]`)) {
+    const parent = mark.parentNode;
+    if (parent) parents.add(parent);
+    mark.replaceWith(...mark.childNodes);
+  }
+  for (const parent of parents) parent.normalize();
+}
+
+function activateEmailFindMatch(document: Document, activeMatch?: number): HTMLElement | undefined {
+  const matches = [...document.querySelectorAll<HTMLElement>(`mark[${FIND_MATCH_ATTRIBUTE}]`)];
+  const activeValue = activeMatch === undefined ? undefined : String(activeMatch);
+  matches.forEach((match) =>
+    match.classList.toggle("active", match.getAttribute(FIND_MATCH_ATTRIBUTE) === activeValue),
+  );
+  const active =
+    activeValue === undefined
+      ? undefined
+      : matches.find((match) => match.getAttribute(FIND_MATCH_ATTRIBUTE) === activeValue);
+  return active;
+}
+
+function scrollEmailFindMatchIntoView(frame: HTMLIFrameElement, match: HTMLElement): void {
+  const scroller = frame.closest<HTMLElement>(".conversation-scroll");
+  if (!scroller) return;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const frameRect = frame.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  const matchTop = frameRect.top + matchRect.top;
+  const matchBottom = matchTop + matchRect.height;
+  if (matchTop >= scrollerRect.top && matchBottom <= scrollerRect.bottom) return;
+  const top =
+    scroller.scrollTop +
+    matchTop -
+    scrollerRect.top -
+    Math.max(0, (scroller.clientHeight - matchRect.height) / 2);
+  scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+}
+
+function isVisibleFindText(node: Text, root: Element): boolean {
+  let element = node.parentElement;
+  while (element) {
+    if (
+      element.matches(`style, script, noscript, template, mark[${FIND_MATCH_ATTRIBUTE}]`) ||
+      element.hasAttribute("hidden")
+    )
+      return false;
+    const inlineStyle = (element as HTMLElement).style;
+    if (
+      inlineStyle.display === "none" ||
+      inlineStyle.visibility === "hidden" ||
+      inlineStyle.visibility === "collapse" ||
+      inlineStyle.contentVisibility === "hidden"
+    )
+      return false;
+    const computedStyle = element.ownerDocument.defaultView?.getComputedStyle(element);
+    if (
+      computedStyle?.display === "none" ||
+      computedStyle?.visibility === "hidden" ||
+      computedStyle?.visibility === "collapse" ||
+      computedStyle?.contentVisibility === "hidden"
+    )
+      return false;
+    if (element === root) break;
+    element = element.parentElement;
+  }
+  const parent = node.parentElement;
+  if (parent && typeof parent.checkVisibility === "function") {
+    try {
+      return parent.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    } catch {
+      // Older Chromium versions may expose checkVisibility without supporting its options.
+      return parent.checkVisibility();
+    }
+  }
+  return true;
+}
+
+function findTextBlock(node: Text, root: Element): Element {
+  let element = node.parentElement;
+  while (element && element !== root) {
+    const display =
+      element.ownerDocument.defaultView?.getComputedStyle(element).display ||
+      (element as HTMLElement).style.display;
+    if (
+      display
+        ? display !== "contents" && !display.startsWith("inline")
+        : BLOCK_TEXT_ELEMENTS.has(element.tagName)
+    )
+      return element;
+    element = element.parentElement;
+  }
+  return root;
+}
+
+function hasLineBreakBetween(left: Text, right: Text, root: Element): boolean {
+  let current: Node | null = left;
+  while ((current = nextNode(current, root))) {
+    if (current === right) return false;
+    if (current.nodeType === 1 && (current as Element).tagName === "BR") return true;
+  }
+  return false;
+}
+
+function nextNode(node: Node, root: Element): Node | null {
+  if (node.firstChild) return node.firstChild;
+  let current: Node | null = node;
+  while (current && current !== root) {
+    if (current.nextSibling) return current.nextSibling;
+    current = current.parentNode;
+  }
+  return null;
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function sanitizeEmailHtml(rawHtml: string): string {

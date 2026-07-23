@@ -35,6 +35,29 @@ interface CachedThreadRow {
   folder_roles_json: string;
 }
 
+interface CachedMessageRow {
+  account_id: string;
+  message_id: string;
+  thread_id: string;
+  payload_json: string;
+  date: string;
+}
+
+interface CachedThreadBodyRow {
+  account_id: string;
+  thread_id: string;
+  encrypted_payload: Buffer;
+  hydrated_at: number;
+}
+
+interface CachedThreadState {
+  accountId: string;
+  threadId: string;
+  row?: CachedThreadRow;
+  messages: CachedMessageRow[];
+  body?: CachedThreadBodyRow;
+}
+
 const CACHE_SCHEMA_VERSION = 3;
 
 export class MailCache {
@@ -125,6 +148,12 @@ export class MailCache {
         cc_raw TEXT NOT NULL,
         bcc_raw TEXT NOT NULL,
         PRIMARY KEY (account_id, draft_id)
+      );
+      CREATE TEMP TABLE IF NOT EXISTS thread_mutation_owners (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        mutation_id TEXT NOT NULL,
+        PRIMARY KEY (account_id, thread_id)
       );
     `);
     const storedVersion = Number(
@@ -299,7 +328,11 @@ export class MailCache {
     })();
   }
 
-  putThread(account: AccountInfo, thread: Thread): MailThread {
+  putThread(
+    account: AccountInfo,
+    thread: Thread,
+    options: { mutationId?: string } = {},
+  ): MailThread {
     const cachedMessageIds = this.messageIds(account.id, thread.id);
     const currentMessageIds = new Set(thread.messages.map((message) => message.id));
     const removeMessage = this.db.prepare(
@@ -309,7 +342,7 @@ export class MailCache {
       for (const messageId of cachedMessageIds)
         if (!currentMessageIds.has(messageId)) removeMessage.run(account.id, messageId);
       this.putMessages(account, thread.messages);
-      this.rebuildThread(account, thread.id);
+      this.rebuildThread(account, thread.id, options.mutationId);
     })();
     const normalized = this.toMailThread(account, thread);
     const encrypted = this.cipher.encrypt(JSON.stringify(normalized));
@@ -521,8 +554,131 @@ export class MailCache {
       .get(accountId, threadId) as CachedThreadRow | undefined;
   }
 
+  snapshotThreadState(accountId: string, threadId: string): CachedThreadState {
+    return {
+      accountId,
+      threadId,
+      row: this.snapshotThread(accountId, threadId),
+      messages: this.db
+        .prepare(
+          `SELECT account_id, message_id, thread_id, payload_json, date
+           FROM messages
+           WHERE account_id = ? AND thread_id = ?`,
+        )
+        .all(accountId, threadId) as CachedMessageRow[],
+      body: this.db
+        .prepare(
+          `SELECT account_id, thread_id, encrypted_payload, hydrated_at
+           FROM thread_bodies
+           WHERE account_id = ? AND thread_id = ?`,
+        )
+        .get(accountId, threadId) as CachedThreadBodyRow | undefined,
+    };
+  }
+
+  claimMutation(mutationId: string, targets: Array<{ accountId: string; threadId: string }>): void {
+    const claim = this.db.prepare(
+      `INSERT INTO thread_mutation_owners(account_id, thread_id, mutation_id)
+       VALUES (?, ?, ?)
+       ON CONFLICT(account_id, thread_id) DO UPDATE SET mutation_id = excluded.mutation_id`,
+    );
+    this.db.transaction(() => {
+      for (const target of targets) claim.run(target.accountId, target.threadId, mutationId);
+    })();
+  }
+
+  ownsMutation(accountId: string, threadId: string, mutationId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          `SELECT 1 FROM thread_mutation_owners
+           WHERE account_id = ? AND thread_id = ? AND mutation_id = ?`,
+        )
+        .get(accountId, threadId, mutationId),
+    );
+  }
+
+  releaseMutation(
+    mutationId: string,
+    targets: Array<{ accountId: string; threadId: string }>,
+  ): void {
+    const release = this.db.prepare(
+      `DELETE FROM thread_mutation_owners
+       WHERE account_id = ? AND thread_id = ? AND mutation_id = ?`,
+    );
+    this.db.transaction(() => {
+      for (const target of targets) release.run(target.accountId, target.threadId, mutationId);
+    })();
+  }
+
   restoreThread(row: CachedThreadRow): void {
     this.writeThread(row);
+  }
+
+  restoreThreadIfOwned(row: CachedThreadRow, mutationId: string): boolean {
+    if (!this.ownsMutation(row.account_id, row.thread_id, mutationId)) return false;
+    this.writeThread(row);
+    return true;
+  }
+
+  restoreThreadStateIfOwned(state: CachedThreadState, mutationId: string): boolean {
+    if (!this.ownsMutation(state.accountId, state.threadId, mutationId)) return false;
+    const putMessage = this.db.prepare(
+      `INSERT OR REPLACE INTO messages(account_id, message_id, thread_id, payload_json, date)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM messages WHERE account_id = ? AND thread_id = ?")
+        .run(state.accountId, state.threadId);
+      for (const message of state.messages)
+        putMessage.run(
+          message.account_id,
+          message.message_id,
+          message.thread_id,
+          message.payload_json,
+          message.date,
+        );
+
+      const searchKey = `${state.accountId}:${state.threadId}`;
+      if (state.row) {
+        this.writeThread(state.row);
+      } else {
+        this.db
+          .prepare("DELETE FROM threads WHERE account_id = ? AND thread_id = ?")
+          .run(state.accountId, state.threadId);
+        this.db.prepare("DELETE FROM thread_search WHERE key = ?").run(searchKey);
+      }
+
+      if (state.body) {
+        this.db
+          .prepare(
+            `INSERT OR REPLACE INTO thread_bodies(
+               account_id, thread_id, encrypted_payload, hydrated_at
+             ) VALUES (?, ?, ?, ?)`,
+          )
+          .run(
+            state.body.account_id,
+            state.body.thread_id,
+            state.body.encrypted_payload,
+            state.body.hydrated_at,
+          );
+      } else {
+        this.db
+          .prepare("DELETE FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+          .run(state.accountId, state.threadId);
+      }
+    })();
+    return true;
+  }
+
+  putThreadIfOwned(
+    account: AccountInfo,
+    thread: Thread,
+    mutationId: string,
+  ): MailThread | undefined {
+    if (!this.ownsMutation(account.id, thread.id, mutationId)) return undefined;
+    return this.putThread(account, thread, { mutationId });
   }
 
   applyAction(accountId: string, threadId: string, action: ModifyActionInput): void {
@@ -551,8 +707,25 @@ export class MailCache {
     if (action.type === "delete") this.hideThread(accountId, threadId);
   }
 
+  applyActionIfOwned(
+    accountId: string,
+    threadId: string,
+    action: ModifyActionInput,
+    mutationId: string,
+  ): boolean {
+    if (!this.ownsMutation(accountId, threadId, mutationId)) return false;
+    this.applyAction(accountId, threadId, action);
+    return true;
+  }
+
   finalizeDelete(accountId: string, threadId: string): void {
     this.deleteThread(accountId, threadId);
+  }
+
+  finalizeDeleteIfOwned(accountId: string, threadId: string, mutationId: string): boolean {
+    if (!this.ownsMutation(accountId, threadId, mutationId)) return false;
+    this.deleteThread(accountId, threadId);
+    return true;
   }
 
   deleteDraft(account: AccountInfo, draftId: string): void {
@@ -716,6 +889,7 @@ export class MailCache {
         "notification_seen",
         "notification_state",
         "draft_recipient_fields",
+        "thread_mutation_owners",
       ]) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
       }
@@ -803,7 +977,14 @@ export class MailCache {
     }
   }
 
-  private rebuildThread(account: AccountInfo, threadId: string): void {
+  private rebuildThread(account: AccountInfo, threadId: string, mutationId?: string): void {
+    const owner = this.db
+      .prepare(
+        `SELECT mutation_id FROM thread_mutation_owners
+         WHERE account_id = ? AND thread_id = ?`,
+      )
+      .get(account.id, threadId) as { mutation_id: string } | undefined;
+    if (owner && owner.mutation_id !== mutationId) return;
     const messages = (
       this.db
         .prepare(

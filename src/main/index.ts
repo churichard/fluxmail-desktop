@@ -46,6 +46,9 @@ import {
   licenseKeySchema,
   mailForwardInputSchema,
   mailModifyInputSchema,
+  mailModifyResultSchema,
+  mailUndoInputSchema,
+  mailUndoResultSchema,
   sendInputSchema,
   sendResultSchema,
   scheduledSendCancelInputSchema,
@@ -127,6 +130,11 @@ if (!app.isPackaged && process.env.FLUXMAIL_DESKTOP_TEST_DATA_DIR) {
 }
 
 if (!app.requestSingleInstanceLock()) {
+  if (!app.isPackaged) {
+    console.error(
+      "Fluxmail could not start because another instance is already running. Quit Fluxmail and stop any other Fluxmail development session, then try again.",
+    );
+  }
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -160,7 +168,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       registerIpc();
       createWindow();
-      configureDefaultDevToolsDock();
+      configureApplicationMenu();
       if (!startupError) {
         void refresh("startup");
         powerMonitor.on("resume", () => void refresh("resume"));
@@ -304,13 +312,28 @@ function createWindow(): void {
   }
 }
 
-function configureDefaultDevToolsDock(): void {
+function configureApplicationMenu(): void {
   const menu = Menu.getApplicationMenu();
   if (!menu) return;
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menu.items.map(devToolsMenuItemTemplate)));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menu.items.map(applicationMenuItemTemplate)));
 }
 
-function devToolsMenuItemTemplate(item: MenuItem): MenuItemConstructorOptions {
+function applicationMenuItemTemplate(item: MenuItem): MenuItemConstructorOptions {
+  if (item.role?.toLowerCase() === "editmenu") {
+    return {
+      label: item.label,
+      submenu: [
+        ...(item.submenu?.items.map(applicationMenuItemTemplate) ?? []),
+        { type: "separator" },
+        {
+          id: "find-in-conversation",
+          label: "Find in Conversation",
+          accelerator: "CmdOrCtrl+F",
+          click: () => sendEvent({ type: "find-in-conversation-requested" }),
+        },
+      ],
+    };
+  }
   if (item.role?.toLowerCase() === "toggledevtools") {
     return {
       id: "toggle-devtools-bottom",
@@ -330,7 +353,7 @@ function devToolsMenuItemTemplate(item: MenuItem): MenuItemConstructorOptions {
   return {
     id: item.id || undefined,
     label: item.label,
-    submenu: item.submenu?.items.map(devToolsMenuItemTemplate),
+    submenu: item.submenu?.items.map(applicationMenuItemTemplate),
     accelerator: item.accelerator ?? undefined,
     click: item.submenu ? undefined : (item.click as MenuItemConstructorOptions["click"]),
     enabled: item.enabled,
@@ -369,6 +392,7 @@ function registerIpc(): void {
       preferences: {
         appearance: requirePreferences().appearance(),
         dockBadge: requirePreferences().dockBadge(),
+        openNextAfterArchive: requirePreferences().openNextAfterArchive(),
         blockRemoteImages: requirePreferences().blockRemoteImages(),
         imageRelay: requirePreferences().imageRelay(),
         undoSendDelaySeconds: requirePreferences().undoSendDelaySeconds(),
@@ -425,8 +449,14 @@ function registerIpc(): void {
     });
     return thread;
   });
-  handle(IPC.mailModify, mailModifyInputSchema, z.void(), async ({ targets, action }) =>
-    requireRuntime().modify(targets, action),
+  handle(
+    IPC.mailModify,
+    mailModifyInputSchema,
+    mailModifyResultSchema,
+    async ({ targets, action, undoable }) => requireRuntime().modify(targets, action, undoable),
+  );
+  handle(IPC.mailUndo, mailUndoInputSchema, mailUndoResultSchema, async ({ token }) =>
+    requireRuntime().undo(token),
   );
   handle(
     IPC.mailForward,
@@ -504,6 +534,9 @@ function registerIpc(): void {
     updateDockBadge();
     return value;
   });
+  handle(IPC.preferencesOpenNextAfterArchiveSet, z.boolean(), z.boolean(), (enabled) =>
+    requirePreferences().setOpenNextAfterArchive(enabled),
+  );
   handle(IPC.preferencesBlockRemoteImagesSet, z.boolean(), z.boolean(), (enabled) =>
     requirePreferences().setBlockRemoteImages(enabled),
   );

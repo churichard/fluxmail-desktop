@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAnalytics } from "../src/main/analytics";
 import {
   buildDemoMessages,
@@ -9,6 +9,10 @@ import {
 import { FakeFluxmailRuntime } from "../src/main/fake-runtime";
 
 const anchor = new Date(2026, 6, 20, 12, 0, 0);
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("desktop demo fixtures", () => {
   it("builds the complete realistic inbox with stable identifiers", () => {
@@ -130,6 +134,50 @@ describe("desktop demo fixtures", () => {
     );
     expect((await runtime.listThreads({ view: "sent" })).items).toContainEqual(
       expect.objectContaining({ id: target.threadId }),
+    );
+  });
+
+  it("keeps the latest requested undo when fake mutations finish out of order", async () => {
+    vi.stubEnv("FLUXMAIL_DESKTOP_FAKE_ARCHIVE_DELAY_MS", "20");
+    const runtime = new FakeFluxmailRuntime({
+      analytics: {} as DesktopAnalytics,
+      onCacheChanged() {},
+      onLicenseChanged() {},
+    });
+    const inbox = (await runtime.listThreads({ view: "inbox" })).items;
+    const archiveTarget = inbox[0]!;
+    const starTarget = inbox.find((thread) => thread.id !== archiveTarget.id && !thread.starred)!;
+
+    const delayedArchive = runtime.modify([{ threadId: archiveTarget.id }], { type: "archive" });
+    const latest = await runtime.modify([{ threadId: starTarget.id }], {
+      type: "star",
+    });
+
+    expect(latest.undoToken).toBeTruthy();
+    await expect(delayedArchive).resolves.toEqual({});
+    await expect(runtime.undo(latest.undoToken!)).resolves.toEqual({ undone: true });
+    expect(
+      (await runtime.listThreads({ view: "all" })).items.find(
+        (thread) => thread.id === starTarget.id,
+      )?.starred,
+    ).toBe(false);
+  });
+
+  it("invalidates fake undo when a permanent action supersedes its target", async () => {
+    const runtime = new FakeFluxmailRuntime({
+      analytics: {} as DesktopAnalytics,
+      onCacheChanged() {},
+      onLicenseChanged() {},
+    });
+    const thread = (await runtime.listThreads({ view: "inbox" })).items[0]!;
+    const target = [{ threadId: thread.id }];
+
+    const starred = await runtime.modify(target, { type: "star" });
+    await runtime.modify(target, { type: "delete" });
+
+    await expect(runtime.undo(starred.undoToken!)).resolves.toEqual({ undone: false });
+    expect((await runtime.listThreads({ view: "all" })).items).not.toContainEqual(
+      expect.objectContaining({ id: thread.id }),
     );
   });
 });

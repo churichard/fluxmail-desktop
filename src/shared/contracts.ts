@@ -156,7 +156,17 @@ export type ModifyActionInput = z.infer<typeof modifyActionSchema>;
 export const mailModifyInputSchema = z.object({
   targets: z.array(threadTargetSchema).min(1),
   action: modifyActionSchema,
+  undoable: z.boolean().optional(),
 });
+
+export const mailModifyResultSchema = z.object({
+  undoToken: z.string().optional(),
+});
+export type MailModifyResult = z.infer<typeof mailModifyResultSchema>;
+
+export const mailUndoInputSchema = z.object({ token: z.string() });
+export const mailUndoResultSchema = z.object({ undone: z.boolean() });
+export type MailUndoResult = z.infer<typeof mailUndoResultSchema>;
 
 export const composeAttachmentSchema = z.object({
   token: z.string(),
@@ -358,6 +368,7 @@ export const bootstrapSchema = z.object({
   preferences: z.object({
     appearance: appearancePreferenceSchema,
     dockBadge: z.boolean(),
+    openNextAfterArchive: z.boolean(),
     blockRemoteImages: z.boolean(),
     imageRelay: z.boolean(),
     undoSendDelaySeconds: undoSendDelaySecondsSchema,
@@ -423,6 +434,7 @@ export const appEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("license-changed") }),
   z.object({ type: z.literal("new-mail"), count: z.number().int().positive() }),
   z.object({ type: z.literal("window-close-requested") }),
+  z.object({ type: z.literal("find-in-conversation-requested") }),
 ]);
 export type AppEvent = z.infer<typeof appEventSchema>;
 
@@ -441,7 +453,9 @@ export interface FluxmailDesktopApi {
     modify(input: {
       targets: Array<z.infer<typeof threadTargetSchema>>;
       action: ModifyActionInput;
-    }): Promise<void>;
+      undoable?: boolean;
+    }): Promise<MailModifyResult>;
+    undo(input: z.infer<typeof mailUndoInputSchema>): Promise<MailUndoResult>;
     forward(input: {
       target: z.infer<typeof threadTargetSchema>;
       messageId: string;
@@ -493,6 +507,7 @@ export interface FluxmailDesktopApi {
   preferences: {
     setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
     setDockBadge(enabled: boolean): Promise<boolean>;
+    setOpenNextAfterArchive(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
     setImageRelay(enabled: boolean): Promise<boolean>;
     setUndoSendDelaySeconds(delay: UndoSendDelaySeconds): Promise<UndoSendDelaySeconds>;
@@ -523,6 +538,7 @@ export const IPC = {
   mailSearch: "fluxmail:mail:search",
   mailThread: "fluxmail:mail:thread",
   mailModify: "fluxmail:mail:modify",
+  mailUndo: "fluxmail:mail:undo",
   mailForward: "fluxmail:mail:forward",
   draftSave: "fluxmail:draft:save",
   draftDelete: "fluxmail:draft:delete",
@@ -540,6 +556,7 @@ export const IPC = {
   telemetrySet: "fluxmail:telemetry:set",
   preferencesAppearanceSet: "fluxmail:preferences:appearance:set",
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
+  preferencesOpenNextAfterArchiveSet: "fluxmail:preferences:open-next-after-archive:set",
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   licenseActivate: "fluxmail:license:activate",
   preferencesImageRelaySet: "fluxmail:preferences:image-relay:set",

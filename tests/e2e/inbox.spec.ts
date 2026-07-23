@@ -691,6 +691,50 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(messageFrame.locator('img[src="https://images.invalid/welcome.png"]')).toHaveCount(
       1,
     );
+    await messageFrame.locator("#email-root").click();
+    const findMenuItem = await electronApp.evaluate(({ Menu }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById("find-in-conversation");
+      return item ? { label: item.label, accelerator: item.accelerator } : undefined;
+    });
+    expect(findMenuItem).toEqual({
+      label: "Find in Conversation",
+      accelerator: "CmdOrCtrl+F",
+    });
+    await electronApp.evaluate(({ Menu }) => {
+      Menu.getApplicationMenu()?.getMenuItemById("find-in-conversation")?.click();
+    });
+    const conversationFind = page.getByRole("textbox", { name: "Find in conversation" });
+    await expect(conversationFind).toBeFocused();
+    await conversationFind.fill("inbox");
+    await expect(page.locator(".message-find-status")).toHaveText("1 of 1");
+    await expect(
+      messageFrame.locator("mark[data-fluxmail-find-match].active", { hasText: "inbox" }),
+    ).toHaveCount(1);
+    await messageFrame.locator("#email-root").evaluate((root) => {
+      root.insertAdjacentHTML(
+        "beforeend",
+        '<style>.hidden-find-probe{display:none}</style><p>Order <strong>#123</strong> is ready.</p><p class="hidden-find-probe">Hidden preheader</p><p>Scroll target</p><div style="height:2400px"></div><p>Scroll target</p>',
+      );
+    });
+    await conversationFind.fill("Order #123");
+    await expect(page.locator(".message-find-status")).toHaveText("1 of 1");
+    await expect(messageFrame.locator('mark[data-fluxmail-find-match="0"].active')).toHaveCount(2);
+    await conversationFind.fill("Hidden preheader");
+    await expect(page.locator(".message-find-status")).toHaveText("No matches");
+    await conversationFind.fill("Scroll target");
+    await expect(page.locator(".message-find-status")).toHaveText("1 of 2");
+    const conversationScroll = page.locator(".conversation-scroll");
+    await conversationScroll.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await conversationFind.press("Enter");
+    await expect(page.locator(".message-find-status")).toHaveText("2 of 2");
+    await expect
+      .poll(() => conversationScroll.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(1_000);
+    await conversationFind.press("Escape");
+    await expect(conversationFind).toHaveCount(0);
+    await expect(messageFrame.locator("mark[data-fluxmail-find-match]")).toHaveCount(0);
     await messageFrame.locator("#email-root").evaluate((root) => {
       root.innerHTML = '<div style="height: 4200px">Long message</div>';
     });
@@ -774,12 +818,10 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await page.locator(".quick-reply").getByRole("button", { name: "Cancel" }).click();
 
     await page.locator(".reading-toolbar").getByRole("button", { name: "Archive" }).click();
-    await expect(page.locator(".thread-row.active")).toHaveCount(0, {
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday", {
       timeout: 200,
     });
-    await expect(page.locator(".reading-placeholder")).toBeVisible({
-      timeout: 200,
-    });
+    await expect(page.locator(".thread-row.active")).toContainText("Receipt for Tuesday");
     await expect(page.getByText("Welcome to Fluxmail", { exact: true })).toHaveCount(0);
 
     const search = page.getByRole("combobox", { name: "Search mail" });
@@ -808,26 +850,29 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await draftsNav.click();
     const launchDraft = page.locator(".thread-row").filter({ hasText: "Launch notes" });
     await expect(launchDraft).toBeVisible();
+    await expect(launchDraft.getByText("Draft", { exact: true })).toBeVisible();
     await launchDraft.locator(".thread-open").click();
-    const resumedDraft = page.getByRole("dialog", { name: "New message" });
-    await expect(resumedDraft.locator("header strong")).toHaveText("Launch notes");
+    const resumedDraft = page.getByRole("region", { name: "Draft" });
+    await expect(resumedDraft.locator("header strong")).toHaveText("Draft");
     await expect(resumedDraft.locator(".recipient-summary")).toContainText("sam@example.test");
+    await expect(resumedDraft.getByLabel("Subject")).toHaveValue("Launch notes");
     await expect(resumedDraft.locator('[contenteditable="true"]')).toContainText(
       "The first draft is ready.",
     );
     await expect(resumedDraft.locator(".compose-attachments")).toContainText("launch-notes.pdf");
-    await expect(resumedDraft.getByText("Draft saved", { exact: true })).toBeVisible();
+    await expect(resumedDraft.getByText("Saved", { exact: true })).toBeVisible();
     await resumedDraft.getByRole("button", { name: "Edit recipients" }).click();
     await resumedDraft
       .locator(".recipient-row")
       .filter({ hasText: /^To/ })
       .locator("input")
       .fill("r");
-    await resumedDraft.getByRole("button", { name: "Close compose" }).click();
+    await inboxNav.click();
     await expect(resumedDraft).toBeHidden();
+    await draftsNav.click();
     await launchDraft.locator(".thread-open").click();
     await expect(resumedDraft.locator(".recipient-summary")).toContainText("r");
-    await resumedDraft.getByRole("button", { name: "Close compose" }).click();
+    await inboxNav.click();
     await expect(resumedDraft).toBeHidden();
 
     await page.keyboard.press("Meta+c");
@@ -927,6 +972,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       "Plan",
       "Accounts",
       "Appearance",
+      "Behavior",
       "Sending",
       "Privacy",
       "About",
@@ -971,6 +1017,14 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect.poll(() => electronApp.evaluate(({ app }) => app.dock?.getBadge())).toBe("");
     await dockBadgeCheckbox.click();
     await expect(dockBadgeCheckbox).toHaveAttribute("aria-checked", "true");
+    const openNextAfterArchiveCheckbox = settings.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "false");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(
       settings.getByText(
@@ -1073,7 +1127,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   }
 });
 
-test("archives from a row and the email iframe without transferring focus", async () => {
+test("advances after archive unless the setting is disabled", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
   const electronApp = await electron.launch({
     args: [mockKeychainArgument, process.cwd()],
@@ -1094,13 +1148,27 @@ test("archives from a row and the email iframe without transferring focus", asyn
     await welcomeThread.locator(".thread-open").click();
     await page.keyboard.press("e");
 
-    await expect(page.locator(".reading-placeholder")).toBeVisible();
     await expect(welcomeThread).toHaveCount(0);
-    await expect(page.locator(".thread-row").first()).toBeVisible();
+    await expect(page.locator(".conversation-title h1")).toHaveText("Receipt for Tuesday");
+    await expect(page.locator(".thread-row.active")).toContainText("Receipt for Tuesday");
     await expect(page.locator(".thread-open:focus")).toHaveCount(0);
 
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByText("Action undone")).toBeVisible();
+    await expect(
+      page.locator(".thread-row").filter({ hasText: "Welcome to Fluxmail" }),
+    ).toBeVisible();
+
     const nextThread = page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" });
-    await nextThread.locator(".thread-open").click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    const openNextAfterArchiveCheckbox = settings.getByRole("checkbox", {
+      name: "Open next conversation after archiving",
+    });
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "true");
+    await openNextAfterArchiveCheckbox.click();
+    await expect(openNextAfterArchiveCheckbox).toHaveAttribute("aria-checked", "false");
+    await settings.getByRole("button", { name: "Close settings" }).click();
 
     const messageFrame = page.frameLocator('iframe[title="Email message"]');
     await messageFrame.locator("#email-root").click();
@@ -1160,7 +1228,7 @@ test("opens DevTools at the bottom without changing window drag regions", async 
   }
 });
 
-test("saves a draft before closing the window", async () => {
+test("saves modal and inline drafts before closing the window", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-window-close-e2e-"));
   const electronApp = await electron.launch({
     args: [mockKeychainArgument, process.cwd()],
@@ -1194,6 +1262,25 @@ test("saves a draft before closing the window", async () => {
     await expect(reopened.getByRole("heading", { name: "Inbox" })).toBeVisible();
     await reopened.getByRole("button", { name: "Drafts" }).click();
     await expect(reopened.getByText("Saved during window close", { exact: true })).toBeVisible();
+
+    const savedDraft = reopened
+      .locator(".thread-row")
+      .filter({ hasText: "Saved during window close" });
+    await savedDraft.locator(".thread-open").click();
+    const inlineDraft = reopened.getByRole("region", { name: "Draft" });
+    await inlineDraft.getByLabel("Subject").fill("Inline draft saved during window close");
+
+    const finalWindow = electronApp.waitForEvent("window");
+    const reopenedClosed = reopened.waitForEvent("close");
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+    await reopenedClosed;
+    await electronApp.evaluate(({ app }) => app.emit("activate"));
+    const finalPage = await finalWindow;
+    await expect(finalPage.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await finalPage.getByRole("button", { name: "Drafts" }).click();
+    await expect(
+      finalPage.getByText("Inline draft saved during window close", { exact: true }),
+    ).toBeVisible();
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

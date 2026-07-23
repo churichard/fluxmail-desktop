@@ -1071,8 +1071,15 @@ textarea:focus-visible,
   letter-spacing: -0.006em;
 }
 
-.subject-line > span:first-child {
+.subject-line > .truncate {
   min-width: 0;
+}
+
+.subject-line .thread-draft-label {
+  min-width: auto;
+  flex: 0 0 auto;
+  color: var(--danger);
+  font-weight: 680;
 }
 
 .message-count {
@@ -1317,6 +1324,73 @@ textarea:focus-visible,
 .reading-toolbar input,
 .reading-toolbar select {
   -webkit-app-region: no-drag;
+}
+
+.message-find-bar {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--hairline);
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+  color: var(--muted);
+}
+
+.message-find-bar > svg {
+  flex: 0 0 auto;
+  margin: 0 2px;
+}
+
+.message-find-bar input {
+  width: min(260px, 48%);
+  min-width: 120px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 6px 8px;
+  outline: none;
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.message-find-bar input:focus {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.message-find-status {
+  min-width: 58px;
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.message-find-bar button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.message-find-bar button:hover:not(:disabled) {
+  background: var(--field);
+  color: var(--ink);
+}
+
+.message-find-bar button:disabled {
+  opacity: 0.35;
 }
 
 .toolbar-group {
@@ -1798,6 +1872,32 @@ textarea:focus-visible,
 .compose-dialog > header .icon-button:hover {
   background: var(--field-strong);
   color: var(--ink);
+}
+
+.inline-draft-composer {
+  width: 100%;
+  height: auto;
+  min-height: 350px;
+  margin-top: 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.inline-draft-composer > header {
+  min-height: 40px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.inline-draft-composer > header .inline-draft-label {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.inline-draft-composer .compose-editor {
+  min-height: 150px;
+  max-height: 360px;
 }
 
 .compose-fields {
@@ -2644,9 +2744,12 @@ textarea:focus-visible,
 }
 
 .toast .toast-action {
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: rgb(255 255 255 / 0.1);
   color: white;
   font-size: 11px;
-  font-weight: 680;
+  font-weight: 600;
 }
 
 :root[data-theme="dark"] {

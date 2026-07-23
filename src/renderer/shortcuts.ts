@@ -13,6 +13,7 @@ export const KEYBOARD_SHORTCUTS = {
   reply: { display: "R", keys: "R" },
   replyAll: { display: "A", keys: "A" },
   forward: { display: "F", keys: "F" },
+  find: { display: "⌘F", keys: "Meta+F Control+F" },
   refresh: { display: "⌘R", keys: "Meta+R" },
   bold: { display: "⌘B", keys: "Meta+B" },
   italic: { display: "⌘I", keys: "Meta+I" },
