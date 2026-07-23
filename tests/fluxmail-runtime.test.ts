@@ -1095,6 +1095,164 @@ describe("FluxmailRuntime conversation mutations", () => {
     expect(modify.mock.calls.map((call) => call[2])).toEqual(["star", "markRead", "markUnread"]);
   });
 
+  it("undoes only the fields changed by the original action", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({
+      id: "message-1",
+      threadId: "thread-1",
+      labels: ["Customer"],
+    });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const modify = vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+      if (action === "star") remote.flags.starred = true;
+      if (action === "unstar") remote.flags.starred = false;
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "star",
+    });
+    remote.flags.read = true;
+    remote.labels = ["Customer", "Updated elsewhere"];
+
+    await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: true });
+    expect(remote.flags).toMatchObject({ read: true, starred: false });
+    expect(remote.labels).toEqual(["Customer", "Updated elsewhere"]);
+    expect(cache.snapshotThread(account.id, remote.threadId)).toMatchObject({
+      unread: 0,
+      starred: 0,
+      labels_json: JSON.stringify(["Customer", "Updated elsewhere"]),
+    });
+    expect(modify.mock.calls.map((call) => call[2])).toEqual(["star", "unstar"]);
+  });
+
+  it("restores the complete cached thread when undo fails offline", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({
+      id: "message-1",
+      threadId: "thread-1",
+      body: { text: "Current provider body" },
+    });
+    cache.putMessages(account, [structuredClone(remote)]);
+    let offline = false;
+    const getThread = vi.fn(async () => {
+      if (offline) throw new Error("The provider is offline");
+      return {
+        id: remote.threadId,
+        subject: remote.subject,
+        messages: [structuredClone(remote)],
+      };
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread,
+        modify: vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+          if (action === "star") remote.flags.starred = true;
+        }),
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "star",
+    });
+    expect(cache.getThread(account.id, remote.threadId)?.messages[0]?.flags.starred).toBe(true);
+
+    offline = true;
+    await expect(runtime.undo(result.undoToken!)).rejects.toThrow("The provider is offline");
+
+    expect(cache.snapshotThread(account.id, remote.threadId)?.starred).toBe(1);
+    expect(cache.getThread(account.id, remote.threadId)?.messages[0]).toMatchObject({
+      flags: { starred: true },
+      body: { text: "Current provider body" },
+    });
+  });
+
+  it("undoes only labels added by the original action", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({
+      id: "message-1",
+      threadId: "thread-1",
+      labels: ["Existing"],
+    });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const modify = vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+      if (typeof action !== "object") return;
+      if ("addLabels" in action)
+        remote.labels = [...new Set([...(remote.labels ?? []), ...action.addLabels])];
+      if ("removeLabels" in action)
+        remote.labels = (remote.labels ?? []).filter(
+          (label) => !action.removeLabels.includes(label),
+        );
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "addLabels",
+      labels: ["Action label"],
+    });
+    remote.labels = [...(remote.labels ?? []), "Updated elsewhere"];
+
+    await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: true });
+    expect(remote.labels).toEqual(["Existing", "Updated elsewhere"]);
+    expect(modify.mock.calls.map((call) => call[2])).toEqual([
+      { addLabels: ["Action label"] },
+      { removeLabels: ["Action label"] },
+    ]);
+  });
+
+  it("does not offer undo when a successful action cannot rehydrate its target", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const getThread = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: remote.threadId,
+        subject: remote.subject,
+        messages: [structuredClone(remote)],
+      })
+      .mockRejectedValueOnce(new Error("The moved message has no known provider location"));
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread,
+        modify: vi.fn(async () => undefined),
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    await expect(
+      runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+        type: "archive",
+      }),
+    ).resolves.toEqual({});
+    expect(getThread).toHaveBeenCalledTimes(2);
+  });
+
   it("restores Gmail flags without modifying their system labels", async () => {
     const cache = createCache();
     const remote = inboxMessage({
@@ -1133,6 +1291,72 @@ describe("FluxmailRuntime conversation mutations", () => {
 
     await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: true });
     expect(modify.mock.calls.map((call) => call[2])).toEqual(["markRead", "markUnread"]);
+  });
+
+  it("undoes trash for Gmail Sent messages without moving to the reserved Sent role", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({
+      id: "message-1",
+      threadId: "thread-1",
+      folder: { id: "SENT", name: "Sent", role: "sent" },
+    });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const modify = vi.fn(async (_accountId: string, _ids: string[], action: ModifyAction) => {
+      if (action === "trash") remote.folder = { id: "TRASH", name: "Trash", role: "trash" };
+      if (action === "untrash") remote.folder = { id: "SENT", name: "Sent", role: "sent" };
+      if (typeof action === "object" && "move" in action && action.move.toLowerCase() === "sent")
+        throw new Error("Gmail does not allow moving to Sent");
+    });
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify,
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "trash",
+    });
+
+    await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: true });
+    expect(modify.mock.calls.map((call) => call[2])).toEqual(["trash", "untrash", "archive"]);
+    expect(cache.snapshotThread(account.id, remote.threadId)?.folder_roles_json).toBe(
+      JSON.stringify(["sent"]),
+    );
+  });
+
+  it("invalidates undo when its account is removed", async () => {
+    const cache = createCache();
+    const remote = inboxMessage({ id: "message-1", threadId: "thread-1" });
+    cache.putMessages(account, [structuredClone(remote)]);
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        getThread: vi.fn(async () => ({
+          id: remote.threadId,
+          subject: remote.subject,
+          messages: [structuredClone(remote)],
+        })),
+        modify: vi.fn(async () => {
+          remote.flags.starred = true;
+        }),
+      },
+      onCacheChanged: vi.fn(),
+    });
+    const result = await runtime.modify([{ accountId: account.id, threadId: remote.threadId }], {
+      type: "star",
+    });
+
+    runtime.removeAccount(account.id);
+
+    await expect(runtime.undo(result.undoToken!)).resolves.toEqual({ undone: false });
+    expect(cache.accountIds()).toEqual([]);
   });
 
   it("keeps the latest requested undo when account mutations finish out of order", async () => {
@@ -1989,6 +2213,7 @@ function createRuntimeWithCache(input: {
   onNewMessages?(messages: Message[], account: AccountInfo): void;
   onLicenseChanged?(): void;
 }): FluxmailRuntime {
+  const runtimeAccounts = [...(input.accounts ?? [account])];
   const runtime = new FluxmailRuntime({
     cache: input.cache,
     analytics: {
@@ -2016,7 +2241,13 @@ function createRuntimeWithCache(input: {
         maxAttachmentBytes: 25 * 1024 * 1024,
       },
       configuration: { setLicenseKey: vi.fn() },
-      registry: { listAccounts: () => input.accounts ?? [account] },
+      registry: {
+        listAccounts: () => runtimeAccounts,
+        removeAccount: (accountId: string) => {
+          const index = runtimeAccounts.findIndex((candidate) => candidate.id === accountId);
+          if (index >= 0) runtimeAccounts.splice(index, 1);
+        },
+      },
       service: input.service,
       scheduler: { stop: vi.fn() },
       licenseController: {

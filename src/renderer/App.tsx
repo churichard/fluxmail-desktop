@@ -365,12 +365,17 @@ export function App() {
       setActionNotice("Action undone");
       await Promise.all([
         loadBootstrap(),
-        loadThreads({ quiet: true, preservePages: true, preserveSelection: true }),
+        loadThreads({
+          quiet: true,
+          forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),
+          preservePages: true,
+          preserveSelection: true,
+        }),
       ]);
     } catch (caught) {
       setError(errorMessage(caught));
     }
-  }, [loadBootstrap, loadThreads]);
+  }, [loadBootstrap, loadThreads, submittedSearch]);
 
   const modify = useCallback(
     async (action: ModifyActionInput, explicit?: ThreadSummary[]) => {
@@ -379,12 +384,7 @@ export function App() {
       if (action.type === "delete") {
         if (!window.confirm(permanentDeletePrompt(targets.length))) return;
       }
-      const canUndo = action.type !== "delete" && action.type !== "discardDraft";
-      const request = canUndo ? ++modifySequence.current : modifySequence.current;
-      if (canUndo) {
-        latestUndo.current = undefined;
-        setActionNotice(undefined);
-      }
+      const targetKeys = new Set(targets.map(threadKey));
       const optimisticRemoval = shouldOptimisticallyRemoveFromView(
         submittedSearch ? "search" : view,
         action,
@@ -392,7 +392,6 @@ export function App() {
       const previousThreads = threads;
       const previousSelection = selection;
       const previousSelectedThread = selectedThread;
-      const targetKeys = new Set(targets.map(threadKey));
       if (
         selectedThread &&
         targetKeys.has(threadKey(selectedThread)) &&
@@ -400,6 +399,15 @@ export function App() {
       ) {
         const canNavigate = prepareReadingNavigation();
         if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
+      }
+      const canUndo = action.type !== "delete" && action.type !== "discardDraft";
+      const supersedesCurrentUndo = latestUndo.current
+        ? [...targetKeys].some((key) => latestUndo.current?.targetKeys.has(key))
+        : false;
+      const request = canUndo ? ++modifySequence.current : modifySequence.current;
+      if (canUndo || supersedesCurrentUndo) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
       }
       const preserveQuickReply = Boolean(
         quickReplyDirty.current && selectedThread && targetKeys.has(threadKey(selectedThread)),
@@ -562,7 +570,7 @@ export function App() {
         return;
       }
       if (editing) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
         event.preventDefault();
         void undoLatest();
         return;

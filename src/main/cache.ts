@@ -34,6 +34,29 @@ interface CachedThreadRow {
   folder_roles_json: string;
 }
 
+interface CachedMessageRow {
+  account_id: string;
+  message_id: string;
+  thread_id: string;
+  payload_json: string;
+  date: string;
+}
+
+interface CachedThreadBodyRow {
+  account_id: string;
+  thread_id: string;
+  encrypted_payload: Buffer;
+  hydrated_at: number;
+}
+
+interface CachedThreadState {
+  accountId: string;
+  threadId: string;
+  row?: CachedThreadRow;
+  messages: CachedMessageRow[];
+  body?: CachedThreadBodyRow;
+}
+
 const CACHE_SCHEMA_VERSION = 3;
 
 export class MailCache {
@@ -521,6 +544,28 @@ export class MailCache {
       .get(accountId, threadId) as CachedThreadRow | undefined;
   }
 
+  snapshotThreadState(accountId: string, threadId: string): CachedThreadState {
+    return {
+      accountId,
+      threadId,
+      row: this.snapshotThread(accountId, threadId),
+      messages: this.db
+        .prepare(
+          `SELECT account_id, message_id, thread_id, payload_json, date
+           FROM messages
+           WHERE account_id = ? AND thread_id = ?`,
+        )
+        .all(accountId, threadId) as CachedMessageRow[],
+      body: this.db
+        .prepare(
+          `SELECT account_id, thread_id, encrypted_payload, hydrated_at
+           FROM thread_bodies
+           WHERE account_id = ? AND thread_id = ?`,
+        )
+        .get(accountId, threadId) as CachedThreadBodyRow | undefined,
+    };
+  }
+
   claimMutation(mutationId: string, targets: Array<{ accountId: string; threadId: string }>): void {
     const claim = this.db.prepare(
       `INSERT INTO thread_mutation_owners(account_id, thread_id, mutation_id)
@@ -563,6 +608,57 @@ export class MailCache {
   restoreThreadIfOwned(row: CachedThreadRow, mutationId: string): boolean {
     if (!this.ownsMutation(row.account_id, row.thread_id, mutationId)) return false;
     this.writeThread(row);
+    return true;
+  }
+
+  restoreThreadStateIfOwned(state: CachedThreadState, mutationId: string): boolean {
+    if (!this.ownsMutation(state.accountId, state.threadId, mutationId)) return false;
+    const putMessage = this.db.prepare(
+      `INSERT OR REPLACE INTO messages(account_id, message_id, thread_id, payload_json, date)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM messages WHERE account_id = ? AND thread_id = ?")
+        .run(state.accountId, state.threadId);
+      for (const message of state.messages)
+        putMessage.run(
+          message.account_id,
+          message.message_id,
+          message.thread_id,
+          message.payload_json,
+          message.date,
+        );
+
+      const searchKey = `${state.accountId}:${state.threadId}`;
+      if (state.row) {
+        this.writeThread(state.row);
+      } else {
+        this.db
+          .prepare("DELETE FROM threads WHERE account_id = ? AND thread_id = ?")
+          .run(state.accountId, state.threadId);
+        this.db.prepare("DELETE FROM thread_search WHERE key = ?").run(searchKey);
+      }
+
+      if (state.body) {
+        this.db
+          .prepare(
+            `INSERT OR REPLACE INTO thread_bodies(
+               account_id, thread_id, encrypted_payload, hydrated_at
+             ) VALUES (?, ?, ?, ?)`,
+          )
+          .run(
+            state.body.account_id,
+            state.body.thread_id,
+            state.body.encrypted_payload,
+            state.body.hydrated_at,
+          );
+      } else {
+        this.db
+          .prepare("DELETE FROM thread_bodies WHERE account_id = ? AND thread_id = ?")
+          .run(state.accountId, state.threadId);
+      }
+    })();
     return true;
   }
 
@@ -741,6 +837,7 @@ export class MailCache {
         "view_results",
         "notification_seen",
         "notification_state",
+        "thread_mutation_owners",
       ]) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
       }

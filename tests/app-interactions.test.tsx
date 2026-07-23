@@ -7,6 +7,7 @@ import type {
   BootstrapState,
   FluxmailDesktopApi,
   MailThread,
+  ModifyActionInput,
   ThreadSummary,
 } from "../src/shared/contracts";
 
@@ -35,13 +36,25 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
     threads,
     onSelect,
     onModify,
+    searchText,
+    onSearchText,
+    onSearch,
   }: {
     threads: ThreadSummary[];
     onSelect(thread: ThreadSummary): void;
-    onModify(action: { type: "archive" | "star" }, threads: ThreadSummary[]): Promise<void>;
+    onModify(action: ModifyActionInput, threads: ThreadSummary[]): Promise<void>;
+    searchText: string;
+    onSearchText(value: string): void;
+    onSearch(): void;
   }) => (
     <section>
       <span>{threads.length} conversations</span>
+      <input
+        aria-label="Search mail"
+        value={searchText}
+        onChange={(event) => onSearchText(event.target.value)}
+      />
+      <button onClick={onSearch}>Run search</button>
       {threads.map((thread) => (
         <div
           key={thread.id}
@@ -54,6 +67,9 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
           </button>
           <button onClick={() => void onModify({ type: "star" }, [thread])}>
             Star {thread.subject}
+          </button>
+          <button onClick={() => void onModify({ type: "discardDraft" }, [thread])}>
+            Discard {thread.subject}
           </button>
         </div>
       ))}
@@ -535,6 +551,66 @@ describe("App thread navigation", () => {
     expect(screen.getByText("Action undone")).toBeTruthy();
   });
 
+  it("reruns an active provider search after undo", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    const api = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockImplementation(async () => {
+      api.setVisibleThreads([]);
+      return { undoToken: "undo-1" };
+    });
+    vi.mocked(window.fluxmail.mail.undo).mockImplementation(async () => {
+      api.setVisibleThreads([current]);
+      return { undone: true };
+    });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search mail" }), {
+      target: { value: "in:inbox" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run search" }));
+    await waitFor(() => expect(window.fluxmail.mail.search).toHaveBeenCalled());
+    await screen.findByRole("button", { name: `Archive ${current.subject}` });
+
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${current.subject}` }));
+    const undo = await screen.findByRole("button", { name: "Undo" });
+    await screen.findByText("0 conversations");
+    const searchesBeforeUndo = vi.mocked(window.fluxmail.mail.search).mock.calls.length;
+    fireEvent.click(undo);
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.search).toHaveBeenCalledTimes(searchesBeforeUndo + 1),
+    );
+    expect(await screen.findByRole("button", { name: current.subject })).toBeTruthy();
+  });
+
+  it("clears undo when a permanent action supersedes the same conversation", async () => {
+    const current = thread("draft-thread", "Draft in progress", true);
+    installApi(
+      [current],
+      vi.fn(async () => draftThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify)
+      .mockResolvedValueOnce({ undoToken: "undo-1" })
+      .mockResolvedValueOnce({});
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: "Drafts" }));
+    await screen.findByRole("button", { name: `Star ${current.subject}` });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.click(screen.getByRole("button", { name: `Discard ${current.subject}` }));
+
+    await waitFor(() => expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
   it("runs the latest undo with Cmd+Z outside an editor", async () => {
     const current = thread("thread-1", "Current conversation", false);
     installApi(
@@ -553,6 +629,24 @@ describe("App thread navigation", () => {
     await waitFor(() =>
       expect(window.fluxmail.mail.undo).toHaveBeenCalledWith({ token: "undo-1" }),
     );
+  });
+
+  it("does not treat Cmd+Shift+Z as undo", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
+
+    expect(window.fluxmail.mail.undo).not.toHaveBeenCalled();
   });
 
   it("clears undo when opening the same unread conversation marks it read", async () => {

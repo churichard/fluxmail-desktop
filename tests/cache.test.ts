@@ -88,10 +88,12 @@ describe("MailCache", () => {
     const cache = createCache();
     cache.putMessages(primary, [message({ id: "primary", threadId: "primary-thread" })]);
     cache.putMessages(secondary, [message({ id: "secondary", threadId: "secondary-thread" })]);
+    cache.claimMutation("pending", [{ accountId: primary.id, threadId: "primary-thread" }]);
 
     expect(cache.accountIds().sort()).toEqual([primary.id, secondary.id]);
     cache.deleteAccount(primary.id);
     expect(cache.accountIds()).toEqual([secondary.id]);
+    expect(cache.ownsMutation(primary.id, "primary-thread", "pending")).toBe(false);
     expect(cache.unreadCount()).toBe(1);
     cache.close();
   });
