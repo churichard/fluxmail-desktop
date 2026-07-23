@@ -6,8 +6,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildEmailDocument,
+  clearEmailFindHighlights,
   EmailHtml,
   hasRemoteImages,
+  highlightEmailMatches,
 } from "../src/renderer/components/EmailHtml";
 import { TrackingPixelIndicator } from "../src/renderer/components/TrackingPixelIndicator";
 import { convertEmailToDarkMode } from "../src/renderer/email/convert-to-dark-mode";
@@ -25,6 +27,50 @@ globalThis.ResizeObserver = class ResizeObserver {
 } as unknown as typeof ResizeObserver;
 
 afterEach(cleanup);
+
+describe("email find", () => {
+  it("highlights case-insensitive literal matches and restores the original text", () => {
+    const document = new DOMParser().parseFromString(
+      '<div id="email-root"><p>Inbox inbox.</p><p>Use INBOX.</p><style>.inbox {}</style></div>',
+      "text/html",
+    );
+
+    const matches = highlightEmailMatches(document, "inbox.");
+
+    expect(matches).toHaveLength(2);
+    expect(matches.map((match) => match.textContent)).toEqual(["inbox.", "INBOX."]);
+    expect(document.querySelectorAll("mark[data-fluxmail-find-match]")).toHaveLength(2);
+    expect(document.querySelector("style")?.textContent).toBe(".inbox {}");
+
+    clearEmailFindHighlights(document);
+
+    expect(document.querySelectorAll("mark[data-fluxmail-find-match]")).toHaveLength(0);
+    expect(document.getElementById("email-root")?.textContent).toContain("Inbox inbox.");
+  });
+
+  it("treats a match split by inline markup as one result", () => {
+    const document = new DOMParser().parseFromString(
+      '<div id="email-root"><p>Order <strong>#123</strong> is ready.</p></div>',
+      "text/html",
+    );
+
+    const matches = highlightEmailMatches(document, "Order #123");
+
+    expect(matches).toHaveLength(1);
+    expect(document.querySelectorAll('mark[data-fluxmail-find-match="0"]')).toHaveLength(2);
+    expect(document.getElementById("email-root")?.textContent).toContain("Order #123 is ready.");
+  });
+
+  it("ignores matches inside hidden email content", () => {
+    const document = new DOMParser().parseFromString(
+      '<div id="email-root"><p hidden>Hidden preheader</p><p style="display:none">Hidden preview</p><p>Visible message</p></div>',
+      "text/html",
+    );
+
+    expect(highlightEmailMatches(document, "Hidden")).toHaveLength(0);
+    expect(highlightEmailMatches(document, "Visible")).toHaveLength(1);
+  });
+});
 
 describe("email HTML security", () => {
   it("removes active content, unsafe navigation, tracking pixels, and remote loads by default", () => {

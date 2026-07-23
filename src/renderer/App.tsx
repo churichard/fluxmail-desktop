@@ -256,6 +256,13 @@ export function App() {
         setBootstrap((current) => (current ? { ...current, sync: event.state } : current));
       if (event.type === "accounts-changed" || event.type === "license-changed")
         void loadBootstrap();
+      if (
+        event.type === "find-in-conversation-requested" &&
+        selectedThread &&
+        !composeSeed &&
+        !settingsOpen
+      )
+        readingPaneRef.current?.openFind();
       if (event.type === "window-close-requested") {
         void (async () => {
           const composeDialog = composeDialogRef.current;
@@ -278,7 +285,7 @@ export function App() {
       window.clearTimeout(refreshTimer.current);
       unsubscribe();
     };
-  }, [closeReadingDraft, loadBootstrap, loadThreads]);
+  }, [closeReadingDraft, composeSeed, loadBootstrap, loadThreads, selectedThread, settingsOpen]);
 
   const openCompose = useCallback(async () => {
     const account = accountId
@@ -555,6 +562,16 @@ export function App() {
       if (event.metaKey && event.key.toLowerCase() === "r") {
         event.preventDefault();
         void refreshMail();
+        return;
+      }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f" &&
+        selectedThread
+      ) {
+        event.preventDefault();
+        readingPaneRef.current?.openFind();
         return;
       }
       if (editing) return;

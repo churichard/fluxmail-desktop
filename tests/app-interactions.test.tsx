@@ -11,6 +11,7 @@ import type {
 } from "../src/shared/contracts";
 
 const closeDraft = vi.hoisted(() => vi.fn<() => boolean | Promise<boolean>>(() => true));
+const openFind = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/renderer/components/Sidebar", () => ({
   Sidebar: ({
@@ -78,7 +79,11 @@ vi.mock("../src/renderer/components/ReadingPane", async () => {
       ref,
     ) {
       const [composerMode, setComposerMode] = React.useState<string>();
-      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode, closeDraft }));
+      React.useImperativeHandle(ref, () => ({
+        openComposer: setComposerMode,
+        openFind,
+        closeDraft,
+      }));
       return (
         <section>
           {thread ? `Reading ${thread.subject}` : "No conversation"}
@@ -143,6 +148,7 @@ vi.mock("../src/renderer/components/FluxmailLogoMark", () => ({
 beforeEach(() => {
   closeDraft.mockReset();
   closeDraft.mockReturnValue(true);
+  openFind.mockReset();
 });
 
 afterEach(() => {
@@ -668,6 +674,27 @@ describe("App thread navigation", () => {
     fireEvent.keyDown(window, { key: "f" });
     expect(screen.getByText("Inline forward")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
+  });
+
+  it("opens conversation find with Command+F and Control+F", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    expect(fireEvent.keyDown(window, { key: "f", metaKey: true })).toBe(false);
+    expect(fireEvent.keyDown(window, { key: "f", ctrlKey: true })).toBe(false);
+
+    expect(openFind).toHaveBeenCalledTimes(2);
+
+    act(() => events.emit({ type: "find-in-conversation-requested" }));
+
+    expect(openFind).toHaveBeenCalledTimes(3);
   });
 
   it("runs mailbox shortcuts forwarded from the email iframe", async () => {
