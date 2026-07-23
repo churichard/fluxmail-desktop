@@ -1105,6 +1105,12 @@ test("advances after archive unless the setting is disabled", async () => {
     await expect(page.locator(".thread-row.active")).toContainText("Receipt for Tuesday");
     await expect(page.locator(".thread-open:focus")).toHaveCount(0);
 
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByText("Action undone")).toBeVisible();
+    await expect(
+      page.locator(".thread-row").filter({ hasText: "Welcome to Fluxmail" }),
+    ).toBeVisible();
+
     const nextThread = page.locator(".thread-row").filter({ hasText: "Receipt for Tuesday" });
     await page.getByRole("button", { name: "Settings" }).click();
     const settings = page.getByRole("dialog", { name: "Settings" });

@@ -44,6 +44,9 @@ import {
   licenseKeySchema,
   mailForwardInputSchema,
   mailModifyInputSchema,
+  mailModifyResultSchema,
+  mailUndoInputSchema,
+  mailUndoResultSchema,
   sendInputSchema,
   sendResultSchema,
   telemetryStatusSchema,
@@ -438,8 +441,14 @@ function registerIpc(): void {
     });
     return thread;
   });
-  handle(IPC.mailModify, mailModifyInputSchema, z.void(), async ({ targets, action }) =>
-    requireRuntime().modify(targets, action),
+  handle(
+    IPC.mailModify,
+    mailModifyInputSchema,
+    mailModifyResultSchema,
+    async ({ targets, action, undoable }) => requireRuntime().modify(targets, action, undoable),
+  );
+  handle(IPC.mailUndo, mailUndoInputSchema, mailUndoResultSchema, async ({ token }) =>
+    requireRuntime().undo(token),
   );
   handle(IPC.mailForward, mailForwardInputSchema, z.void(), async ({ target, ...input }) =>
     requireRuntime().forward({ accountId: target.accountId, ...input }),

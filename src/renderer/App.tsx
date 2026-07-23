@@ -54,6 +54,7 @@ export function App() {
   const [quickReplyDiscardVersion, setQuickReplyDiscardVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [actionNotice, setActionNotice] = useState<string>();
   const [startupError, setStartupError] = useState<AppError>();
   const [sidebarWidth, setSidebarWidth] = useState(228);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -64,6 +65,8 @@ export function App() {
   const refreshTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
   const quickReplyDirty = useRef(false);
+  const latestUndo = useRef<{ token: string; targetKeys: Set<string> } | undefined>(undefined);
+  const modifySequence = useRef(0);
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
   const mailboxContextRef = useRef(mailboxContext);
@@ -71,6 +74,11 @@ export function App() {
   useLayoutEffect(() => {
     mailboxContextRef.current = mailboxContext;
   }, [mailboxContext]);
+  const invalidateThreadLoads = useCallback(() => {
+    listRequest.current += 1;
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
   useLayoutEffect(() => {
     selectedThreadRef.current = selectedThread;
   }, [selectedThread]);
@@ -191,18 +199,26 @@ export function App() {
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
         startTransition(() => {
           setThreads((current) => {
+            if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current)
+              return current;
             const next = append ? mergeThreads(current, page.items) : page.items;
             loadedThreadCount.current = Math.max(DEFAULT_PAGE_SIZE, next.length);
             return next;
           });
           if (!append)
             setSelectedThread((current) =>
-              current
-                ? (page.items.find((thread) => threadKey(thread) === threadKey(current)) ??
-                  (options?.preserveSelection ? current : undefined))
-                : current,
+              request !== listRequest.current ||
+              mailboxContext !== mailboxContextRef.current ||
+              !current
+                ? current
+                : (page.items.find((thread) => threadKey(thread) === threadKey(current)) ??
+                  (options?.preserveSelection ? current : undefined)),
             );
-          setCursor(page.nextCursor);
+          setCursor((current) =>
+            request === listRequest.current && mailboxContext === mailboxContextRef.current
+              ? page.nextCursor
+              : current,
+          );
         });
       } catch (caught) {
         if (request !== listRequest.current || mailboxContext !== mailboxContextRef.current) return;
@@ -349,44 +365,78 @@ export function App() {
       .catch(() => undefined);
   }, [prepareReadingNavigation, searchText, submittedSearch]);
 
-  const markThreadRead = useCallback(async (thread: ThreadSummary) => {
-    setThreads((current) =>
-      current.map((candidate) =>
-        threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
-      ),
-    );
-    setSelectedThread((current) =>
-      current && threadKey(current) === threadKey(thread) ? { ...current, unread: false } : current,
-    );
-    if (thread.folderRoles.includes("inbox")) {
-      setBootstrap((current) =>
-        current ? adjustUnreadCount(current, thread.accountId, -1) : current,
-      );
-    }
+  const undoLatest = useCallback(async () => {
+    const entry = latestUndo.current;
+    if (!entry) return;
+    latestUndo.current = undefined;
+    setActionNotice(undefined);
     try {
-      await window.fluxmail.mail.modify({
-        targets: [{ accountId: thread.accountId, threadId: thread.id }],
-        action: { type: "markRead" },
-      });
+      const result = await window.fluxmail.mail.undo({ token: entry.token });
+      if (!result.undone) return;
+      setActionNotice("Action undone");
+      await Promise.all([
+        loadBootstrap(),
+        loadThreads({
+          quiet: true,
+          forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),
+          preservePages: true,
+          preserveSelection: true,
+        }),
+      ]);
     } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }, [loadBootstrap, loadThreads, submittedSearch]);
+
+  const markThreadRead = useCallback(
+    async (thread: ThreadSummary) => {
+      invalidateThreadLoads();
       setThreads((current) =>
         current.map((candidate) =>
-          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: true } : candidate,
+          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
         ),
       );
       setSelectedThread((current) =>
         current && threadKey(current) === threadKey(thread)
-          ? { ...current, unread: true }
+          ? { ...current, unread: false }
           : current,
       );
       if (thread.folderRoles.includes("inbox")) {
         setBootstrap((current) =>
-          current ? adjustUnreadCount(current, thread.accountId, 1) : current,
+          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
         );
       }
-      setError(errorMessage(caught));
-    }
-  }, []);
+      if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
+      }
+      try {
+        await window.fluxmail.mail.modify({
+          targets: [{ accountId: thread.accountId, threadId: thread.id }],
+          action: { type: "markRead" },
+          undoable: false,
+        });
+      } catch (caught) {
+        setThreads((current) =>
+          current.map((candidate) =>
+            threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: true } : candidate,
+          ),
+        );
+        setSelectedThread((current) =>
+          current && threadKey(current) === threadKey(thread)
+            ? { ...current, unread: true }
+            : current,
+        );
+        if (thread.folderRoles.includes("inbox")) {
+          setBootstrap((current) =>
+            current ? adjustUnreadCount(current, thread.accountId, 1) : current,
+          );
+        }
+        setError(errorMessage(caught));
+      }
+    },
+    [invalidateThreadLoads],
+  );
 
   const activateThread = useCallback(
     (thread: ThreadSummary) => {
@@ -405,6 +455,7 @@ export function App() {
       if (action.type === "delete") {
         if (!window.confirm(permanentDeletePrompt(targets.length))) return;
       }
+      const targetKeys = new Set(targets.map(threadKey));
       const optimisticRemoval = shouldOptimisticallyRemoveFromView(
         submittedSearch ? "search" : view,
         action,
@@ -412,7 +463,6 @@ export function App() {
       const previousThreads = threads;
       const previousSelection = selection;
       const previousSelectedThread = selectedThread;
-      const targetKeys = new Set(targets.map(threadKey));
       const shouldAdvanceAfterArchive = Boolean(
         bootstrap?.preferences.openNextAfterArchive &&
         action.type === "archive" &&
@@ -432,11 +482,21 @@ export function App() {
         const canNavigate = prepareReadingNavigation();
         if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
       }
+      const canUndo = action.type !== "delete" && action.type !== "discardDraft";
+      const supersedesCurrentUndo = latestUndo.current
+        ? [...targetKeys].some((key) => latestUndo.current?.targetKeys.has(key))
+        : false;
+      const request = canUndo ? ++modifySequence.current : modifySequence.current;
+      if (canUndo || supersedesCurrentUndo) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
+      }
       const preserveQuickReply = Boolean(
         quickReplyDirty.current && selectedThread && targetKeys.has(threadKey(selectedThread)),
       );
 
       if (optimisticRemoval) {
+        invalidateThreadLoads();
         setThreads((current) => current.filter((thread) => !targetKeys.has(threadKey(thread))));
         setSelection((current) => {
           const next = new Set(current);
@@ -453,13 +513,17 @@ export function App() {
         }
       }
       try {
-        await window.fluxmail.mail.modify({
+        const result = await window.fluxmail.mail.modify({
           targets: targets.map((thread) => ({
             accountId: thread.accountId,
             threadId: thread.id,
           })),
           action,
         });
+        if (result.undoToken && request === modifySequence.current) {
+          latestUndo.current = { token: result.undoToken, targetKeys };
+          setActionNotice(actionSuccessMessage(action, targets.length));
+        }
         if (!optimisticRemoval && mailboxContext === mailboxContextRef.current)
           setSelection(new Set());
         setSelectedThread((current) => {
@@ -505,6 +569,7 @@ export function App() {
     },
     [
       bootstrap?.preferences.openNextAfterArchive,
+      invalidateThreadLoads,
       loadThreads,
       mailboxContext,
       markThreadRead,
@@ -575,6 +640,11 @@ export function App() {
         return;
       }
       if (editing) return;
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void undoLatest();
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "[") {
         event.preventDefault();
@@ -646,6 +716,7 @@ export function App() {
     settingsOpen,
     submittedSearch,
     threads,
+    undoLatest,
     view,
   ]);
 
@@ -805,6 +876,18 @@ export function App() {
             ×
           </button>
         </div>
+      ) : actionNotice ? (
+        <div className="toast" role="status">
+          <span>{actionNotice}</span>
+          {latestUndo.current ? (
+            <button className="toast-action" onClick={() => void undoLatest()}>
+              Undo
+            </button>
+          ) : null}
+          <button onClick={() => setActionNotice(undefined)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -944,6 +1027,25 @@ export function shouldClearSelectedThread(view: MailboxView, action: ModifyActio
   return (
     shouldOptimisticallyRemoveFromView(view, action) || ["trash", "delete"].includes(action.type)
   );
+}
+
+export function actionSuccessMessage(action: ModifyActionInput, count: number): string {
+  const conversation = count === 1 ? "Conversation" : `${count} conversations`;
+  if (action.type === "markRead")
+    return count === 1 ? "Marked as read" : `${conversation} marked as read`;
+  if (action.type === "markUnread")
+    return count === 1 ? "Marked as unread" : `${conversation} marked as unread`;
+  if (action.type === "star") return count === 1 ? "Starred" : `${conversation} starred`;
+  if (action.type === "unstar") return count === 1 ? "Unstarred" : `${conversation} unstarred`;
+  if (action.type === "archive") return count === 1 ? "Archived" : `${conversation} archived`;
+  if (action.type === "trash")
+    return count === 1 ? "Moved to Trash" : `${conversation} moved to Trash`;
+  if (action.type === "untrash")
+    return count === 1 ? "Moved to Inbox" : `${conversation} moved to Inbox`;
+  if (action.type === "move") return count === 1 ? "Conversation moved" : `${conversation} moved`;
+  if (action.type === "addLabels" || action.type === "removeLabels")
+    return count === 1 ? "Labels updated" : `Labels updated for ${conversation.toLowerCase()}`;
+  return count === 1 ? "Conversation updated" : `${conversation} updated`;
 }
 
 export function shouldForceProviderSearchAfterMutation(query: string): boolean {

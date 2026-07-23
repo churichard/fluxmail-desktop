@@ -7,6 +7,7 @@ import type {
   BootstrapState,
   FluxmailDesktopApi,
   MailThread,
+  ModifyActionInput,
   ThreadSummary,
 } from "../src/shared/contracts";
 
@@ -37,16 +38,32 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
     onSelect,
     onToggleSelection,
     onModify,
+    searchText,
+    onSearchText,
+    onSearch,
   }: {
     threads: ThreadSummary[];
     onSelect(thread: ThreadSummary): void;
     onToggleSelection(thread: ThreadSummary): void;
-    onModify(action: { type: "archive" | "star" }, threads: ThreadSummary[]): Promise<void>;
+    onModify(action: ModifyActionInput, threads: ThreadSummary[]): Promise<void>;
+    searchText: string;
+    onSearchText(value: string): void;
+    onSearch(): void;
   }) => (
     <section>
       <span>{threads.length} conversations</span>
+      <input
+        aria-label="Search mail"
+        value={searchText}
+        onChange={(event) => onSearchText(event.target.value)}
+      />
+      <button onClick={onSearch}>Run search</button>
       {threads.map((thread) => (
-        <div key={thread.id}>
+        <div
+          key={thread.id}
+          data-testid={`thread-${thread.id}`}
+          data-unread={String(thread.unread)}
+        >
           <button onClick={() => onSelect(thread)}>{thread.subject}</button>
           <button onClick={() => onToggleSelection(thread)}>Select {thread.subject}</button>
           <button onClick={() => void onModify({ type: "archive" }, [thread])}>
@@ -54,6 +71,9 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
           </button>
           <button onClick={() => void onModify({ type: "star" }, [thread])}>
             Star {thread.subject}
+          </button>
+          <button onClick={() => void onModify({ type: "discardDraft" }, [thread])}>
+            Discard {thread.subject}
           </button>
         </div>
       ))}
@@ -314,6 +334,74 @@ describe("App thread navigation", () => {
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
   });
 
+  it("does not reapply a stale unread state after opening a conversation", async () => {
+    const current = { ...thread("thread-1", "Unread conversation", false), unread: true };
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    const initialLoads = vi.mocked(window.fluxmail.mail.listThreads).mock.calls.length;
+    const staleReload = deferred<{
+      items: ThreadSummary[];
+      totalCount: number;
+      syncing: boolean;
+    }>();
+    vi.mocked(window.fluxmail.mail.listThreads).mockImplementationOnce(() => staleReload.promise);
+
+    act(() => events.emit({ type: "cache-changed" }));
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(initialLoads + 1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+    expect(screen.getByTestId(`thread-${current.id}`).dataset.unread).toBe("false");
+
+    await act(async () => {
+      staleReload.resolve({ items: [current], totalCount: 1, syncing: false });
+    });
+
+    expect(screen.getByTestId(`thread-${current.id}`).dataset.unread).toBe("false");
+  });
+
+  it("does not restore an archived conversation from a stale mailbox response", async () => {
+    const current = thread("thread-1", "Conversation to archive", false);
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    const pendingArchive = deferred<{ undoToken?: string }>();
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    const initialLoads = vi.mocked(window.fluxmail.mail.listThreads).mock.calls.length;
+    const staleReload = deferred<{
+      items: ThreadSummary[];
+      totalCount: number;
+      syncing: boolean;
+    }>();
+    vi.mocked(window.fluxmail.mail.listThreads).mockImplementationOnce(() => staleReload.promise);
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingArchive.promise);
+
+    act(() => events.emit({ type: "cache-changed" }));
+    await waitFor(() =>
+      expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(initialLoads + 1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${current.subject}` }));
+    await screen.findByText("0 conversations");
+
+    await act(async () => {
+      staleReload.resolve({ items: [current], totalCount: 1, syncing: false });
+    });
+
+    expect(screen.getByText("0 conversations")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: current.subject })).toBeNull();
+    await act(async () => {
+      pendingArchive.resolve({});
+    });
+  });
+
   it("keeps an unsent quick reply when a mutation removes the thread from the list", async () => {
     const current = { ...thread("thread-1", "Starred conversation", false), starred: true };
     installApi(
@@ -344,8 +432,8 @@ describe("App thread navigation", () => {
       starred: true,
     };
     let finishModify!: () => void;
-    const pendingModify = new Promise<void>((resolve) => {
-      finishModify = resolve;
+    const pendingModify = new Promise<{ undoToken?: string }>((resolve) => {
+      finishModify = () => resolve({});
     });
     installApi(
       [inbox],
@@ -378,8 +466,8 @@ describe("App thread navigation", () => {
     const second = { ...thread("thread-2", "Second conversation", false), unread: true };
     const third = thread("thread-3", "Third conversation", false);
     let finishArchive!: () => void;
-    const pendingArchive = new Promise<void>((resolve) => {
-      finishArchive = resolve;
+    const pendingArchive = new Promise<{ undoToken?: string }>((resolve) => {
+      finishArchive = () => resolve({});
     });
     installApi(
       [first, second, third],
@@ -508,6 +596,7 @@ describe("App thread navigation", () => {
     );
     vi.mocked(window.fluxmail.mail.modify).mockImplementation(async ({ action }) => {
       if (action.type === "archive") throw new Error("Archive failed.");
+      return {};
     });
     installMatchMedia();
     render(<App />);
@@ -525,7 +614,7 @@ describe("App thread navigation", () => {
     const second = thread("thread-2", "Second conversation", false);
     const third = thread("thread-3", "Third conversation", false);
     let failArchive!: (error: Error) => void;
-    const pendingArchive = new Promise<void>((_resolve, reject) => {
+    const pendingArchive = new Promise<{ undoToken?: string }>((_resolve, reject) => {
       failArchive = reject;
     });
     installApi(
@@ -564,6 +653,7 @@ describe("App thread navigation", () => {
       expect(window.fluxmail.mail.modify).toHaveBeenCalledWith({
         targets: [{ accountId: second.accountId, threadId: second.id }],
         action: { type: "markRead" },
+        undoable: false,
       }),
     );
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
@@ -589,8 +679,8 @@ describe("App thread navigation", () => {
   it("keeps a thread opened in another mailbox selected when an archive finishes", async () => {
     const current = thread("thread-1", "Current conversation", false);
     let finishArchive!: () => void;
-    const pendingArchive = new Promise<void>((resolve) => {
-      finishArchive = resolve;
+    const pendingArchive = new Promise<{ undoToken?: string }>((resolve) => {
+      finishArchive = () => resolve({});
     });
     installApi(
       [current],
@@ -615,8 +705,8 @@ describe("App thread navigation", () => {
   it("updates a thread opened in another mailbox when a star finishes", async () => {
     const current = thread("thread-1", "Current conversation", false);
     let finishStar!: () => void;
-    const pendingStar = new Promise<void>((resolve) => {
-      finishStar = resolve;
+    const pendingStar = new Promise<{ undoToken?: string }>((resolve) => {
+      finishStar = () => resolve({});
     });
     installApi(
       [current],
@@ -635,6 +725,147 @@ describe("App thread navigation", () => {
     await act(async () => finishStar());
 
     expect(screen.getByRole("button", { name: "Unstar conversation" })).toBeTruthy();
+  });
+
+  it("offers one-click undo after a conversation action", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.undo).toHaveBeenCalledWith({ token: "undo-1" }),
+    );
+    expect(screen.getByText("Action undone")).toBeTruthy();
+  });
+
+  it("reruns an active provider search after undo", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    const api = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockImplementation(async () => {
+      api.setVisibleThreads([]);
+      return { undoToken: "undo-1" };
+    });
+    vi.mocked(window.fluxmail.mail.undo).mockImplementation(async () => {
+      api.setVisibleThreads([current]);
+      return { undone: true };
+    });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search mail" }), {
+      target: { value: "in:inbox" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run search" }));
+    await waitFor(() => expect(window.fluxmail.mail.search).toHaveBeenCalled());
+    await screen.findByRole("button", { name: `Archive ${current.subject}` });
+
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${current.subject}` }));
+    const undo = await screen.findByRole("button", { name: "Undo" });
+    await screen.findByText("0 conversations");
+    const searchesBeforeUndo = vi.mocked(window.fluxmail.mail.search).mock.calls.length;
+    fireEvent.click(undo);
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.search).toHaveBeenCalledTimes(searchesBeforeUndo + 1),
+    );
+    expect(await screen.findByRole("button", { name: current.subject })).toBeTruthy();
+  });
+
+  it("clears undo when a permanent action supersedes the same conversation", async () => {
+    const current = thread("draft-thread", "Draft in progress", true);
+    installApi(
+      [current],
+      vi.fn(async () => draftThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify)
+      .mockResolvedValueOnce({ undoToken: "undo-1" })
+      .mockResolvedValueOnce({});
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: "Drafts" }));
+    await screen.findByRole("button", { name: `Star ${current.subject}` });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.click(screen.getByRole("button", { name: `Discard ${current.subject}` }));
+
+    await waitFor(() => expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("runs the latest undo with Cmd+Z outside an editor", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.undo).toHaveBeenCalledWith({ token: "undo-1" }),
+    );
+  });
+
+  it("does not treat Cmd+Shift+Z as undo", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockResolvedValue({ undoToken: "undo-1" });
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
+
+    expect(window.fluxmail.mail.undo).not.toHaveBeenCalled();
+  });
+
+  it("clears undo when opening the same unread conversation marks it read", async () => {
+    const current = { ...thread("thread-1", "Current conversation", false), unread: true };
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    vi.mocked(window.fluxmail.mail.modify)
+      .mockResolvedValueOnce({ undoToken: "undo-1" })
+      .mockResolvedValueOnce({});
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+
+    fireEvent.click(screen.getByRole("button", { name: `Star ${current.subject}` }));
+    await screen.findByRole("button", { name: "Undo" });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    await waitFor(() => expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    expect(window.fluxmail.mail.undo).not.toHaveBeenCalled();
   });
 
   it("does not run mailbox shortcuts from compose controls", async () => {
@@ -813,7 +1044,9 @@ function installApi(
         getThread,
         modify: vi.fn(async () => {
           if (options.threadsAfterModify) visibleThreads = options.threadsAfterModify;
+          return {};
         }),
+        undo: vi.fn(async () => ({ undone: true })),
       },
       attachments: {
         prepare: vi.fn(async () => []),

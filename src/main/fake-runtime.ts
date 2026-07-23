@@ -11,7 +11,9 @@ import type {
   BootstrapState,
   ComposeInput,
   LicenseActivationResult,
+  MailModifyResult,
   MailThread,
+  MailUndoResult,
   ModifyActionInput,
   ThreadListInput,
   ThreadPage,
@@ -124,6 +126,10 @@ export class FakeFluxmailRuntime {
 
   private connected = true;
   private messages = structuredClone(seedMessages);
+  private latestUndo?: { token: string; threadIds: string[]; messages: Message[] };
+  private mutationSequence = 0;
+  private undoableMutationSequence = 0;
+  private readonly threadMutationOwners = new Map<string, number>();
   private licenseValue: BootstrapState["license"] = {
     plan: "pro",
     maxMembers: 1,
@@ -271,41 +277,84 @@ export class FakeFluxmailRuntime {
     };
   }
 
-  async modify(targets: Array<{ threadId: string }>, action: ModifyActionInput): Promise<void> {
-    if (action.type === "archive") {
-      const delay = Number(process.env.FLUXMAIL_DESKTOP_FAKE_ARCHIVE_DELAY_MS ?? 0);
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-    }
+  async modify(
+    targets: Array<{ threadId: string }>,
+    action: ModifyActionInput,
+    undoable = true,
+  ): Promise<MailModifyResult> {
     const ids = new Set(targets.map((target) => target.threadId));
-    if (action.type === "discardDraft")
-      this.messages = this.messages.filter(
-        (message) => !ids.has(message.threadId) || !message.flags.draft,
-      );
-    else if (action.type === "delete")
-      this.messages = this.messages.filter((message) => !ids.has(message.threadId));
-    else {
-      for (const message of this.messages.filter((item) => ids.has(item.threadId))) {
-        if (action.type === "markRead") message.flags.read = true;
-        if (action.type === "markUnread") message.flags.read = false;
-        if (action.type === "star") message.flags.starred = true;
-        if (action.type === "unstar") message.flags.starred = false;
-        if (action.type === "archive" && message.folder?.role === "inbox")
-          message.folder = { id: "ALL", name: "All mail", role: "all" };
-        if (action.type === "trash") message.folder = { id: "TRASH", name: "Trash", role: "trash" };
-        if (action.type === "untrash")
-          message.folder = { id: "INBOX", name: "Inbox", role: "inbox" };
-        if (action.type === "move")
-          message.folder =
-            action.folder === "spam"
-              ? { id: "SPAM", name: "Spam", role: "spam" }
-              : { id: action.folder, name: action.folder };
-        if (action.type === "addLabels")
-          message.labels = [...new Set([...(message.labels ?? []), ...action.labels])];
-        if (action.type === "removeLabels")
-          message.labels = (message.labels ?? []).filter((label) => !action.labels.includes(label));
+    const mutation = ++this.mutationSequence;
+    for (const id of ids) this.threadMutationOwners.set(id, mutation);
+    const canUndo = undoable && action.type !== "delete" && action.type !== "discardDraft";
+    const undoableMutation = canUndo ? ++this.undoableMutationSequence : undefined;
+    const supersedesCurrentUndo = this.latestUndo?.threadIds.some((threadId) => ids.has(threadId));
+    if (canUndo || supersedesCurrentUndo) this.latestUndo = undefined;
+    const previousMessages = canUndo
+      ? structuredClone(this.messages.filter((message) => ids.has(message.threadId)))
+      : undefined;
+    try {
+      if (action.type === "archive") {
+        const delay = Number(process.env.FLUXMAIL_DESKTOP_FAKE_ARCHIVE_DELAY_MS ?? 0);
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       }
+      if (action.type === "discardDraft")
+        this.messages = this.messages.filter(
+          (message) => !ids.has(message.threadId) || !message.flags.draft,
+        );
+      else if (action.type === "delete")
+        this.messages = this.messages.filter((message) => !ids.has(message.threadId));
+      else {
+        for (const message of this.messages.filter((item) => ids.has(item.threadId))) {
+          if (action.type === "markRead") message.flags.read = true;
+          if (action.type === "markUnread") message.flags.read = false;
+          if (action.type === "star") message.flags.starred = true;
+          if (action.type === "unstar") message.flags.starred = false;
+          if (action.type === "archive" && message.folder?.role === "inbox")
+            message.folder = { id: "ALL", name: "All mail", role: "all" };
+          if (action.type === "trash")
+            message.folder = { id: "TRASH", name: "Trash", role: "trash" };
+          if (action.type === "untrash")
+            message.folder = { id: "INBOX", name: "Inbox", role: "inbox" };
+          if (action.type === "move")
+            message.folder =
+              action.folder === "spam"
+                ? { id: "SPAM", name: "Spam", role: "spam" }
+                : { id: action.folder, name: action.folder };
+          if (action.type === "addLabels")
+            message.labels = [...new Set([...(message.labels ?? []), ...action.labels])];
+          if (action.type === "removeLabels")
+            message.labels = (message.labels ?? []).filter(
+              (label) => !action.labels.includes(label),
+            );
+        }
+      }
+      this.options.onCacheChanged();
+      if (
+        !previousMessages ||
+        undoableMutation !== this.undoableMutationSequence ||
+        [...ids].some((id) => this.threadMutationOwners.get(id) !== mutation)
+      )
+        return {};
+      const token = `fake-undo-${mutation}`;
+      this.latestUndo = { token, threadIds: [...ids], messages: previousMessages };
+      return { undoToken: token };
+    } finally {
+      for (const id of ids)
+        if (this.threadMutationOwners.get(id) === mutation) this.threadMutationOwners.delete(id);
     }
+  }
+
+  async undo(token: string): Promise<MailUndoResult> {
+    if (!this.latestUndo || this.latestUndo.token !== token) return { undone: false };
+    const entry = this.latestUndo;
+    this.latestUndo = undefined;
+    const threadIds = new Set(entry.threadIds);
+    this.messages = [
+      ...this.messages.filter((message) => !threadIds.has(message.threadId)),
+      ...entry.messages,
+    ];
     this.options.onCacheChanged();
+    return { undone: true };
   }
 
   async saveDraft(input: ComposeInput): Promise<{ draftId: string; messageId: string }> {

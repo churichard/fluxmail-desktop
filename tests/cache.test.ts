@@ -88,10 +88,12 @@ describe("MailCache", () => {
     const cache = createCache();
     cache.putMessages(primary, [message({ id: "primary", threadId: "primary-thread" })]);
     cache.putMessages(secondary, [message({ id: "secondary", threadId: "secondary-thread" })]);
+    cache.claimMutation("pending", [{ accountId: primary.id, threadId: "primary-thread" }]);
 
     expect(cache.accountIds().sort()).toEqual([primary.id, secondary.id]);
     cache.deleteAccount(primary.id);
     expect(cache.accountIds()).toEqual([secondary.id]);
+    expect(cache.ownsMutation(primary.id, "primary-thread", "pending")).toBe(false);
     expect(cache.unreadCount()).toBe(1);
     cache.close();
   });
@@ -537,6 +539,73 @@ describe("MailCache", () => {
     expect(cache.messageIds(primary.id, "thread-a")).toEqual(["m1"]);
     cache.restoreThread(snapshot);
     expect(cache.listThreads({ view: "all", offset: 0, limit: 20 })).toHaveLength(1);
+    cache.close();
+  });
+
+  it("allows only the latest mutation owner to change or restore a thread", () => {
+    const cache = createCache();
+    cache.putMessages(primary, [message({ id: "m1", threadId: "thread-a" })]);
+    const original = cache.snapshotThread(primary.id, "thread-a")!;
+    const target = { accountId: primary.id, threadId: "thread-a" };
+
+    cache.claimMutation("older", [target]);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "markRead" }, "older")).toBe(
+      true,
+    );
+    cache.claimMutation("newer", [target]);
+
+    expect(cache.restoreThreadIfOwned(original, "older")).toBe(false);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "star" }, "older")).toBe(false);
+    expect(cache.applyActionIfOwned(primary.id, "thread-a", { type: "star" }, "newer")).toBe(true);
+    cache.releaseMutation("older", [target]);
+
+    expect(cache.ownsMutation(primary.id, "thread-a", "newer")).toBe(true);
+    expect(cache.snapshotThread(primary.id, "thread-a")).toMatchObject({
+      unread: 0,
+      starred: 1,
+    });
+    cache.close();
+  });
+
+  it("preserves optimistic summaries while ordinary thread hydration is stale", () => {
+    const cache = createCache();
+    const unread = message({ id: "read-message", threadId: "read-thread" });
+    const inbox = message({ id: "archive-message", threadId: "archive-thread" });
+    cache.putMessages(primary, [unread, inbox]);
+    const readTarget = { accountId: primary.id, threadId: unread.threadId };
+    const archiveTarget = { accountId: primary.id, threadId: inbox.threadId };
+
+    cache.claimMutation("read-mutation", [readTarget]);
+    cache.applyActionIfOwned(primary.id, unread.threadId, { type: "markRead" }, "read-mutation");
+    cache.claimMutation("archive-mutation", [archiveTarget]);
+    cache.applyActionIfOwned(primary.id, inbox.threadId, { type: "archive" }, "archive-mutation");
+
+    cache.putThread(primary, {
+      id: unread.threadId,
+      subject: unread.subject,
+      messages: [unread],
+    });
+    cache.putThread(primary, {
+      id: inbox.threadId,
+      subject: inbox.subject,
+      messages: [inbox],
+    });
+
+    expect(cache.snapshotThread(primary.id, unread.threadId)?.unread).toBe(0);
+    expect(
+      cache.listThreads({ view: "inbox", offset: 0, limit: 20 }).map((thread) => thread.id),
+    ).not.toContain(inbox.threadId);
+
+    cache.putThreadIfOwned(
+      primary,
+      {
+        id: unread.threadId,
+        subject: unread.subject,
+        messages: [unread],
+      },
+      "read-mutation",
+    );
+    expect(cache.snapshotThread(primary.id, unread.threadId)?.unread).toBe(1);
     cache.close();
   });
 
