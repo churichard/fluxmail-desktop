@@ -209,6 +209,48 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("opens the ordinary draft when a newer scheduled draft shares its conversation", () => {
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "scheduled",
+      accountId: primary.id,
+      draftId: "scheduled-draft",
+      sendAt: "2026-07-24T12:00:00Z",
+    };
+    cache.putMessages(primary, [
+      message({
+        id: "ordinary-message",
+        threadId: "shared-thread",
+        draftId: "ordinary-draft",
+        date: "2026-07-23T10:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+      message({
+        id: "scheduled-message",
+        threadId: "shared-thread",
+        draftId: scheduled.draftId,
+        date: "2026-07-23T11:00:00Z",
+        folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+        flags: { read: true, starred: false, draft: true },
+      }),
+    ]);
+
+    const [draft] = cache.listThreads({
+      view: "drafts",
+      scheduledDrafts: [scheduled],
+      offset: 0,
+      limit: 20,
+    });
+
+    expect(draft).toMatchObject({
+      id: "shared-thread",
+      draftId: "ordinary-draft",
+    });
+    expect(draft).not.toHaveProperty("scheduleId");
+    cache.close();
+  });
+
   it("identifies the scheduled draft a generic mailbox would open", () => {
     const cache = createCache();
     const scheduled = {

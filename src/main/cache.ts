@@ -533,6 +533,7 @@ export class MailCache {
         scheduled,
       ]),
     );
+    const scheduledDraftKeys = JSON.stringify([...scheduledByDraft.keys()]);
     const latestDraft = scheduledByDraft.size
       ? this.db.prepare(
           `SELECT json_extract(payload_json, '$.draftId') AS draft_id
@@ -541,15 +542,31 @@ export class MailCache {
              AND thread_id = ?
              AND json_extract(payload_json, '$.flags.draft') = 1
              AND json_extract(payload_json, '$.draftId') IS NOT NULL
+             ${
+               input.view === "drafts"
+                 ? `AND json_array(
+                      account_id,
+                      json_extract(payload_json, '$.draftId')
+                    ) NOT IN (SELECT value FROM json_each(?))`
+                 : ""
+             }
            ORDER BY date DESC, rowid DESC
            LIMIT 1`,
         )
       : undefined;
     return rows.map((row) => {
       const summary = toSummary(row);
-      const draft = latestDraft?.get(row.account_id, row.thread_id) as
-        | { draft_id: string }
-        | undefined;
+      const draft = (
+        input.view === "drafts"
+          ? latestDraft?.get(row.account_id, row.thread_id, scheduledDraftKeys)
+          : latestDraft?.get(row.account_id, row.thread_id)
+      ) as { draft_id: string } | undefined;
+      if (input.view === "drafts" && draft) {
+        return {
+          ...summary,
+          draftId: draft.draft_id,
+        };
+      }
       const scheduled = draft
         ? scheduledByDraft.get(scheduledDraftKey(row.account_id, draft.draft_id))
         : undefined;
