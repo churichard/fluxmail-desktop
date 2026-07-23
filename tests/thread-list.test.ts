@@ -40,6 +40,25 @@ describe("thread row activation", () => {
     expect(onCheck).toHaveBeenCalledOnce();
     expect(onOpen).not.toHaveBeenCalled();
   });
+
+  it("marks conversations that contain a draft", () => {
+    const { getByText } = render(
+      createElement(ThreadRow, {
+        thread: { ...testThread, draft: true },
+        active: false,
+        checked: false,
+        onOpen: vi.fn(),
+        onCheck: vi.fn(),
+        moveLabel: "Archive",
+        restore: false,
+        onMove: vi.fn(),
+        onToggleRead: vi.fn(),
+        onStar: vi.fn(),
+      }),
+    );
+
+    expect(getByText("Draft").classList.contains("thread-draft-label")).toBe(true);
+  });
 });
 
 describe("thread list overlay scrollbar", () => {
