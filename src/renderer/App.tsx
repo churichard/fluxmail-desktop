@@ -63,7 +63,6 @@ export function App() {
   const readingPaneRef = useRef<ReadingPaneHandle>(null);
   const refreshTimer = useRef<number | undefined>(undefined);
   const listRequest = useRef(0);
-  const openThreadRequest = useRef(0);
   const quickReplyDirty = useRef(false);
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
@@ -92,6 +91,12 @@ export function App() {
     quickReplyDirty.current = false;
     return true;
   }, []);
+  const closeReadingDraft = useCallback(() => readingPaneRef.current?.closeDraft() ?? true, []);
+  const prepareReadingNavigation = useCallback((): boolean | Promise<boolean> => {
+    const draftClosed = closeReadingDraft();
+    if (typeof draftClosed === "boolean") return draftClosed && confirmQuickReplyNavigation();
+    return draftClosed.then((closed) => closed && confirmQuickReplyNavigation());
+  }, [closeReadingDraft, confirmQuickReplyNavigation]);
   const selectedCounts = accountId
     ? (bootstrap?.countsByAccount[accountId] ?? {
         unreadCount: 0,
@@ -229,7 +234,6 @@ export function App() {
   }, [bootstrap?.preferences.appearance]);
 
   useEffect(() => {
-    openThreadRequest.current += 1;
     if (!bootstrap?.accounts.length) return;
     setThreads([]);
     loadedThreadCount.current = DEFAULT_PAGE_SIZE;
@@ -249,19 +253,14 @@ export function App() {
       if (event.type === "accounts-changed" || event.type === "license-changed")
         void loadBootstrap();
       if (event.type === "window-close-requested") {
-        const composeDialog = composeDialogRef.current;
-        if (!composeDialog) {
-          if (canCloseQuickReply(quickReplyDirty.current)) {
+        void (async () => {
+          const composeDialog = composeDialogRef.current;
+          const draftClosed = composeDialog ? true : await closeReadingDraft();
+          const closed = composeDialog ? await composeDialog.close() : draftClosed;
+          if (closed && canCloseQuickReply(quickReplyDirty.current))
             void window.fluxmail.system.confirmWindowClose();
-          } else {
-            void window.fluxmail.system.cancelWindowClose();
-          }
-        } else {
-          void composeDialog.close().then((closed) => {
-            if (closed) void window.fluxmail.system.confirmWindowClose();
-            else void window.fluxmail.system.cancelWindowClose();
-          });
-        }
+          else void window.fluxmail.system.cancelWindowClose();
+        })();
       }
       if (event.type === "cache-changed") {
         window.clearTimeout(refreshTimer.current);
@@ -275,35 +274,36 @@ export function App() {
       window.clearTimeout(refreshTimer.current);
       unsubscribe();
     };
-  }, [loadBootstrap, loadThreads]);
+  }, [closeReadingDraft, loadBootstrap, loadThreads]);
 
-  const openCompose = useCallback(() => {
-    if (!confirmQuickReplyNavigation()) return;
+  const openCompose = useCallback(async () => {
     const account = accountId
       ? bootstrap?.accounts.find((candidate) => candidate.id === accountId)
       : bootstrap?.accounts[0];
     if (!account) return;
+    const canNavigate = prepareReadingNavigation();
+    if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
     setComposeSeed({ accountId: account.id });
     void window.fluxmail.analytics
       .trackFeature({ feature: "compose", action: "opened", source: "sidebar" })
       .catch(() => undefined);
-  }, [accountId, bootstrap?.accounts, confirmQuickReplyNavigation]);
+  }, [accountId, bootstrap?.accounts, prepareReadingNavigation]);
 
   const changeAccount = useCallback(
-    (nextAccountId?: string) => {
-      if (nextAccountId === accountId || !confirmQuickReplyNavigation()) return;
+    async (nextAccountId?: string) => {
+      if (nextAccountId === accountId) return;
+      const canNavigate = prepareReadingNavigation();
+      if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
       setAccountId(nextAccountId);
     },
-    [accountId, confirmQuickReplyNavigation],
+    [accountId, prepareReadingNavigation],
   );
 
   const changeView = useCallback(
-    (nextView: MailboxView, nextLabel?: string) => {
-      if (
-        (nextView === view && nextLabel === label && !submittedSearch) ||
-        !confirmQuickReplyNavigation()
-      )
-        return;
+    async (nextView: MailboxView, nextLabel?: string) => {
+      if (nextView === view && nextLabel === label && !submittedSearch) return;
+      const canNavigate = prepareReadingNavigation();
+      if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
       setView(nextView);
       setLabel(nextLabel);
       setSubmittedSearch("");
@@ -316,12 +316,14 @@ export function App() {
         })
         .catch(() => undefined);
     },
-    [confirmQuickReplyNavigation, label, submittedSearch, view],
+    [label, prepareReadingNavigation, submittedSearch, view],
   );
 
-  const submitSearch = useCallback(() => {
+  const submitSearch = useCallback(async () => {
     const query = searchText.trim();
-    if (query === submittedSearch || !confirmQuickReplyNavigation()) return;
+    if (query === submittedSearch) return;
+    const canNavigate = prepareReadingNavigation();
+    if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
     if (!query) {
       setSubmittedSearch("");
       return;
@@ -334,7 +336,7 @@ export function App() {
         source: "toolbar",
       })
       .catch(() => undefined);
-  }, [confirmQuickReplyNavigation, searchText, submittedSearch]);
+  }, [prepareReadingNavigation, searchText, submittedSearch]);
 
   const modify = useCallback(
     async (action: ModifyActionInput, explicit?: ThreadSummary[]) => {
@@ -352,13 +354,13 @@ export function App() {
       const previousSelectedThread = selectedThread;
       const targetKeys = new Set(targets.map(threadKey));
       if (
-        quickReplyDirty.current &&
         selectedThread &&
         targetKeys.has(threadKey(selectedThread)) &&
-        shouldClearSelectedThread(submittedSearch ? "search" : view, action) &&
-        !confirmQuickReplyNavigation()
-      )
-        return;
+        shouldClearSelectedThread(submittedSearch ? "search" : view, action)
+      ) {
+        const canNavigate = prepareReadingNavigation();
+        if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
+      }
       const preserveQuickReply = Boolean(
         quickReplyDirty.current && selectedThread && targetKeys.has(threadKey(selectedThread)),
       );
@@ -411,9 +413,9 @@ export function App() {
       }
     },
     [
-      confirmQuickReplyNavigation,
       loadThreads,
       mailboxContext,
+      prepareReadingNavigation,
       selectedThread,
       selection,
       submittedSearch,
@@ -424,109 +426,71 @@ export function App() {
 
   const openThread = useCallback(
     async (thread: ThreadSummary) => {
-      const changesThread =
-        thread.draft || !selectedThread || threadKey(selectedThread) !== threadKey(thread);
-      if (changesThread && !confirmQuickReplyNavigation()) return;
-      const request = ++openThreadRequest.current;
-      let threadToOpen = thread;
-      if (thread.draft) {
-        try {
-          const detail = await window.fluxmail.mail.getThread({
-            accountId: thread.accountId,
-            threadId: thread.id,
-          });
-          if (request !== openThreadRequest.current) return;
-          const draft = [...detail.messages].reverse().find((message) => message.flags.draft);
-          if (!draft?.draftId) {
-            threadToOpen = { ...thread, draft: false };
-            setThreads((current) =>
-              current.map((candidate) =>
-                threadKey(candidate) === threadKey(thread)
-                  ? { ...candidate, draft: false }
-                  : candidate,
-              ),
-            );
-          } else {
-            const replyTarget = [...detail.messages]
-              .reverse()
-              .find((message) => !message.flags.draft);
-            const attachments = draft.attachments?.length
-              ? await window.fluxmail.attachments.prepare({
-                  accountId: thread.accountId,
-                  messageId: draft.id,
-                  attachments: draft.attachments,
-                })
-              : [];
-            if (request !== openThreadRequest.current) {
-              if (attachments.length)
-                void window.fluxmail.attachments
-                  .release(attachments.map((attachment) => attachment.token))
-                  .catch(() => undefined);
-              return;
-            }
-            setComposeSeed({
-              accountId: thread.accountId,
-              draftId: draft.draftId,
-              to: formatAddresses(draft.to),
-              cc: formatAddresses(draft.cc),
-              bcc: formatAddresses(draft.bcc),
-              subject: draft.subject,
-              initialHtml: draft.body?.html,
-              initialText: draft.body?.text,
-              ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
-              initialAttachments: attachments,
-            });
-            return;
-          }
-        } catch (caught) {
-          if (request === openThreadRequest.current) setError(errorMessage(caught));
-          return;
-        }
-      }
-      const openedThread = threadToOpen.unread ? { ...threadToOpen, unread: false } : threadToOpen;
+      const changesThread = !selectedThread || threadKey(selectedThread) !== threadKey(thread);
+      if (!changesThread) return;
+      const canNavigate = prepareReadingNavigation();
+      if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
+      const openedThread = thread.unread ? { ...thread, unread: false } : thread;
       setSelectedThread(openedThread);
-      if (!threadToOpen.unread) return;
+      if (!thread.unread) return;
 
       setThreads((current) =>
         current.map((candidate) =>
-          threadKey(candidate) === threadKey(threadToOpen)
-            ? { ...candidate, unread: false }
-            : candidate,
+          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
         ),
       );
-      if (threadToOpen.folderRoles.includes("inbox")) {
+      if (thread.folderRoles.includes("inbox")) {
         setBootstrap((current) =>
-          current ? adjustUnreadCount(current, threadToOpen.accountId, -1) : current,
+          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
         );
       }
       void window.fluxmail.mail
         .modify({
-          targets: [{ accountId: threadToOpen.accountId, threadId: threadToOpen.id }],
+          targets: [{ accountId: thread.accountId, threadId: thread.id }],
           action: { type: "markRead" },
         })
         .catch((caught) => {
           setThreads((current) =>
             current.map((candidate) =>
-              threadKey(candidate) === threadKey(threadToOpen)
+              threadKey(candidate) === threadKey(thread)
                 ? { ...candidate, unread: true }
                 : candidate,
             ),
           );
           setSelectedThread((current) =>
-            current && threadKey(current) === threadKey(threadToOpen)
+            current && threadKey(current) === threadKey(thread)
               ? { ...current, unread: true }
               : current,
           );
-          if (threadToOpen.folderRoles.includes("inbox")) {
+          if (thread.folderRoles.includes("inbox")) {
             setBootstrap((current) =>
-              current ? adjustUnreadCount(current, threadToOpen.accountId, 1) : current,
+              current ? adjustUnreadCount(current, thread.accountId, 1) : current,
             );
           }
           setError(errorMessage(caught));
         });
     },
-    [confirmQuickReplyNavigation, selectedThread],
+    [prepareReadingNavigation, selectedThread],
   );
+
+  const handleDraftMissing = useCallback((missingThread: ThreadSummary) => {
+    setThreads((current) =>
+      current.map((candidate) =>
+        threadKey(candidate) === threadKey(missingThread)
+          ? { ...candidate, draft: false }
+          : candidate,
+      ),
+    );
+    setSelectedThread((current) =>
+      current && threadKey(current) === threadKey(missingThread)
+        ? { ...current, draft: false }
+        : current,
+    );
+  }, []);
+
+  const handleDraftFinished = useCallback(() => {
+    void loadThreads({ quiet: true, preservePages: true });
+  }, [loadThreads]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -558,7 +522,7 @@ export function App() {
         : selectedThread
           ? [selectedThread]
           : undefined;
-      if (event.key.toLowerCase() === "c") openCompose();
+      if (event.key.toLowerCase() === "c") void openCompose();
       const activeView = submittedSearch ? "search" : view;
       if (event.key.toLowerCase() === "e")
         void modify(mailboxMoveAction(activeView), actionTargets);
@@ -742,6 +706,8 @@ export function App() {
         onError={setError}
         onQuickReplyDirtyChange={handleQuickReplyDirtyChange}
         quickReplyDiscardVersion={quickReplyDiscardVersion}
+        onDraftMissing={handleDraftMissing}
+        onDraftFinished={handleDraftFinished}
       />
       {composeSeed ? (
         <ComposeDialog
@@ -947,18 +913,6 @@ export function replySeed(thread: ThreadSummary): ComposeSeed {
       : `Re: ${thread.subject}`,
     threadId: thread.id,
   };
-}
-
-function formatAddresses(addresses?: Array<{ name?: string; email: string }>): string {
-  return (addresses ?? [])
-    .map((address) => {
-      if (!address.name) return address.email;
-      const name = /[,;"]/.test(address.name)
-        ? `"${address.name.replaceAll('"', '\\"')}"`
-        : address.name;
-      return `${name} <${address.email}>`;
-    })
-    .join(", ");
 }
 
 export function Splash({ error }: { error?: AppError }) {

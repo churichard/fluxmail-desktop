@@ -24,7 +24,13 @@ import type {
   ComposeAttachment,
   ThreadSummary,
 } from "../../shared/contracts";
-import { parseAddressField } from "./ComposeDialog";
+import {
+  ComposeDialog,
+  formatAddresses,
+  parseAddressField,
+  type ComposeDialogHandle,
+  type ComposeSeed,
+} from "./ComposeDialog";
 import { KEYBOARD_SHORTCUTS } from "../shortcuts";
 import { EmailHtml } from "./EmailHtml";
 import { TrackingPixelIndicator } from "./TrackingPixelIndicator";
@@ -52,12 +58,15 @@ interface Props {
   onError(message: string): void;
   onQuickReplyDirtyChange(dirty: boolean): void;
   quickReplyDiscardVersion?: number;
+  onDraftMissing?(thread: ThreadSummary): void;
+  onDraftFinished?(): void;
 }
 
 export type InlineComposerMode = "reply" | "replyAll" | "forward";
 
 export interface ReadingPaneHandle {
   openComposer(mode: InlineComposerMode): void;
+  closeDraft(): boolean | Promise<boolean>;
 }
 
 interface InlineComposerState {
@@ -78,17 +87,24 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     onError,
     onQuickReplyDirtyChange,
     quickReplyDiscardVersion,
+    onDraftMissing,
+    onDraftFinished,
   },
   ref,
 ) {
   const [detail, setDetail] = useState<MailThread>();
   const [loading, setLoading] = useState(false);
   const [composer, setComposer] = useState<InlineComposerState>();
+  const [draftSeed, setDraftSeed] = useState<ComposeSeed>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const forwardRequest = useRef(0);
   const composerRef = useRef<InlineComposerState | undefined>(undefined);
+  const draftDialogRef = useRef<ComposeDialogHandle>(null);
+  const draftSeedRef = useRef<ComposeSeed | undefined>(undefined);
+  const loadedThreadKey = useRef<string | undefined>(undefined);
   const composerDirty = useRef(false);
   composerRef.current = composer;
+  draftSeedRef.current = draftSeed;
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
   const threadIdentityRef = useRef(threadIdentity);
   threadIdentityRef.current = threadIdentity;
@@ -126,7 +142,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
 
   const openComposer = useCallback(
     async (mode: InlineComposerMode) => {
-      const message = detail?.messages.at(-1);
+      if (draftSeed) return;
+      const message = [...(detail?.messages ?? [])]
+        .reverse()
+        .find((candidate) => !candidate.flags.draft);
       if (!thread || !message) return;
       if (mode === "replyAll" && !shouldOfferReplyAll(thread.accountEmail, message)) return;
       if (!canReplaceComposer(mode)) return;
@@ -160,15 +179,24 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         }
       }
     },
-    [canReplaceComposer, detail, onError, thread],
+    [canReplaceComposer, detail, draftSeed, onError, thread],
   );
 
-  useImperativeHandle(ref, () => ({ openComposer: (mode) => void openComposer(mode) }), [
-    openComposer,
-  ]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      openComposer: (mode) => void openComposer(mode),
+      closeDraft: () => draftDialogRef.current?.close() ?? true,
+    }),
+    [openComposer],
+  );
 
   useEffect(() => {
+    const nextThreadKey = thread ? `${thread.accountId}:${thread.id}` : undefined;
+    if (nextThreadKey && nextThreadKey === loadedThreadKey.current && draftSeedRef.current) return;
+    loadedThreadKey.current = nextThreadKey;
     setDetail(undefined);
+    setDraftSeed(undefined);
     composerDirty.current = false;
     setComposer(undefined);
     if (!thread) return;
@@ -176,8 +204,43 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     setLoading(true);
     void window.fluxmail.mail
       .getThread({ accountId: thread.accountId, threadId: thread.id })
-      .then((result) => {
-        if (!canceled) setDetail(result);
+      .then(async (result) => {
+        if (canceled) return;
+        setDetail(result);
+        const draft = [...result.messages]
+          .reverse()
+          .find((message) => message.flags.draft && message.draftId);
+        if (!draft?.draftId) {
+          if (thread.draft) onDraftMissing?.(thread);
+          return;
+        }
+        const replyTarget = [...result.messages].reverse().find((message) => !message.flags.draft);
+        const initialAttachments = draft.attachments?.length
+          ? await window.fluxmail.attachments.prepare({
+              accountId: thread.accountId,
+              messageId: draft.id,
+              attachments: draft.attachments,
+            })
+          : [];
+        if (canceled) {
+          if (initialAttachments.length)
+            void window.fluxmail.attachments
+              .release(initialAttachments.map((attachment) => attachment.token))
+              .catch(() => undefined);
+          return;
+        }
+        setDraftSeed({
+          accountId: thread.accountId,
+          draftId: draft.draftId,
+          to: formatAddresses(draft.to),
+          cc: formatAddresses(draft.cc),
+          bcc: formatAddresses(draft.bcc),
+          subject: draft.subject,
+          initialHtml: draft.body?.html,
+          initialText: draft.body?.text,
+          ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
+          initialAttachments,
+        });
       })
       .catch((error) =>
         onError(
@@ -190,7 +253,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     return () => {
       canceled = true;
     };
-  }, [onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
+  }, [onDraftMissing, onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
 
   if (!thread)
     return (
@@ -208,7 +271,8 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         <p role="status">Opening conversation...</p>
       </section>
     );
-  const lastMessage = detail.messages.at(-1);
+  const messages = detail.messages.filter((message) => !message.flags.draft);
+  const lastMessage = messages.at(-1);
   const replyAllAvailable = Boolean(
     lastMessage && shouldOfferReplyAll(detail.accountEmail, lastMessage),
   );
@@ -296,19 +360,44 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </div>
             ) : null}
           </div>
-          {detail.messages
-            .filter((message) => !message.flags.draft)
-            .map((message) => (
-              <MessageCard
-                key={message.id}
-                message={message}
-                blockRemoteImages={blockRemoteImages}
-                imageRelay={imageRelay}
-                imageRelayAvailable={imageRelayAvailable}
-                onError={onError}
-              />
-            ))}
-          {lastMessage ? (
+          {messages.map((message) => (
+            <MessageCard
+              key={message.id}
+              message={message}
+              blockRemoteImages={blockRemoteImages}
+              imageRelay={imageRelay}
+              imageRelayAvailable={imageRelayAvailable}
+              onError={onError}
+            />
+          ))}
+          {draftSeed ? (
+            <ComposeDialog
+              ref={draftDialogRef}
+              inline
+              seed={draftSeed}
+              accounts={[]}
+              blockRemoteImages={blockRemoteImages}
+              imageRelay={imageRelay}
+              imageRelayAvailable={imageRelayAvailable}
+              onClose={() => {
+                setDraftSeed(undefined);
+                setDetail((current) =>
+                  current
+                    ? {
+                        ...current,
+                        messages: current.messages.filter((message) => !message.flags.draft),
+                      }
+                    : current,
+                );
+                onDraftFinished?.();
+              }}
+              onSent={() => {
+                setDraftSeed(undefined);
+                onDraftFinished?.();
+              }}
+              onError={onError}
+            />
+          ) : lastMessage ? (
             <div className="reply-actions">
               <button
                 aria-keyshortcuts={KEYBOARD_SHORTCUTS.reply.keys}
@@ -335,7 +424,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </button>
             </div>
           ) : null}
-          {composer && lastMessage ? (
+          {!draftSeed && composer && lastMessage ? (
             <InlineComposer
               key={composer.mode}
               accountId={thread.accountId}

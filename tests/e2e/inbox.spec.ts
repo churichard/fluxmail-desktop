@@ -807,16 +807,18 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await draftsNav.click();
     const launchDraft = page.locator(".thread-row").filter({ hasText: "Launch notes" });
     await expect(launchDraft).toBeVisible();
+    await expect(launchDraft.getByText("Draft", { exact: true })).toBeVisible();
     await launchDraft.locator(".thread-open").click();
-    const resumedDraft = page.getByRole("dialog", { name: "New message" });
-    await expect(resumedDraft.locator("header strong")).toHaveText("Launch notes");
+    const resumedDraft = page.getByRole("region", { name: "Draft" });
+    await expect(resumedDraft.locator("header strong")).toHaveText("Draft");
     await expect(resumedDraft.locator(".recipient-summary")).toContainText("sam@example.test");
+    await expect(resumedDraft.getByLabel("Subject")).toHaveValue("Launch notes");
     await expect(resumedDraft.locator('[contenteditable="true"]')).toContainText(
       "The first draft is ready.",
     );
     await expect(resumedDraft.locator(".compose-attachments")).toContainText("launch-notes.pdf");
-    await expect(resumedDraft.getByText("Draft saved", { exact: true })).toBeVisible();
-    await resumedDraft.getByRole("button", { name: "Close compose" }).click();
+    await expect(resumedDraft.getByText("Saved", { exact: true })).toBeVisible();
+    await inboxNav.click();
     await expect(resumedDraft).toBeHidden();
 
     await page.keyboard.press("Meta+c");
@@ -1113,7 +1115,7 @@ test("opens DevTools at the bottom without changing window drag regions", async 
   }
 });
 
-test("saves a draft before closing the window", async () => {
+test("saves modal and inline drafts before closing the window", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-window-close-e2e-"));
   const electronApp = await electron.launch({
     args: [mockKeychainArgument, process.cwd()],
@@ -1147,6 +1149,25 @@ test("saves a draft before closing the window", async () => {
     await expect(reopened.getByRole("heading", { name: "Inbox" })).toBeVisible();
     await reopened.getByRole("button", { name: "Drafts" }).click();
     await expect(reopened.getByText("Saved during window close", { exact: true })).toBeVisible();
+
+    const savedDraft = reopened
+      .locator(".thread-row")
+      .filter({ hasText: "Saved during window close" });
+    await savedDraft.locator(".thread-open").click();
+    const inlineDraft = reopened.getByRole("region", { name: "Draft" });
+    await inlineDraft.getByLabel("Subject").fill("Inline draft saved during window close");
+
+    const finalWindow = electronApp.waitForEvent("window");
+    const reopenedClosed = reopened.waitForEvent("close");
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+    await reopenedClosed;
+    await electronApp.evaluate(({ app }) => app.emit("activate"));
+    const finalPage = await finalWindow;
+    await expect(finalPage.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await finalPage.getByRole("button", { name: "Drafts" }).click();
+    await expect(
+      finalPage.getByText("Inline draft saved during window close", { exact: true }),
+    ).toBeVisible();
   } finally {
     await electronApp.close();
     rmSync(dataDirectory, { recursive: true, force: true });

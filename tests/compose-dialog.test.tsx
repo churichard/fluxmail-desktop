@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { createRef } from "react";
+import { createRef, StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposeDialog, type ComposeDialogHandle } from "../src/renderer/components/ComposeDialog";
@@ -213,6 +213,76 @@ describe("ComposeDialog draft coordination", () => {
     expect(closed).toBe(true);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ subject: "Save before closing" }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("saves inline draft edits through coordinated navigation", async () => {
+    const save = vi.fn(async () => ({
+      draftId: "draft-1",
+      messageId: "message-1",
+    }));
+    const ref = createRef<ComposeDialogHandle>();
+    const onClose = vi.fn();
+    installApi({ save });
+    render(
+      <ComposeDialog
+        ref={ref}
+        inline
+        seed={{ accountId: "account-1", draftId: "draft-1", subject: "Original subject" }}
+        accounts={[]}
+        onClose={onClose}
+        onSent={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Subject"), {
+      target: { value: "Updated subject" },
+    });
+    let closed = false;
+    await act(async () => {
+      closed = (await ref.current?.close()) ?? false;
+    });
+
+    expect(closed).toBe(true);
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ draftId: "draft-1", subject: "Updated subject" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps inline draft attachments available through the Strict Mode effect cycle", async () => {
+    const release = vi.fn(async () => undefined);
+    installApi({ save: vi.fn(), release });
+    const rendered = render(
+      <StrictMode>
+        <ComposeDialog
+          inline
+          seed={{
+            accountId: "account-1",
+            draftId: "draft-1",
+            initialAttachments: [
+              {
+                token: "attachment-token",
+                filename: "notes.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 128,
+              },
+            ],
+          }}
+          accounts={[]}
+          onClose={vi.fn()}
+          onSent={vi.fn()}
+          onError={vi.fn()}
+        />
+      </StrictMode>,
+    );
+
+    await act(async () => vi.runOnlyPendingTimers());
+    expect(release).not.toHaveBeenCalled();
+
+    rendered.unmount();
+    await act(async () => vi.runOnlyPendingTimers());
+    expect(release).toHaveBeenCalledWith(["attachment-token"]);
   });
 
   it("does not silently drop an invalid recipient when closing", () => {
