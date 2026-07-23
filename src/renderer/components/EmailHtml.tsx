@@ -177,9 +177,11 @@ export function EmailHtml({
   }, [findQuery, frameVersion, rendered.source]);
 
   useEffect(() => {
-    const document = iframeRef.current?.contentDocument;
+    const frame = iframeRef.current;
+    const document = frame?.contentDocument;
     if (!document) return;
-    activateEmailFindMatch(document, activeFindMatch);
+    const active = activateEmailFindMatch(document, activeFindMatch);
+    if (frame && active) scrollEmailFindMatchIntoView(frame, active);
   }, [activeFindMatch, findQuery, frameVersion, rendered.source]);
 
   useEffect(
@@ -497,7 +499,7 @@ export function clearEmailFindHighlights(document: Document): void {
   for (const parent of parents) parent.normalize();
 }
 
-function activateEmailFindMatch(document: Document, activeMatch?: number): void {
+function activateEmailFindMatch(document: Document, activeMatch?: number): HTMLElement | undefined {
   const matches = [...document.querySelectorAll<HTMLElement>(`mark[${FIND_MATCH_ATTRIBUTE}]`)];
   const activeValue = activeMatch === undefined ? undefined : String(activeMatch);
   matches.forEach((match) =>
@@ -507,8 +509,24 @@ function activateEmailFindMatch(document: Document, activeMatch?: number): void 
     activeValue === undefined
       ? undefined
       : matches.find((match) => match.getAttribute(FIND_MATCH_ATTRIBUTE) === activeValue);
-  if (active && typeof active.scrollIntoView === "function")
-    active.scrollIntoView({ behavior: "smooth", block: "center" });
+  return active;
+}
+
+function scrollEmailFindMatchIntoView(frame: HTMLIFrameElement, match: HTMLElement): void {
+  const scroller = frame.closest<HTMLElement>(".conversation-scroll");
+  if (!scroller) return;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const frameRect = frame.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  const matchTop = frameRect.top + matchRect.top;
+  const matchBottom = matchTop + matchRect.height;
+  if (matchTop >= scrollerRect.top && matchBottom <= scrollerRect.bottom) return;
+  const top =
+    scroller.scrollTop +
+    matchTop -
+    scrollerRect.top -
+    Math.max(0, (scroller.clientHeight - matchRect.height) / 2);
+  scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
 }
 
 function isVisibleFindText(node: Text, root: Element): boolean {

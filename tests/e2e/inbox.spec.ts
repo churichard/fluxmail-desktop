@@ -712,7 +712,7 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await messageFrame.locator("#email-root").evaluate((root) => {
       root.insertAdjacentHTML(
         "beforeend",
-        '<style>.hidden-find-probe{display:none}</style><p>Order <strong>#123</strong> is ready.</p><p class="hidden-find-probe">Hidden preheader</p>',
+        '<style>.hidden-find-probe{display:none}</style><p>Order <strong>#123</strong> is ready.</p><p class="hidden-find-probe">Hidden preheader</p><p>Scroll target</p><div style="height:2400px"></div><p>Scroll target</p>',
       );
     });
     await conversationFind.fill("Order #123");
@@ -720,6 +720,17 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(messageFrame.locator('mark[data-fluxmail-find-match="0"].active')).toHaveCount(2);
     await conversationFind.fill("Hidden preheader");
     await expect(page.locator(".message-find-status")).toHaveText("No matches");
+    await conversationFind.fill("Scroll target");
+    await expect(page.locator(".message-find-status")).toHaveText("1 of 2");
+    const conversationScroll = page.locator(".conversation-scroll");
+    await conversationScroll.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await conversationFind.press("Enter");
+    await expect(page.locator(".message-find-status")).toHaveText("2 of 2");
+    await expect
+      .poll(() => conversationScroll.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(1_000);
     await conversationFind.press("Escape");
     await expect(conversationFind).toHaveCount(0);
     await expect(messageFrame.locator("mark[data-fluxmail-find-match]")).toHaveCount(0);
