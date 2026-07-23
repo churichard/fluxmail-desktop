@@ -1,6 +1,16 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
+  ChevronDown,
+  ChevronUp,
   Ellipsis,
   Forward,
   LoaderCircle,
@@ -9,6 +19,7 @@ import {
   Paperclip,
   Reply,
   ReplyAll,
+  Search,
   Star,
   Tag,
   Trash2,
@@ -66,6 +77,7 @@ export type InlineComposerMode = "reply" | "replyAll" | "forward";
 
 export interface ReadingPaneHandle {
   openComposer(mode: InlineComposerMode): void;
+  openFind(): void;
   closeDraft(): boolean | Promise<boolean>;
 }
 
@@ -97,12 +109,17 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   const [composer, setComposer] = useState<InlineComposerState>();
   const [draftSeed, setDraftSeed] = useState<ComposeSeed>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findMatchCounts, setFindMatchCounts] = useState<Record<string, number>>({});
+  const [activeFindMatch, setActiveFindMatch] = useState(0);
   const forwardRequest = useRef(0);
   const composerRef = useRef<InlineComposerState | undefined>(undefined);
   const draftDialogRef = useRef<ComposeDialogHandle>(null);
   const draftSeedRef = useRef<ComposeSeed | undefined>(undefined);
   const loadedThreadKey = useRef<string | undefined>(undefined);
   const composerDirty = useRef(false);
+  const findInputRef = useRef<HTMLInputElement>(null);
   composerRef.current = composer;
   draftSeedRef.current = draftSeed;
   const threadIdentity = thread ? `${thread.accountId}:${thread.id}` : "";
@@ -110,6 +127,25 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
   threadIdentityRef.current = threadIdentity;
   const handleScrollerRef = useCallback((element: HTMLDivElement | null) => {
     setScroller(element);
+  }, []);
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!findOpen) return;
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, [findOpen]);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindMatchCounts({});
+    setActiveFindMatch(0);
   }, []);
 
   useEffect(() => {
@@ -186,15 +222,17 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     ref,
     () => ({
       openComposer: (mode) => void openComposer(mode),
+      openFind,
       closeDraft: () => draftDialogRef.current?.close() ?? true,
     }),
-    [openComposer],
+    [openComposer, openFind],
   );
 
   useEffect(() => {
     const nextThreadKey = thread ? `${thread.accountId}:${thread.id}` : undefined;
     if (nextThreadKey && nextThreadKey === loadedThreadKey.current && draftSeedRef.current) return;
     loadedThreadKey.current = nextThreadKey;
+    closeFind();
     setDetail(undefined);
     setDraftSeed(undefined);
     composerDirty.current = false;
@@ -253,7 +291,15 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     return () => {
       canceled = true;
     };
-  }, [onDraftMissing, onError, thread?.accountId, thread?.date, thread?.id, thread?.messageCount]);
+  }, [
+    closeFind,
+    onDraftMissing,
+    onError,
+    thread?.accountId,
+    thread?.date,
+    thread?.id,
+    thread?.messageCount,
+  ]);
 
   if (!thread)
     return (
@@ -272,11 +318,20 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
       </section>
     );
   const messages = detail.messages.filter((message) => !message.flags.draft);
+  const totalFindMatches = messages.reduce(
+    (total, message) => total + (findMatchCounts[message.id] ?? 0),
+    0,
+  );
   const lastMessage = messages.at(-1);
   const replyAllAvailable = Boolean(
     lastMessage && shouldOfferReplyAll(detail.accountEmail, lastMessage),
   );
   const deleteAction = mailboxDeleteAction(view, allowPermanentDelete);
+  const showNextFindMatch = (direction: 1 | -1) => {
+    if (!totalFindMatches) return;
+    setActiveFindMatch((current) => (current + direction + totalFindMatches) % totalFindMatches);
+  };
+  let findMatchOffset = 0;
 
   return (
     <section className="reading-pane">
@@ -339,6 +394,59 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
           <Star size={17} fill={thread.starred ? "currentColor" : "none"} />
         </IconButton>
       </header>
+      {findOpen ? (
+        <div className="message-find-bar" role="search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            ref={findInputRef}
+            aria-label="Find in conversation"
+            aria-keyshortcuts={KEYBOARD_SHORTCUTS.find.keys}
+            placeholder="Find in conversation"
+            value={findQuery}
+            onChange={(event) => {
+              setFindQuery(event.target.value);
+              setFindMatchCounts({});
+              setActiveFindMatch(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeFind();
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                showNextFindMatch(event.shiftKey ? -1 : 1);
+              }
+            }}
+          />
+          <span className="message-find-status" role="status" aria-live="polite">
+            {findQuery
+              ? totalFindMatches
+                ? `${activeFindMatch + 1} of ${totalFindMatches}`
+                : "No matches"
+              : null}
+          </span>
+          <button
+            type="button"
+            aria-label="Previous match"
+            disabled={!totalFindMatches}
+            onClick={() => showNextFindMatch(-1)}
+          >
+            <ChevronUp size={16} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next match"
+            disabled={!totalFindMatches}
+            onClick={() => showNextFindMatch(1)}
+          >
+            <ChevronDown size={16} />
+          </button>
+          <button type="button" aria-label="Close find" onClick={closeFind}>
+            <X size={16} />
+          </button>
+        </div>
+      ) : null}
       <div className="conversation-scroll-shell">
         <div ref={handleScrollerRef} className="conversation-scroll">
           <div className="conversation-title">
@@ -360,16 +468,31 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </div>
             ) : null}
           </div>
-          {messages.map((message) => (
-            <MessageCard
-              key={message.id}
-              message={message}
-              blockRemoteImages={blockRemoteImages}
-              imageRelay={imageRelay}
-              imageRelayAvailable={imageRelayAvailable}
-              onError={onError}
-            />
-          ))}
+          {messages.map((message) => {
+            const matchCount = findMatchCounts[message.id] ?? 0;
+            const localActiveFindMatch =
+              activeFindMatch >= findMatchOffset && activeFindMatch < findMatchOffset + matchCount
+                ? activeFindMatch - findMatchOffset
+                : undefined;
+            findMatchOffset += matchCount;
+            return (
+              <MessageCard
+                key={message.id}
+                message={message}
+                blockRemoteImages={blockRemoteImages}
+                imageRelay={imageRelay}
+                imageRelayAvailable={imageRelayAvailable}
+                findQuery={findOpen ? findQuery : ""}
+                activeFindMatch={localActiveFindMatch}
+                onFindMatchCountChange={(count) =>
+                  setFindMatchCounts((current) =>
+                    current[message.id] === count ? current : { ...current, [message.id]: count },
+                  )
+                }
+                onError={onError}
+              />
+            );
+          })}
           {draftSeed ? (
             <ComposeDialog
               ref={draftDialogRef}
@@ -453,12 +576,18 @@ function MessageCard({
   blockRemoteImages,
   imageRelay,
   imageRelayAvailable,
+  findQuery,
+  activeFindMatch,
+  onFindMatchCountChange,
   onError,
 }: {
   message: MailMessage;
   blockRemoteImages: boolean;
   imageRelay: boolean;
   imageRelayAvailable: boolean;
+  findQuery: string;
+  activeFindMatch?: number;
+  onFindMatchCountChange(count: number): void;
   onError(message: string): void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -466,14 +595,16 @@ function MessageCard({
   const senderName = message.from?.name || message.from?.email || "Unknown sender";
   const senderEmail =
     message.from?.email && message.from.email !== senderName ? message.from.email : undefined;
+  const contentExpanded = expanded || Boolean(findQuery);
   return (
     <article className="message-card">
       <div className="message-header">
         <button
           type="button"
           className="message-header-toggle"
-          aria-label={expanded ? "Collapse message" : "Expand message"}
-          aria-expanded={expanded}
+          aria-label={contentExpanded ? "Collapse message" : "Expand message"}
+          aria-expanded={contentExpanded}
+          disabled={Boolean(findQuery)}
           onClick={() => setExpanded((value) => !value)}
         />
         <span className="sender-avatar">{senderName.slice(0, 1).toUpperCase()}</span>
@@ -501,13 +632,16 @@ function MessageCard({
           }).format(new Date(message.date))}
         </time>
       </div>
-      {expanded ? (
+      {contentExpanded ? (
         <div className="message-body">
           <EmailHtml
             message={message}
             blockRemoteImages={blockRemoteImages}
             imageRelay={imageRelay}
             imageRelayAvailable={imageRelayAvailable}
+            findQuery={findQuery}
+            activeFindMatch={activeFindMatch}
+            onFindMatchCountChange={onFindMatchCountChange}
             onError={onError}
             onTrackingPixelsChange={setTrackingPixels}
           />

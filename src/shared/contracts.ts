@@ -314,6 +314,7 @@ export const bootstrapSchema = z.object({
   preferences: z.object({
     appearance: appearancePreferenceSchema,
     dockBadge: z.boolean(),
+    openNextAfterArchive: z.boolean(),
     blockRemoteImages: z.boolean(),
     imageRelay: z.boolean(),
   }),
@@ -378,6 +379,7 @@ export const appEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("license-changed") }),
   z.object({ type: z.literal("new-mail"), count: z.number().int().positive() }),
   z.object({ type: z.literal("window-close-requested") }),
+  z.object({ type: z.literal("find-in-conversation-requested") }),
 ]);
 export type AppEvent = z.infer<typeof appEventSchema>;
 
@@ -442,6 +444,7 @@ export interface FluxmailDesktopApi {
   preferences: {
     setAppearance(appearance: AppearancePreference): Promise<AppearancePreference>;
     setDockBadge(enabled: boolean): Promise<boolean>;
+    setOpenNextAfterArchive(enabled: boolean): Promise<boolean>;
     setBlockRemoteImages(enabled: boolean): Promise<boolean>;
     setImageRelay(enabled: boolean): Promise<boolean>;
   };
@@ -486,6 +489,7 @@ export const IPC = {
   telemetrySet: "fluxmail:telemetry:set",
   preferencesAppearanceSet: "fluxmail:preferences:appearance:set",
   preferencesDockBadgeSet: "fluxmail:preferences:dock-badge:set",
+  preferencesOpenNextAfterArchiveSet: "fluxmail:preferences:open-next-after-archive:set",
   preferencesBlockRemoteImagesSet: "fluxmail:preferences:block-remote-images:set",
   licenseActivate: "fluxmail:license:activate",
   preferencesImageRelaySet: "fluxmail:preferences:image-relay:set",

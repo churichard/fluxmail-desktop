@@ -70,6 +70,7 @@ export function App() {
   const loadedThreadCount = useRef(DEFAULT_PAGE_SIZE);
   const mailboxContext = JSON.stringify([accountId, label, submittedSearch, view]);
   const mailboxContextRef = useRef(mailboxContext);
+  const selectedThreadRef = useRef<ThreadSummary | undefined>(undefined);
   useLayoutEffect(() => {
     mailboxContextRef.current = mailboxContext;
   }, [mailboxContext]);
@@ -78,6 +79,9 @@ export function App() {
     setLoading(false);
     setLoadingMore(false);
   }, []);
+  useLayoutEffect(() => {
+    selectedThreadRef.current = selectedThread;
+  }, [selectedThread]);
 
   const accountIds = useMemo(() => (accountId ? [accountId] : undefined), [accountId]);
   const permanentDeleteAccountIds = useMemo(
@@ -268,6 +272,13 @@ export function App() {
         setBootstrap((current) => (current ? { ...current, sync: event.state } : current));
       if (event.type === "accounts-changed" || event.type === "license-changed")
         void loadBootstrap();
+      if (
+        event.type === "find-in-conversation-requested" &&
+        selectedThread &&
+        !composeSeed &&
+        !settingsOpen
+      )
+        readingPaneRef.current?.openFind();
       if (event.type === "window-close-requested") {
         void (async () => {
           const composeDialog = composeDialogRef.current;
@@ -290,7 +301,7 @@ export function App() {
       window.clearTimeout(refreshTimer.current);
       unsubscribe();
     };
-  }, [closeReadingDraft, loadBootstrap, loadThreads]);
+  }, [closeReadingDraft, composeSeed, loadBootstrap, loadThreads, selectedThread, settingsOpen]);
 
   const openCompose = useCallback(async () => {
     const account = accountId
@@ -377,6 +388,66 @@ export function App() {
     }
   }, [loadBootstrap, loadThreads, submittedSearch]);
 
+  const markThreadRead = useCallback(
+    async (thread: ThreadSummary) => {
+      invalidateThreadLoads();
+      setThreads((current) =>
+        current.map((candidate) =>
+          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
+        ),
+      );
+      setSelectedThread((current) =>
+        current && threadKey(current) === threadKey(thread)
+          ? { ...current, unread: false }
+          : current,
+      );
+      if (thread.folderRoles.includes("inbox")) {
+        setBootstrap((current) =>
+          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
+        );
+      }
+      if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
+        latestUndo.current = undefined;
+        setActionNotice(undefined);
+      }
+      try {
+        await window.fluxmail.mail.modify({
+          targets: [{ accountId: thread.accountId, threadId: thread.id }],
+          action: { type: "markRead" },
+          undoable: false,
+        });
+      } catch (caught) {
+        setThreads((current) =>
+          current.map((candidate) =>
+            threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: true } : candidate,
+          ),
+        );
+        setSelectedThread((current) =>
+          current && threadKey(current) === threadKey(thread)
+            ? { ...current, unread: true }
+            : current,
+        );
+        if (thread.folderRoles.includes("inbox")) {
+          setBootstrap((current) =>
+            current ? adjustUnreadCount(current, thread.accountId, 1) : current,
+          );
+        }
+        setError(errorMessage(caught));
+      }
+    },
+    [invalidateThreadLoads],
+  );
+
+  const activateThread = useCallback(
+    (thread: ThreadSummary) => {
+      selectedThreadRef.current = thread;
+      setSelectedThread(thread);
+      if (!thread.unread) return;
+      void markThreadRead(thread);
+    },
+    [markThreadRead],
+  );
+
   const modify = useCallback(
     async (action: ModifyActionInput, explicit?: ThreadSummary[]) => {
       const targets = explicit ?? threads.filter((thread) => selection.has(threadKey(thread)));
@@ -392,6 +463,17 @@ export function App() {
       const previousThreads = threads;
       const previousSelection = selection;
       const previousSelectedThread = selectedThread;
+      const shouldAdvanceAfterArchive = Boolean(
+        bootstrap?.preferences.openNextAfterArchive &&
+        action.type === "archive" &&
+        optimisticRemoval &&
+        targets.length === 1 &&
+        selectedThread &&
+        targetKeys.has(threadKey(selectedThread)),
+      );
+      const nextThread = shouldAdvanceAfterArchive
+        ? nextThreadAfterArchive(threads, selectedThread!)
+        : undefined;
       if (
         selectedThread &&
         targetKeys.has(threadKey(selectedThread)) &&
@@ -421,9 +503,14 @@ export function App() {
           for (const key of targetKeys) next.delete(key);
           return next;
         });
-        setSelectedThread((current) =>
-          current && targetKeys.has(threadKey(current)) ? undefined : current,
-        );
+        if (shouldAdvanceAfterArchive) {
+          selectedThreadRef.current = nextThread;
+          setSelectedThread(nextThread);
+        } else {
+          setSelectedThread((current) =>
+            current && targetKeys.has(threadKey(current)) ? undefined : current,
+          );
+        }
       }
       try {
         const result = await window.fluxmail.mail.modify({
@@ -450,6 +537,15 @@ export function App() {
             return undefined;
           return current;
         });
+        const currentSelectedThread = selectedThreadRef.current;
+        if (
+          nextThread?.unread &&
+          currentSelectedThread?.unread &&
+          threadKey(currentSelectedThread) === threadKey(nextThread) &&
+          mailboxContext === mailboxContextRef.current
+        ) {
+          await markThreadRead(nextThread);
+        }
         await loadThreads({
           quiet: optimisticRemoval,
           forceSearch: shouldForceProviderSearchAfterMutation(submittedSearch),
@@ -460,15 +556,23 @@ export function App() {
         if (optimisticRemoval && mailboxContext === mailboxContextRef.current) {
           setThreads(previousThreads);
           setSelection(previousSelection);
-          setSelectedThread((current) => current ?? previousSelectedThread);
+          setSelectedThread((current) => {
+            if (!previousSelectedThread) return current;
+            if (!current) return previousSelectedThread;
+            if (nextThread && threadKey(current) === threadKey(nextThread))
+              return previousSelectedThread;
+            return current;
+          });
         }
         setError(errorMessage(caught));
       }
     },
     [
+      bootstrap?.preferences.openNextAfterArchive,
       invalidateThreadLoads,
       loadThreads,
       mailboxContext,
+      markThreadRead,
       prepareReadingNavigation,
       selectedThread,
       selection,
@@ -484,53 +588,9 @@ export function App() {
       if (!changesThread) return;
       const canNavigate = prepareReadingNavigation();
       if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
-      const openedThread = thread.unread ? { ...thread, unread: false } : thread;
-      if (thread.unread) invalidateThreadLoads();
-      setSelectedThread(openedThread);
-      if (!thread.unread) return;
-
-      setThreads((current) =>
-        current.map((candidate) =>
-          threadKey(candidate) === threadKey(thread) ? { ...candidate, unread: false } : candidate,
-        ),
-      );
-      if (thread.folderRoles.includes("inbox")) {
-        setBootstrap((current) =>
-          current ? adjustUnreadCount(current, thread.accountId, -1) : current,
-        );
-      }
-      if (latestUndo.current?.targetKeys.has(threadKey(thread))) {
-        latestUndo.current = undefined;
-        setActionNotice(undefined);
-      }
-      void window.fluxmail.mail
-        .modify({
-          targets: [{ accountId: thread.accountId, threadId: thread.id }],
-          action: { type: "markRead" },
-          undoable: false,
-        })
-        .catch((caught) => {
-          setThreads((current) =>
-            current.map((candidate) =>
-              threadKey(candidate) === threadKey(thread)
-                ? { ...candidate, unread: true }
-                : candidate,
-            ),
-          );
-          setSelectedThread((current) =>
-            current && threadKey(current) === threadKey(thread)
-              ? { ...current, unread: true }
-              : current,
-          );
-          if (thread.folderRoles.includes("inbox")) {
-            setBootstrap((current) =>
-              current ? adjustUnreadCount(current, thread.accountId, 1) : current,
-            );
-          }
-          setError(errorMessage(caught));
-        });
+      activateThread(thread);
     },
-    [invalidateThreadLoads, prepareReadingNavigation, selectedThread],
+    [activateThread, prepareReadingNavigation, selectedThread],
   );
 
   const handleDraftMissing = useCallback((missingThread: ThreadSummary) => {
@@ -567,6 +627,16 @@ export function App() {
       if (event.metaKey && event.key.toLowerCase() === "r") {
         event.preventDefault();
         void refreshMail();
+        return;
+      }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f" &&
+        selectedThread
+      ) {
+        event.preventDefault();
+        readingPaneRef.current?.openFind();
         return;
       }
       if (editing) return;
@@ -942,6 +1012,15 @@ export function shouldOptimisticallyRemoveFromView(
     (view === "drafts" && action.type === "discardDraft") ||
     (view === "trash" && ["untrash", "delete"].includes(action.type))
   );
+}
+
+export function nextThreadAfterArchive(
+  threads: ThreadSummary[],
+  current: ThreadSummary,
+): ThreadSummary | undefined {
+  const currentIndex = threads.findIndex((thread) => threadKey(thread) === threadKey(current));
+  if (currentIndex < 0) return undefined;
+  return threads[currentIndex + 1] ?? threads[currentIndex - 1];
 }
 
 export function shouldClearSelectedThread(view: MailboxView, action: ModifyActionInput): boolean {

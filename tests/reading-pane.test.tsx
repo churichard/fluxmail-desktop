@@ -38,6 +38,81 @@ describe("ReadingPane", () => {
     expect(screen.getByRole("status").textContent).toBe("Opening conversation...");
   });
 
+  it("opens and closes the conversation find bar through its imperative handle", async () => {
+    const getThread = vi.fn(async () => detail("Searchable subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const ref = createRef<ReadingPaneHandle>();
+    render(
+      <ReadingPane
+        ref={ref}
+        view="inbox"
+        thread={summary()}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={vi.fn()}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+    await screen.findByText("Searchable subject");
+
+    act(() => ref.current?.openFind());
+
+    const input = screen.getByRole("textbox", { name: "Find in conversation" });
+    expect(input.getAttribute("aria-keyshortcuts")).toBe("Meta+F Control+F");
+    fireEvent.change(input, { target: { value: "missing" } });
+    expect(screen.getByRole("status").textContent).toBe("No matches");
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("textbox", { name: "Find in conversation" })).toBeNull();
+  });
+
+  it("keeps collapsed messages searchable and restores their collapsed state", async () => {
+    const getThread = vi.fn(async () => detail("Searchable subject", "message-1"));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread } } as unknown as FluxmailDesktopApi,
+    });
+    const ref = createRef<ReadingPaneHandle>();
+    render(
+      <ReadingPane
+        ref={ref}
+        view="inbox"
+        thread={summary()}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={vi.fn()}
+        onQuickReplyDirtyChange={vi.fn()}
+      />,
+    );
+    await screen.findByText("Searchable subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse message" }));
+    expect(screen.queryByText("Email body")).toBeNull();
+
+    act(() => ref.current?.openFind());
+    fireEvent.change(screen.getByRole("textbox", { name: "Find in conversation" }), {
+      target: { value: "Email" },
+    });
+
+    expect(screen.getByText("Email body")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Collapse message" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Find in conversation" }), {
+      key: "Escape",
+    });
+
+    expect(screen.queryByText("Email body")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand message" })).toBeTruthy();
+  });
+
   it("reloads an open conversation when its message count changes", async () => {
     const getThread = vi
       .fn<() => Promise<MailThread>>()

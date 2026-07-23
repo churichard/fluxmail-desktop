@@ -12,6 +12,7 @@ import type {
 } from "../src/shared/contracts";
 
 const closeDraft = vi.hoisted(() => vi.fn<() => boolean | Promise<boolean>>(() => true));
+const openFind = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/renderer/components/Sidebar", () => ({
   Sidebar: ({
@@ -35,6 +36,7 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   ThreadListPane: ({
     threads,
     onSelect,
+    onToggleSelection,
     onModify,
     searchText,
     onSearchText,
@@ -42,6 +44,7 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
   }: {
     threads: ThreadSummary[];
     onSelect(thread: ThreadSummary): void;
+    onToggleSelection(thread: ThreadSummary): void;
     onModify(action: ModifyActionInput, threads: ThreadSummary[]): Promise<void>;
     searchText: string;
     onSearchText(value: string): void;
@@ -62,6 +65,7 @@ vi.mock("../src/renderer/components/ThreadListPane", () => ({
           data-unread={String(thread.unread)}
         >
           <button onClick={() => onSelect(thread)}>{thread.subject}</button>
+          <button onClick={() => onToggleSelection(thread)}>Select {thread.subject}</button>
           <button onClick={() => void onModify({ type: "archive" }, [thread])}>
             Archive {thread.subject}
           </button>
@@ -95,7 +99,11 @@ vi.mock("../src/renderer/components/ReadingPane", async () => {
       ref,
     ) {
       const [composerMode, setComposerMode] = React.useState<string>();
-      React.useImperativeHandle(ref, () => ({ openComposer: setComposerMode, closeDraft }));
+      React.useImperativeHandle(ref, () => ({
+        openComposer: setComposerMode,
+        openFind,
+        closeDraft,
+      }));
       return (
         <section>
           {thread ? `Reading ${thread.subject}` : "No conversation"}
@@ -160,6 +168,7 @@ vi.mock("../src/renderer/components/FluxmailLogoMark", () => ({
 beforeEach(() => {
   closeDraft.mockReset();
   closeDraft.mockReturnValue(true);
+  openFind.mockReset();
 });
 
 afterEach(() => {
@@ -454,14 +463,17 @@ describe("App thread navigation", () => {
 
   it("keeps a newly opened thread selected when an archive finishes", async () => {
     const first = thread("thread-1", "First conversation", false);
-    const second = thread("thread-2", "Second conversation", false);
+    const second = { ...thread("thread-2", "Second conversation", false), unread: true };
+    const third = thread("thread-3", "Third conversation", false);
     let finishArchive!: () => void;
     const pendingArchive = new Promise<{ undoToken?: string }>((resolve) => {
       finishArchive = () => resolve({});
     });
     installApi(
-      [first, second],
-      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+      [first, second, third],
+      vi.fn(async ({ threadId }) =>
+        mailThread([first, second, third].find((item) => item.id === threadId)!),
+      ),
     );
     vi.mocked(window.fluxmail.mail.modify).mockReturnValue(pendingArchive);
     installMatchMedia();
@@ -471,13 +483,197 @@ describe("App thread navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: first.subject }));
     fireEvent.keyDown(window, { key: "e" });
     await waitFor(() => expect(screen.queryByRole("button", { name: first.subject })).toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: second.subject }));
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: third.subject }));
+    expect(screen.getByText(`Reading ${third.subject}`)).toBeTruthy();
 
     await act(async () => finishArchive());
 
     await waitFor(() => expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(`Reading ${third.subject}`)).toBeTruthy();
+    expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the next conversation after archiving the current one", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+      { threadsAfterModify: [second] },
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText(`Reading ${second.subject}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: first.subject })).toBeNull();
+  });
+
+  it("opens the previous conversation when archiving the last one", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+      { threadsAfterModify: [first] },
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: first.subject });
+    fireEvent.click(screen.getByRole("button", { name: second.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText(`Reading ${first.subject}`)).toBeTruthy();
+  });
+
+  it("leaves the reading pane empty when archive advancement is disabled", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+      { openNextAfterArchive: false, threadsAfterModify: [second] },
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText("No conversation")).toBeTruthy();
+  });
+
+  it("does not advance when archiving a different row", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+      { threadsAfterModify: [first] },
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+
+    fireEvent.click(screen.getByRole("button", { name: `Archive ${second.subject}` }));
+
+    expect(await screen.findByText(`Reading ${first.subject}`)).toBeTruthy();
+  });
+
+  it("does not advance after archiving multiple selected conversations", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    const third = thread("thread-3", "Third conversation", false);
+    installApi(
+      [first, second, third],
+      vi.fn(async ({ threadId }) =>
+        mailThread([first, second, third].find((item) => item.id === threadId)!),
+      ),
+      { threadsAfterModify: [third] },
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+    fireEvent.click(screen.getByRole("button", { name: `Select ${first.subject}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Select ${second.subject}` }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText("No conversation")).toBeTruthy();
+    expect(screen.queryByText(`Reading ${third.subject}`)).toBeNull();
+  });
+
+  it("restores the archived conversation without marking the next one read when archiving fails", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = { ...thread("thread-2", "Second conversation", false), unread: true };
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockImplementation(async ({ action }) => {
+      if (action.type === "archive") throw new Error("Archive failed.");
+      return {};
+    });
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText(`Reading ${first.subject}`)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("Archive failed.");
+    expect(window.fluxmail.mail.modify).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore the archived conversation after the user navigates elsewhere", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = thread("thread-2", "Second conversation", false);
+    const third = thread("thread-3", "Third conversation", false);
+    let failArchive!: (error: Error) => void;
+    const pendingArchive = new Promise<{ undoToken?: string }>((_resolve, reject) => {
+      failArchive = reject;
+    });
+    installApi(
+      [first, second, third],
+      vi.fn(async ({ threadId }) =>
+        mailThread([first, second, third].find((item) => item.id === threadId)!),
+      ),
+    );
+    vi.mocked(window.fluxmail.mail.modify).mockReturnValueOnce(pendingArchive);
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+    fireEvent.keyDown(window, { key: "e" });
     expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: third.subject }));
+
+    await act(async () => failArchive(new Error("Archive failed.")));
+
+    expect(screen.getByText(`Reading ${third.subject}`)).toBeTruthy();
+  });
+
+  it("marks an unread conversation read when opening it after archive", async () => {
+    const first = thread("thread-1", "First conversation", false);
+    const second = { ...thread("thread-2", "Second conversation", false), unread: true };
+    installApi(
+      [first, second],
+      vi.fn(async ({ threadId }) => mailThread(threadId === first.id ? first : second)),
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: first.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    await waitFor(() =>
+      expect(window.fluxmail.mail.modify).toHaveBeenCalledWith({
+        targets: [{ accountId: second.accountId, threadId: second.id }],
+        action: { type: "markRead" },
+        undoable: false,
+      }),
+    );
+    expect(screen.getByText(`Reading ${second.subject}`)).toBeTruthy();
+  });
+
+  it("does not advance when archiving in All Mail", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: "All mail" }));
+    fireEvent.click(await screen.findByRole("button", { name: current.subject }));
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(await screen.findByText(`Reading ${current.subject}`)).toBeTruthy();
   });
 
   it("keeps a thread opened in another mailbox selected when an archive finishes", async () => {
@@ -711,6 +907,27 @@ describe("App thread navigation", () => {
     expect(screen.queryByRole("dialog", { name: "Compose" })).toBeNull();
   });
 
+  it("opens conversation find with Command+F and Control+F", async () => {
+    const current = thread("thread-1", "Current conversation", false);
+    const events = installApi(
+      [current],
+      vi.fn(async () => mailThread(current)),
+    );
+    installMatchMedia();
+    render(<App />);
+    await screen.findByRole("button", { name: current.subject });
+    fireEvent.click(screen.getByRole("button", { name: current.subject }));
+
+    expect(fireEvent.keyDown(window, { key: "f", metaKey: true })).toBe(false);
+    expect(fireEvent.keyDown(window, { key: "f", ctrlKey: true })).toBe(false);
+
+    expect(openFind).toHaveBeenCalledTimes(2);
+
+    act(() => events.emit({ type: "find-in-conversation-requested" }));
+
+    expect(openFind).toHaveBeenCalledTimes(3);
+  });
+
   it("runs mailbox shortcuts forwarded from the email iframe", async () => {
     const current = thread("thread-1", "Current conversation", false);
     installApi(
@@ -765,7 +982,10 @@ function installMatchMedia(): void {
 function installApi(
   threads: ThreadSummary[],
   getThread: (target: { accountId: string; threadId: string }) => Promise<MailThread>,
-  options: { threadsAfterModify?: ThreadSummary[] } = {},
+  options: {
+    openNextAfterArchive?: boolean;
+    threadsAfterModify?: ThreadSummary[];
+  } = {},
 ): { emit(event: AppEvent): void; setVisibleThreads(threads: ThreadSummary[]): void } {
   const state: BootstrapState = {
     engine: {
@@ -793,6 +1013,7 @@ function installApi(
     preferences: {
       appearance: "light",
       dockBadge: true,
+      openNextAfterArchive: options.openNextAfterArchive ?? true,
       blockRemoteImages: true,
       imageRelay: true,
     },

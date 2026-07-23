@@ -1326,6 +1326,73 @@ textarea:focus-visible,
   -webkit-app-region: no-drag;
 }
 
+.message-find-bar {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid var(--hairline);
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+  color: var(--muted);
+}
+
+.message-find-bar > svg {
+  flex: 0 0 auto;
+  margin: 0 2px;
+}
+
+.message-find-bar input {
+  width: min(260px, 48%);
+  min-width: 120px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 6px 8px;
+  outline: none;
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.message-find-bar input:focus {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.message-find-status {
+  min-width: 58px;
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.message-find-bar button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.message-find-bar button:hover:not(:disabled) {
+  background: var(--field);
+  color: var(--ink);
+}
+
+.message-find-bar button:disabled {
+  opacity: 0.35;
+}
+
 .toolbar-group {
   display: flex;
   gap: 3px;
