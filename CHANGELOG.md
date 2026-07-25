@@ -2,7 +2,28 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.3.0...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.0...HEAD)
+
+## [0.4.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.0) - 2026-07-25
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Changed
+
+- License Fluxmail Desktop under the GNU Affero General Public License v3.0 ([#44](https://github.com/churichard/fluxmail-desktop/pull/44))
+- Open saved drafts in the reading pane with their recipients, body, reply context, and attachments restored ([#37](https://github.com/churichard/fluxmail-desktop/pull/37))
+- Open the next visible conversation after archiving, with a Behavior setting to turn this off ([#38](https://github.com/churichard/fluxmail-desktop/pull/38))
+- Show To, CC, and BCC email addresses in message headers ([#45](https://github.com/churichard/fluxmail-desktop/pull/45))
+
+### Added
+
+- Schedule messages for later, manage them in the Scheduled mailbox, and configure Undo Send for compose, reply, and forward ([#41](https://github.com/churichard/fluxmail-desktop/pull/41))
+- Undo read, star, archive, trash, move, and label actions from the toast or with Command-Z ([#40](https://github.com/churichard/fluxmail-desktop/pull/40))
+- Find text across an open conversation with Command-F and move between every visible match ([#39](https://github.com/churichard/fluxmail-desktop/pull/39))
+
+### Fixed
+
+- Keep late-loading images and fonts from clipping message content and preserve responsive newsletter styles ([#42](https://github.com/churichard/fluxmail-desktop/pull/42))
 
 ## [0.3.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.3.0) - 2026-07-21
 
