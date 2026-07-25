@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import forgeConfig, {
@@ -40,7 +41,16 @@ describe("Forge package filtering", () => {
     expect(shouldIgnorePackagedPath(path.join(appRoot, "src", "main.ts"), appRoot)).toBe(true);
   });
 
-  it("uses the Electron binary prepared by postinstall instead of rebuilding workspace copies", () => {
+  it("prepares Electron during install before rebuilding native modules", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts.postinstall).toBe(
+      "install-electron && electron-rebuild -f -w better-sqlite3",
+    );
     expect(forgeConfig.rebuildConfig?.ignoreModules).toContain("better-sqlite3");
   });
 
