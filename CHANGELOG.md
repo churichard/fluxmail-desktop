@@ -10,7 +10,7 @@ _These artifacts use Fluxmail's self-signed certificate and have not been notari
 
 ### Changed
 
-- License Fluxmail Desktop under the GNU Affero General Public License v3.0 ([#44](https://github.com/churichard/fluxmail-desktop/pull/44))
+- License Fluxmail Desktop under the Mozilla Public License 2.0 and link to its source, software notices, and service terms from Settings ([#48](https://github.com/churichard/fluxmail-desktop/pull/48), [#49](https://github.com/churichard/fluxmail-desktop/pull/49))
 - Open saved drafts in the reading pane with their recipients, body, reply context, and attachments restored ([#37](https://github.com/churichard/fluxmail-desktop/pull/37))
 - Open the next visible conversation after archiving, with a Behavior setting to turn this off ([#38](https://github.com/churichard/fluxmail-desktop/pull/38))
 - Show To, CC, and BCC email addresses in message headers ([#45](https://github.com/churichard/fluxmail-desktop/pull/45))
