@@ -15,21 +15,43 @@ function noticeFor(packageName: string): string {
 
 describe("third-party software notices", () => {
   it("uses the parent Argon2 notice for both release architectures", () => {
-    expect(noticeFor("@node-rs/argon2")).toContain("License: MIT");
+    expect(noticeFor("@node-rs/argon2")).toContain("Declared license: MIT");
     expect(notices).not.toMatch(/^## @node-rs\/argon2-darwin-(?:arm64|x64) /m);
   });
 
   it("normalizes legacy object-valued license metadata", () => {
-    expect(noticeFor("config-chain")).toContain("License: MIT");
+    expect(noticeFor("config-chain")).toContain("Declared license: MIT");
     expect(notices).not.toContain("[object Object]");
   });
 
-  it("omits the body when a package has no standalone license file", () => {
-    expect(noticeFor("@posthog/core")).toMatch(
-      /^## @posthog\/core [^\n]+\n\nLicense: MIT\nProject: [^\n]+\n?$/,
-    );
-    expect(notices).not.toContain(
-      "This package does not include a standalone license file. Its package metadata provides the license identifier shown above.",
-    );
+  it("uses reviewed fallbacks when packages omit their license files", () => {
+    expect(noticeFor("@posthog/core")).toContain("Copyright 2020 Posthog / Hiberly, Inc.");
+    expect(noticeFor("@posthog/core")).toContain("Permission is hereby granted");
+    expect(noticeFor("@posthog/core")).toContain("Apache License");
+    expect(noticeFor("drizzle-orm")).toContain("Apache License");
+    expect(noticeFor("eastasianwidth")).toContain("Copyright (c) 2013 Masaki Komagata");
+  });
+
+  it("preserves reviewed notices when package metadata conflicts with the bundled license", () => {
+    for (const packageName of ["@pkgjs/parseargs", "@posthog/types", "posthog-node"]) {
+      const notice = noticeFor(packageName);
+      expect(notice).toContain("Declared license: MIT");
+      expect(notice).toContain("Permission is hereby granted");
+      expect(notice).toContain("Apache License");
+    }
+  });
+
+  it("includes a license body for every package", () => {
+    const entries = notices.split(/^## /m).slice(1);
+
+    for (const entry of entries) {
+      const body = entry
+        .split("\n")
+        .slice(1)
+        .filter(
+          (line) => line && !line.startsWith("Declared license: ") && !line.startsWith("Project: "),
+        );
+      expect(body, entry.split("\n")[0]).not.toHaveLength(0);
+    }
   });
 });
