@@ -40,8 +40,7 @@ import {
 } from "./quoted-reply";
 import {
   googleCredentialsAllowPermanentDelete,
-  googleOAuthClientAllowsPermanentDelete,
-  googleOAuthScopes,
+  googleOAuthSourceAllowsPermanentDelete,
   runGoogleOAuth,
 } from "./oauth";
 
@@ -193,13 +192,8 @@ export class FluxmailRuntime {
         decryptString(this.context.config.encryptionKey, row.encrypted_credentials),
       ) as {
         scope?: string;
-        fluxmailOAuthClient?: { clientId: string };
       };
-      const clientId = credentials.fluxmailOAuthClient?.clientId;
-      const requestedScopes = clientId
-        ? googleOAuthScopes(googleOAuthClientAllowsPermanentDelete(clientId))
-        : [];
-      return googleCredentialsAllowPermanentDelete(credentials, requestedScopes);
+      return googleCredentialsAllowPermanentDelete(credentials, []);
     } catch {
       return false;
     }
@@ -363,7 +357,9 @@ export class FluxmailRuntime {
       clientId: config.clientId,
       clientSecret: config.clientSecret,
       port: this.context.config.oauthPort,
-      allowPermanentDelete: googleOAuthClientAllowsPermanentDelete(config.clientId),
+      allowPermanentDelete: googleOAuthSourceAllowsPermanentDelete(
+        this.context.configuration.oauthStatus().google.source,
+      ),
       openExternal: this.options.openExternal,
     });
     let identity: Awaited<ReturnType<typeof runGoogleOAuth>>;
@@ -465,7 +461,6 @@ export class FluxmailRuntime {
       const listInput = {
         view: input.view,
         accountIds: input.accountIds,
-        accounts,
         label: input.label,
         query: input.query,
         resultSetKey: currentViewKey,
@@ -1332,17 +1327,12 @@ export class FluxmailRuntime {
     const refreshGeneration = mode === "refresh" ? (this.viewRefreshGeneration += 1) : undefined;
     const pageResults = await Promise.allSettled(
       accounts.map(async (account) => {
-        const query = toEmailQuery(input, account);
+        const query = toEmailQuery(input);
         const cacheGeneration = this.cacheGeneration;
         const currentAccountViewKey = accountViewKey(account.id, currentViewKey);
         const committedRefreshGeneration = this.committedViewRefreshes.get(currentAccountViewKey);
         const pageState = this.options.cache.getPageState(account.id, currentViewKey);
         if (mode === "loadMore" && pageState.initialized && !pageState.nextToken) return undefined;
-        if (query.expression?.type === "none") {
-          this.options.cache.recordResultPage(account.id, currentViewKey, [], mode === "refresh");
-          this.options.cache.setPageToken(account.id, currentViewKey, undefined);
-          return { count: 0, providerPage: false };
-        }
         const token = mode === "loadMore" ? pageState.nextToken : undefined;
         const page = await this.context.service.listMessages(account.id, query, {
           pageSize: input.pageSize ?? 100,
@@ -1381,16 +1371,16 @@ export class FluxmailRuntime {
         }
         if (refreshGeneration !== undefined)
           this.committedViewRefreshes.set(currentAccountViewKey, refreshGeneration);
-        return { count: page.items.length, providerPage: true };
+        return page.items.length;
       }),
     );
     const pages = pageResults.flatMap((result) =>
       result.status === "fulfilled" && result.value !== undefined ? [result.value] : [],
     );
     const failure = pageResults.find((result) => result.status === "rejected");
-    if (!pages.some((page) => page.providerPage) && failure) throw failure.reason;
+    if (!pages.length && failure) throw failure.reason;
     if (pages.length) this.options.onCacheChanged();
-    return pages.reduce((sum, page) => sum + page.count, 0);
+    return pages.reduce((sum, value) => sum + value, 0);
   }
 
   private accountsFor(input: ThreadListInput): AccountInfo[] {

@@ -25,7 +25,7 @@ gh repo view --json nameWithOwner,defaultBranchRef,url
 gh secret list --app actions
 ```
 
-Require the porcelain status command to return no output before continuing. Treat staged changes, unstaged changes, untracked files, and dirty submodules as blockers. Stop and report the affected paths. Do not stash, discard, commit, or include pre-existing work in the release. After this check passes, only edits made by the release workflow may dirty the worktree.
+Require the porcelain status command to return no output before continuing. Treat staged changes, unstaged changes, and untracked files as blockers. Stop and report the affected paths. Do not stash, discard, commit, or include pre-existing work in the release. After this check passes, only edits made by the release workflow may dirty the worktree.
 
 Require the default branch to be `main` and use `origin/main` as the release source. Do not switch or rename the current Conductor workspace branch.
 
@@ -77,7 +77,7 @@ Google OAuth overrides are optional. Accept either none or both of these:
 - `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID`
 - `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`
 
-With neither Google secret, use the OAuth app bundled with the pinned Fluxmail package. Confirm that the checked-out submodule contains default OAuth support. A pending change in the Fluxmail repository is not enough; this repository must pin a commit that provides the defaults. Stop if only one Google override is configured or if the current pin still requires manual Google credentials.
+With neither Google secret, use the OAuth app included in the pinned Fluxmail npm package. Confirm that `package.json` and the lockfile resolve a published version with default OAuth support. A pending change in the Fluxmail repository is not enough. Stop if only one Google override is configured or if the installed package still requires manual Google credentials.
 
 Apple certificate signing is optional. Treat these as the signing group:
 
@@ -154,12 +154,10 @@ For a self-signed release, replace `ad hoc signatures` with `Fluxmail's self-sig
 
 ## 4. Run the release preflight
 
-Initialize the pinned Fluxmail submodule and reproduce CI locally:
+Install the pinned Fluxmail npm package and reproduce CI locally:
 
 ```sh
-git submodule update --init --recursive
 pnpm install --frozen-lockfile
-pnpm build:mcp
 pnpm format:check
 pnpm lint
 pnpm typecheck

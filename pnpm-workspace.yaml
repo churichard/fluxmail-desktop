@@ -1,5 +1,4 @@
-packages:
-  - vendor/fluxmail-mcp/packages/*
+packages: []
 
 blockExoticSubdeps: false
 nodeLinker: hoisted
@@ -14,3 +13,10 @@ allowBuilds:
   esbuild: true
   fs-xattr: true
   macos-alias: true
+
+minimumReleaseAgeExclude:
+  - '@fluxmail/core@0.7.0'
+  - '@fluxmail/provider-gmail@0.7.0'
+  - '@fluxmail/provider-imap@0.7.0'
+  - '@fluxmail/provider-outlook@0.7.0'
+  - fluxmail@0.7.0

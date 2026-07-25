@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@fluxmail/core':
-        specifier: workspace:*
-        version: link:vendor/fluxmail-mcp/packages/core
+        specifier: 0.7.0
+        version: 0.7.0
       '@tiptap/extension-link':
         specifier: ^3.27.1
         version: 3.27.4(@tiptap/core@3.27.4(@tiptap/pm@3.27.4))(@tiptap/pm@3.27.4)
@@ -36,8 +36,8 @@ importers:
         specifier: ^3.4.3
         version: 3.4.12
       fluxmail:
-        specifier: workspace:*
-        version: link:vendor/fluxmail-mcp/packages/server
+        specifier: 0.7.0
+        version: 0.7.0(@types/better-sqlite3@7.6.13)
       google-auth-library:
         specifier: 10.5.0
         version: 10.5.0
@@ -141,145 +141,6 @@ importers:
       vitest:
         specifier: ^4.1.0
         version: 4.1.10(@types/node@24.13.3)(jsdom@29.1.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0))
-
-  vendor/fluxmail-mcp/packages/core:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-
-  vendor/fluxmail-mcp/packages/provider-gmail:
-    dependencies:
-      '@fluxmail/core':
-        specifier: workspace:*
-        version: link:../core
-      googleapis:
-        specifier: ^173.0.0
-        version: 173.0.0
-      googleapis-common:
-        specifier: 8.0.2
-        version: 8.0.2
-      iconv-lite:
-        specifier: ^0.7.3
-        version: 0.7.3
-      nodemailer:
-        specifier: ^9.0.3
-        version: 9.0.3
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-      '@types/nodemailer':
-        specifier: ^8.0.1
-        version: 8.0.1
-
-  vendor/fluxmail-mcp/packages/provider-imap:
-    dependencies:
-      '@fluxmail/core':
-        specifier: workspace:*
-        version: link:../core
-      iconv-lite:
-        specifier: ^0.7.3
-        version: 0.7.3
-      imapflow:
-        specifier: ^1.4.7
-        version: 1.4.7
-      nodemailer:
-        specifier: ^9.0.3
-        version: 9.0.3
-      postal-mime:
-        specifier: ^2.7.5
-        version: 2.7.5
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-      '@types/nodemailer':
-        specifier: ^8.0.1
-        version: 8.0.1
-
-  vendor/fluxmail-mcp/packages/provider-outlook:
-    dependencies:
-      '@fluxmail/core':
-        specifier: workspace:*
-        version: link:../core
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-
-  vendor/fluxmail-mcp/packages/server:
-    dependencies:
-      '@fluxmail/core':
-        specifier: workspace:*
-        version: link:../core
-      '@fluxmail/provider-gmail':
-        specifier: workspace:*
-        version: link:../provider-gmail
-      '@fluxmail/provider-imap':
-        specifier: workspace:*
-        version: link:../provider-imap
-      '@fluxmail/provider-outlook':
-        specifier: workspace:*
-        version: link:../provider-outlook
-      '@hono/node-server':
-        specifier: ^1.14.3
-        version: 1.19.14(hono@4.12.30)
-      '@hono/zod-openapi':
-        specifier: 0.19.10
-        version: 0.19.10(hono@4.12.30)(zod@3.25.76)
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.13.0
-        version: 1.29.0(zod@3.25.76)
-      '@node-rs/argon2':
-        specifier: 2.0.2
-        version: 2.0.2
-      better-sqlite3:
-        specifier: 12.11.1
-        version: 12.11.1
-      commander:
-        specifier: ^13.1.0
-        version: 13.1.0
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
-      google-auth-library:
-        specifier: 10.5.0
-        version: 10.5.0
-      hono:
-        specifier: ^4.7.11
-        version: 4.12.30
-      mime-types:
-        specifier: ^3.0.2
-        version: 3.0.2
-      posthog-node:
-        specifier: ^5.41.0
-        version: 5.42.0
-      smol-toml:
-        specifier: ^1.7.0
-        version: 1.7.0
-      update-notifier:
-        specifier: 7.3.1
-        version: 7.3.1
-      zod:
-        specifier: ^3.25.67
-        version: 3.25.76
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
-      '@types/mime-types':
-        specifier: ^3.0.1
-        version: 3.0.1
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-      '@types/update-notifier':
-        specifier: 6.0.8
-        version: 6.0.8
-      imapflow:
-        specifier: ^1.4.7
-        version: 1.4.7
 
 packages:
 
@@ -750,6 +611,18 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@fluxmail/core@0.7.0':
+    resolution: {integrity: sha512-ADh6+7wvWrTtmHap55EKgXScTkvAWwfEUUSUxCH3s5HC9VpBSvWup79MGvxogGfazh7fFNvB6VSeuiJCDT06vw==}
+
+  '@fluxmail/provider-gmail@0.7.0':
+    resolution: {integrity: sha512-C5kbio/E6Wkr+wMRnyiFZ4YUfP9UVzg5Pr5WUtQi34wObv1cbfKA4l+Vdx0w+awMtdRhaIEdHQHf32GwJn5ugg==}
+
+  '@fluxmail/provider-imap@0.7.0':
+    resolution: {integrity: sha512-q5gUT6vdCq9CeiPue9On42cvUKYI8YnJAU/JdEhJ6hgHjuXXUjonFfGAJRE4hNHNIsO8HOGYxkbNwSInf5yDng==}
+
+  '@fluxmail/provider-outlook@0.7.0':
+    resolution: {integrity: sha512-kY51d2epaLJ0bzv4xSHhevXB46L8c0flvHAvnelFHRnMFs1fAC5cFF2lhXs9SfIMN7f5tqz1FuaInmYJcaateg==}
 
   '@gar/promisify@1.1.3':
     resolution: {integrity: sha512-k2Ty1JcVojjJFwrg/ThKi2ujJ7XNLYaFGNB/bWT9wGR+oSMJHMa5w+CUq6p/pVrKeNNgA7pCqEcjSnHVoqJQFw==}
@@ -1728,9 +1601,6 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
-  '@types/configstore@6.0.2':
-    resolution: {integrity: sha512-OS//b51j9uyR3zvwD04Kfs5kHpve2qalQ18JhY/ho3voGYUTPLEG90/ocfKPI48hyHH8T04f7KEEbK6Ue60oZQ==}
-
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -1746,9 +1616,6 @@ packages:
   '@types/keyv@3.1.4':
     resolution: {integrity: sha512-BQ5aZNSCpj7D6K2ksrRCTmKRLEpnPvWDiLPfoGyhZ++8YtiK9d/3DBKPJgry359X/P1PfruyYwvnvwFjuEiEIg==}
 
-  '@types/mime-types@3.0.1':
-    resolution: {integrity: sha512-xRMsfuQbnRq1Ef+C+RKaENOxXX87Ygl38W1vDfPHRku02TgQr+Qd8iivLtAMcR0KF5/29xlnFihkTlbqFrGOVQ==}
-
   '@types/mute-stream@0.0.4':
     resolution: {integrity: sha512-CPM9nzrCPPJHQNA9keH9CVkVI+WR5kMa+7XEs5jcGQ0VoAGnLv242w8lIVgwAEfmE4oufJRaTc9PNLQl0ioAow==}
 
@@ -1757,9 +1624,6 @@ packages:
 
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
-
-  '@types/nodemailer@8.0.1':
-    resolution: {integrity: sha512-PxpaInm8V1JQDd4j0ds5HfvWQk8JupS1C0Picb96QJsrrRDjBH+DlK7L4ZdNSqNULhiZRQHc40nLVShaGxXAMw==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -1774,9 +1638,6 @@ packages:
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
-
-  '@types/update-notifier@6.0.8':
-    resolution: {integrity: sha512-IlDFnfSVfYQD+cKIg63DEXn3RFmd7W1iYtKQsJodcHK9R1yr8aKbKaPKfBxzPpcHCq2DU8zUq4PIPmy19Thjfg==}
 
   '@types/use-sync-external-store@0.0.6':
     resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
@@ -2052,10 +1913,6 @@ packages:
     resolution: {integrity: sha512-d0II/GO9uf9lfUHH2BQsjxzRJZBdsjgsBiW4BvhWk/3qoKwQFjIDVN19PfX8F2D/r9PCMTtLWjYVCFrpeYUzsw==}
     deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
 
-  boxen@7.1.1:
-    resolution: {integrity: sha512-2hCgjEmP8YLWQ130n2FerGv7rYpfBmnmp9Uy2Le1vge6X3gZIfSmEzP5QTDElFxcvVcXlEn8Aq6MU/PZygIOog==}
-    engines: {node: '>=14.16'}
-
   boxen@8.0.1:
     resolution: {integrity: sha512-F3PH5k5juxom4xktynS7MoFY+NUWH5LC4CnH11YB8NPew+HLpmBLCybSAEyb2F+4pRXhuhWqFesoQd6DAyc2hw==}
     engines: {node: '>=18'}
@@ -2113,10 +1970,6 @@ packages:
   call-bound@1.0.4:
     resolution: {integrity: sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==}
     engines: {node: '>= 0.4'}
-
-  camelcase@7.0.1:
-    resolution: {integrity: sha512-xlx1yCK2Oc1APsPXDL2LdlNP6+uu8OCDdhOBSVT279M/S+y75O30C2VuD8T2ogdePBBl7PfPF4504tnLgX3zfw==}
-    engines: {node: '>=14.16'}
 
   camelcase@8.0.0:
     resolution: {integrity: sha512-8WB3Jcas3swSvjIeA2yvCJ+Miyz5l1ZmB6HFb9R1317dt9LCQoswg/BGrmAmkWVEszSrrg4RwmO46qIm2OEnSA==}
@@ -2734,6 +2587,11 @@ packages:
   flora-colossus@2.0.0:
     resolution: {integrity: sha512-dz4HxH6pOvbUzZpZ/yXhafjbR2I8cenK5xL0KtBFb7U2ADsR+OwXifnxZjij/pZWF775uSCMzWVd+jDik2H2IA==}
     engines: {node: '>= 12'}
+
+  fluxmail@0.7.0:
+    resolution: {integrity: sha512-sU4H18m5HYYFn8f4gPRQMjbd4t3LJS/7R+45RrZDOloGBGIuqa7C6zWXBJAESDDLxd2Gy4vd3Gr46trhPN0qGw==}
+    engines: {node: ^20.20.0 || >=22.22.0}
+    hasBin: true
 
   fmix@0.1.0:
     resolution: {integrity: sha512-Y6hyofImk9JdzU8k5INtTXX1cu8LDlePWDFU5sftm9H+zKCr5SGrVjdhkvsim646cw5zD0nADj8oHyXMZmCZ9w==}
@@ -4497,10 +4355,6 @@ packages:
     resolution: {integrity: sha512-yGSza74xk0UG8k+pLh5oeoYirvIiWo5t0/o3zHHAO2tRDiZcxWP7fywNlXhqb6/r6sWvwi+RsyQMWhVLe4BVuA==}
     engines: {node: '>=10'}
 
-  type-fest@2.19.0:
-    resolution: {integrity: sha512-RAH822pAdBgcNMAfWnCBU3CFZcfZ/i1eZjwFU/dsLKumyuuP3niueg2UAukXYF0E2AAoc82ZSSf9J0WQBinzHA==}
-    engines: {node: '>=12.20'}
-
   type-fest@4.41.0:
     resolution: {integrity: sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA==}
     engines: {node: '>=16'}
@@ -4741,10 +4595,6 @@ packages:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
     engines: {node: '>=8'}
     hasBin: true
-
-  widest-line@4.0.1:
-    resolution: {integrity: sha512-o0cyEG0e8GPzT4iGHphIOh0cJOV8fivsXxddQasHPHfoZf1ZexrfeA21w2NaEN1RHE+fXlfISmOE8R9N3u3Qig==}
-    engines: {node: '>=12'}
 
   widest-line@5.0.0:
     resolution: {integrity: sha512-c9bZp7b5YtRj2wOe6dlj32MK+Bx/M/d+9VB2SHM1OtsUHR0aV0tdP6DWh/iMt0kWi1t5g1Iudu6hQRNd1A4PVA==}
@@ -5524,6 +5374,30 @@ snapshots:
 
   '@floating-ui/utils@0.2.12':
     optional: true
+
+  '@fluxmail/core@0.7.0': {}
+
+  '@fluxmail/provider-gmail@0.7.0':
+    dependencies:
+      '@fluxmail/core': 0.7.0
+      googleapis: 173.0.0
+      googleapis-common: 8.0.2
+      iconv-lite: 0.7.3
+      nodemailer: 9.0.3
+    transitivePeerDependencies:
+      - supports-color
+
+  '@fluxmail/provider-imap@0.7.0':
+    dependencies:
+      '@fluxmail/core': 0.7.0
+      iconv-lite: 0.7.3
+      imapflow: 1.4.7
+      nodemailer: 9.0.3
+      postal-mime: 2.7.5
+
+  '@fluxmail/provider-outlook@0.7.0':
+    dependencies:
+      '@fluxmail/core': 0.7.0
 
   '@gar/promisify@1.1.3': {}
 
@@ -6354,8 +6228,6 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
-  '@types/configstore@6.0.2': {}
-
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.9': {}
@@ -6368,8 +6240,6 @@ snapshots:
     dependencies:
       '@types/node': 24.13.3
 
-  '@types/mime-types@3.0.1': {}
-
   '@types/mute-stream@0.0.4':
     dependencies:
       '@types/node': 24.13.3
@@ -6381,10 +6251,6 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
-
-  '@types/nodemailer@8.0.1':
-    dependencies:
-      '@types/node': 22.20.1
 
   '@types/react-dom@19.2.3(@types/react@19.2.7)':
     dependencies:
@@ -6400,11 +6266,6 @@ snapshots:
 
   '@types/trusted-types@2.0.7':
     optional: true
-
-  '@types/update-notifier@6.0.8':
-    dependencies:
-      '@types/configstore': 6.0.2
-      boxen: 7.1.1
 
   '@types/use-sync-external-store@0.0.6': {}
 
@@ -6722,17 +6583,6 @@ snapshots:
   boolean@3.2.0:
     optional: true
 
-  boxen@7.1.1:
-    dependencies:
-      ansi-align: 3.0.1
-      camelcase: 7.0.1
-      chalk: 5.6.2
-      cli-boxes: 3.0.0
-      string-width: 5.1.2
-      type-fest: 2.19.0
-      widest-line: 4.0.1
-      wrap-ansi: 8.1.0
-
   boxen@8.0.1:
     dependencies:
       ansi-align: 3.0.1
@@ -6827,8 +6677,6 @@ snapshots:
     dependencies:
       call-bind-apply-helpers: 1.0.2
       get-intrinsic: 1.3.0
-
-  camelcase@7.0.1: {}
 
   camelcase@8.0.0: {}
 
@@ -7357,6 +7205,59 @@ snapshots:
       debug: 4.4.3
       fs-extra: 10.1.0
     transitivePeerDependencies:
+      - supports-color
+
+  fluxmail@0.7.0(@types/better-sqlite3@7.6.13):
+    dependencies:
+      '@fluxmail/core': 0.7.0
+      '@fluxmail/provider-gmail': 0.7.0
+      '@fluxmail/provider-imap': 0.7.0
+      '@fluxmail/provider-outlook': 0.7.0
+      '@hono/node-server': 1.19.14(hono@4.12.30)
+      '@hono/zod-openapi': 0.19.10(hono@4.12.30)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
+      '@node-rs/argon2': 2.0.2
+      better-sqlite3: 12.11.1
+      commander: 13.1.0
+      drizzle-orm: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
+      google-auth-library: 10.5.0
+      hono: 4.12.30
+      mime-types: 3.0.2
+      posthog-node: 5.42.0
+      smol-toml: 1.7.0
+      update-notifier: 7.3.1
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cfworker/json-schema'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - bun-types
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mysql2
+      - pg
+      - postgres
+      - prisma
+      - rxjs
+      - sql.js
+      - sqlite3
       - supports-color
 
   fmix@0.1.0:
@@ -9193,8 +9094,6 @@ snapshots:
 
   type-fest@1.4.0: {}
 
-  type-fest@2.19.0: {}
-
   type-fest@4.41.0: {}
 
   type-is@2.1.0:
@@ -9408,10 +9307,6 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
-
-  widest-line@4.0.1:
-    dependencies:
-      string-width: 5.1.2
 
   widest-line@5.0.0:
     dependencies:

@@ -1,3 +1,0 @@
-[submodule "vendor/fluxmail-mcp"]
-	path = vendor/fluxmail-mcp
-	url = https://github.com/churichard/fluxmail.git
