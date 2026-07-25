@@ -1,6 +1,6 @@
 # Manual publishing and release repair
 
-Use this path only when GitHub Actions is unavailable for an infrastructure reason and the user has approved manual publishing, or when the user explicitly asks to replace assets on an existing release.
+Use this path only when GitHub Actions is unavailable for an infrastructure reason and the user has approved manual publishing, or when the user explicitly asks to replace assets on an existing release. For a failed tag that has no GitHub Release, return to the main skill and follow the separate tag-recovery procedure.
 
 ## Contents
 
@@ -98,18 +98,14 @@ Do not substitute `open Fluxmail.app` for the packaged app smoke test. Launch th
 
 ## Verify the archives
 
-Check every archive before uploading:
+Run the bundled verifier against all four artifacts before uploading:
 
 ```sh
-hdiutil verify out/make/Fluxmail-<version>-arm64.dmg
-hdiutil verify out/make/Fluxmail-<version>-x64.dmg
-unzip -t out/make/zip/darwin/arm64/Fluxmail-darwin-arm64-<version>.zip
-unzip -t out/make/zip/darwin/x64/Fluxmail-darwin-x64-<version>.zip
+.agents/skills/release/scripts/verify-release-artifacts.sh \
+  "<version>" out/make "<signing-mode>"
 ```
 
-Mount each DMG read-only at a temporary mount point and run `codesign --verify --deep --strict` on the app inside it. This catches a damaged image or a packaging step that changed the bundle after the earlier signature check.
-
-Record the SHA-256 digest and byte size of all four files. Upload the canonical filenames without suffixes such as `-fixed`, `-adhoc`, or `-retry`.
+The verifier mounts each DMG and extracts each ZIP before checking the app's architecture, native modules, signing metadata, designated requirement, and launch behavior. It also records the SHA-256 digest and byte size of every file. Upload the canonical filenames without suffixes such as `-fixed`, `-adhoc`, or `-retry`.
 
 ## Diagnose macOS launch failures
 
