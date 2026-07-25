@@ -43,6 +43,13 @@ describe("Forge package filtering", () => {
     expect(forgeConfig.rebuildConfig?.ignoreModules).toContain("better-sqlite3");
   });
 
+  it("copies both license files into the app bundle", () => {
+    expect(forgeConfig.packagerConfig?.extraResource).toEqual([
+      "LICENSE",
+      "node_modules/fluxmail/LICENSE.md",
+    ]);
+  });
+
   it("uses an ad hoc signature when no signing identity is configured", () => {
     const packaging = createMacPackagingConfig({});
     const osxSign = packaging.osxSign;
