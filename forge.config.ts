@@ -21,6 +21,14 @@ const packagedPaths = [
   "/node_modules/@node-rs/argon2-darwin-arm64",
   "/node_modules/@node-rs/argon2-darwin-x64",
 ];
+export const legalResources = [
+  "LICENSE",
+  "DISTRIBUTION_NOTICES.md",
+  "THIRD_PARTY_NOTICES.md",
+  "ELECTRON_LICENSE",
+  "node_modules/electron/dist/LICENSES.chromium.html",
+  "node_modules/fluxmail/LICENSE.md",
+] as const;
 const runFile = promisify(execFile);
 
 type PackagerConfig = NonNullable<ForgeConfig["packagerConfig"]>;
@@ -140,7 +148,7 @@ const config: ForgeConfig = {
       LSMinimumSystemVersion: "13.0",
       NSAppTransportSecurity: { NSAllowsArbitraryLoads: false },
     },
-    extraResource: ["LICENSE", "node_modules/fluxmail/LICENSE.md"],
+    extraResource: [...legalResources],
     prune: false,
     ignore: shouldIgnorePackagedPath,
     ...macPackagingConfig,
@@ -149,6 +157,9 @@ const config: ForgeConfig = {
   rebuildConfig: { force: true, ignoreModules: ["better-sqlite3"] },
   hooks: {
     async generateAssets() {
+      await runFile("node", ["scripts/generate-third-party-notices.mjs", "--check"], {
+        cwd: process.cwd(),
+      });
       await runFile("bash", ["scripts/generate-icon.sh"], { cwd: process.cwd() });
       await runFile("swift", ["scripts/generate-dmg-background.swift"], { cwd: process.cwd() });
     },

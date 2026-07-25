@@ -24,6 +24,22 @@ const UNDO_SEND_OPTIONS = [
   { value: 30, label: "30 seconds" },
 ] as const satisfies ReadonlyArray<{ value: UndoSendDelaySeconds; label: string }>;
 
+const ABOUT_ACTIONS = [
+  {
+    label: "Source code",
+    open: () =>
+      window.fluxmail.system.openExternal("https://github.com/churichard/fluxmail-desktop"),
+  },
+  {
+    label: "Software licenses",
+    open: () => window.fluxmail.system.openLegalNotices(),
+  },
+  {
+    label: "Terms",
+    open: () => window.fluxmail.system.openExternal("https://www.fluxmail.ai/terms"),
+  },
+] as const;
+
 interface Props {
   state: BootstrapState;
   onState: Dispatch<SetStateAction<BootstrapState | null>>;
@@ -704,6 +720,29 @@ export function SettingsDialog({ state, onState, onClose, onError }: Props) {
                 <strong>Shared data format</strong>
                 <small>{state.engine.storeFormat}</small>
               </span>
+            </div>
+            <div className="settings-about-links">
+              {ABOUT_ACTIONS.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    void action
+                      .open()
+                      .catch((error) =>
+                        onError(
+                          error instanceof Error
+                            ? error.message
+                            : `Could not open ${action.label}.`,
+                        ),
+                      )
+                  }
+                >
+                  {action.label}
+                  <ExternalLink size={12} />
+                </button>
+              ))}
             </div>
           </section>
         </div>
