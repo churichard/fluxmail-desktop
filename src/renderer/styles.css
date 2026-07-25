@@ -1518,6 +1518,7 @@ textarea:focus-visible,
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  font-size: 12px;
 }
 
 .message-from {
@@ -1545,7 +1546,6 @@ textarea:focus-visible,
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1555,15 +1555,18 @@ textarea:focus-visible,
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
   font-weight: 430;
   text-overflow: ellipsis;
 }
 
 .message-sender small {
   margin-top: 3px;
+  overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: inherit;
+  pointer-events: auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-header time {

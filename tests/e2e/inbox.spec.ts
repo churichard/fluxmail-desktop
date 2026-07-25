@@ -620,7 +620,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const senderFontSize = await page
       .locator(".message-from strong")
       .evaluate((node) => getComputedStyle(node).fontSize);
+    await expect(page.locator(".message-from-email")).toHaveCSS("font-size", senderFontSize);
     await expect(page.locator(".message-sender small")).toHaveCSS("font-size", senderFontSize);
+    await expect(page.locator(".message-sender small")).toHaveCSS("pointer-events", "auto");
     await expect(page.locator(".message-header time")).toHaveCSS("font-size", senderFontSize);
     const readingInsets = await page.evaluate(() => {
       const pane = document.querySelector<HTMLElement>(".reading-pane")!.getBoundingClientRect();
