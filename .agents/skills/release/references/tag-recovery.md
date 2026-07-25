@@ -23,9 +23,11 @@ Approval expires if the replacement commit or release contents change.
 
 After explicit approval, confirm again that no GitHub Release exists and that both commits match the approval packet. Only an HTTP 404 proves that the release does not exist. Stop on authentication, network, rate-limit, and other GitHub errors.
 
-Delete and recreate the tag without force-pushing:
+Delete and recreate the tag with a lease tied to the approved tag object:
 
 ```sh
+approved_tag_object="<recorded-tag-object>"
+
 git ls-remote --tags origin \
   "refs/tags/<tag>" "refs/tags/<tag>^{}"
 
@@ -46,7 +48,9 @@ if ! grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)' "$release_probe"; then
   exit 1
 fi
 
-git push origin ":refs/tags/<tag>"
+git push \
+  --force-with-lease="refs/tags/<tag>:${approved_tag_object}" \
+  origin ":refs/tags/<tag>"
 git tag -d "<tag>"
 git tag -a "<tag>" "<replacement-sha>" -m "Fluxmail <tag>"
 git rev-list -n 1 "<tag>"
