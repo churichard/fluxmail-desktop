@@ -68,6 +68,7 @@ import {
   type ThreadListInput,
 } from "../shared/contracts";
 import { parseExternalUrl } from "../shared/external-url";
+import { openLegalNotices } from "./legal-notices";
 import { DesktopAnalytics } from "./analytics";
 import { MailCache } from "./cache";
 import { FluxmailRuntime } from "./fluxmail-runtime";
@@ -559,6 +560,14 @@ function registerIpc(): void {
     requireAnalytics().captureFeature(event),
   );
   handle(IPC.systemOpenExternal, z.string().url(), z.void(), openTrustedExternal);
+  handle(IPC.systemOpenLegalNotices, z.undefined(), z.void(), () =>
+    openLegalNotices({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      repositoryRoot: process.cwd(),
+      openPath: (filePath) => shell.openPath(filePath),
+    }),
+  );
   handle(IPC.systemWindowCloseCancel, z.undefined(), z.void(), () => {
     windowClosePending = false;
     quitAfterWindowClose = false;

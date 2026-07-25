@@ -2633,6 +2633,19 @@ textarea:focus-visible,
   line-height: 1.45;
 }
 
+.settings-about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.settings-about-links .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Onboarding and transient states */
 
 .onboarding,
