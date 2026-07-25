@@ -3,6 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Fluxmail desktop email client",
+  "license": "AGPL-3.0-only",
   "main": ".vite/build/main.js",
   "scripts": {
     "dev": "electron-forge start",
