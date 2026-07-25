@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = path.join(repositoryRoot, "THIRD_PARTY_NOTICES.md");
 const electronLicenseSource = path.join(repositoryRoot, "node_modules/electron/LICENSE");
-const electronLicenseOutput = path.join(repositoryRoot, "ELECTRON_LICENSE");
+const electronLicenseOutput = path.join(repositoryRoot, "licenses", "ELECTRON_LICENSE");
 const licenseFallbacksPath = path.join(repositoryRoot, "scripts", "third-party-license-fallbacks");
 const checkOnly = process.argv.includes("--check");
 const excludedPackages = new Set(["fluxmail"]);
