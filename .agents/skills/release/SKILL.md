@@ -7,7 +7,7 @@ description: Cut, publish, repair, or replace a Fluxmail Desktop GitHub release 
 
 Choose the release version only from user-visible changes since the latest published release unless the user supplies a version. Update the root `package.json` when the selected version differs. Treat an invocation of this skill as authorization to inspect the release, edit release files, run checks, commit the prepared changes, push the workspace branch, open or update its pull request, and monitor pull request checks. It does not authorize merging the release pull request, pushing a version tag, or publishing a GitHub Release. Request explicit approval with the complete written changelog before any of those actions.
 
-Do not expose secret values, move an existing tag, force-push, or bypass branch protection. Stop when a required review, credential, or repository permission needs the user. Require a separate explicit request before replacing assets on an existing release.
+Do not expose secret values, force-push, or bypass branch protection. Treat existing tags as immutable during the normal release workflow. Stop when a required review, credential, or repository permission needs the user. Require a separate explicit request before replacing assets on an existing release or recovering a failed tag.
 
 ## 1. Inspect the release state
 
@@ -66,7 +66,12 @@ git ls-remote --tags origin "refs/tags/<tag>" "refs/tags/<tag>^{}"
 gh release view "<tag>" --json tagName,url,isDraft,isPrerelease,body,assets
 ```
 
-An existing tag is immutable. Never delete, recreate, or retarget it without a separate explicit request. Stop a new-release workflow if the target tag exists. If the user explicitly asks to repair or replace that release, record the tag object, peeled commit, release metadata, asset names, and digests, then follow [manual publishing and release repair](references/manual-publishing.md).
+Stop a new-release workflow if the target tag exists. Handle an existing tag according to its state:
+
+- If a GitHub Release exists, never move the tag. With a separate explicit request, replace its assets by following [manual publishing and release repair](references/manual-publishing.md).
+- If no GitHub Release exists, prefer fixing the problem and choosing a new version. Reuse the version only when the user separately and explicitly authorizes destructive tag recovery after reviewing the old and replacement commits. Follow [failed tag recovery](references/tag-recovery.md).
+
+Record the tag object, peeled commit, release metadata, asset names, and digests before any repair.
 
 ## 2. Validate credentials and signing mode
 
@@ -154,20 +159,23 @@ For a self-signed release, replace `ad hoc signatures` with `Fluxmail's self-sig
 
 ## 4. Run the release preflight
 
-Install the pinned Fluxmail npm package and reproduce CI locally:
+Build the exact candidate tree in a temporary clean clone before running tests. This prevents an existing `node_modules` directory or an earlier Electron invocation from hiding an incomplete install:
 
 ```sh
 pnpm install --frozen-lockfile
+.agents/skills/release/scripts/verify-clean-install.sh
+pnpm notices:check
 pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test
 pnpm release:notes "<version>"
 pnpm test:e2e
-pnpm make
 ```
 
-Run `pnpm test:e2e` because every release affects the packaged Electron application. Confirm that `pnpm make` creates a DMG and ZIP under `out/make` for the local architecture.
+The clean-install script copies the current tracked and untracked candidate files into a temporary clone, applies the complete worktree diff, installs with the frozen lockfile, checks Electron's installed resources, and runs `pnpm make` before any test can invoke Electron. Require it to produce a DMG and ZIP for the host architecture.
+
+Run `pnpm test:e2e` because every release affects the packaged Electron application.
 
 If a check fails, diagnose it. Fix failures caused by release-related changes, rerun the narrow check, then rerun the full preflight. Do not absorb unrelated user changes into the release.
 
@@ -261,7 +269,9 @@ gh run list --workflow release.yml --limit 20 \
 gh run watch <run-id> --exit-status
 ```
 
-If the run fails, inspect it with `gh run view <run-id> --log-failed`. Rerun failed jobs once only when the failure is clearly transient, such as a runner or network failure. If code, configuration, signing, or packaging caused the failure, do not move the tag to a fix.
+If the run fails, inspect it with `gh run view <run-id> --log-failed`. Rerun failed jobs once only when the failure is clearly transient. DNS resolution errors, connection resets, timeouts while fetching GitHub-hosted dependencies, and runner startup failures qualify. Missing files, invalid configuration, signing failures, architecture mismatches, and reproducible packaging errors do not. Do not rerun a deterministic failure without a fix.
+
+If code, configuration, signing, or packaging caused the failure, fix it through a new pull request and choose a new version. Only reuse the failed version through the separately authorized [failed tag recovery](references/tag-recovery.md) procedure.
 
 If the workflow cannot run because of billing, quota, or a service outage, and the user authorizes a manual release, follow [manual publishing and release repair](references/manual-publishing.md). A manual release must meet the same architecture, signing, packaging, notes, and verification requirements as the workflow.
 
@@ -275,6 +285,12 @@ published_notes=$(gh release view "<tag>" --json body --jq .body)
 test "$published_notes" = "$expected_notes"
 gh release view "<tag>" \
   --json tagName,url,isDraft,isPrerelease,body,assets
+
+release_assets=$(mktemp -d)
+trap 'rm -rf "$release_assets"' EXIT
+gh release download "<tag>" --dir "$release_assets"
+.agents/skills/release/scripts/verify-release-artifacts.sh \
+  "<version>" "$release_assets" "<signing-mode>" "<tag>"
 ```
 
 Confirm:
@@ -285,7 +301,8 @@ Confirm:
 - There are two DMGs and two ZIPs.
 - Both `arm64` and `x64` artifacts are present.
 - Every asset has a nonzero size and an uploaded state.
-- GitHub's asset SHA-256 digests match the verified local files.
+- The artifact verifier passes archive integrity, architecture, signing, designated-requirement, and isolated launch checks for both architectures.
+- GitHub's asset SHA-256 digests and byte sizes match the downloaded files.
 - The signing notice matches Developer ID, self-signed, or ad hoc signing.
 
 Finish with the version, release SHA, workflow or manual-publish result, release URL, signing status, artifact names, and verification summary. If the process stops early, give the exact blocker and completed steps. Do not claim that a release exists until `gh release view` confirms it.
