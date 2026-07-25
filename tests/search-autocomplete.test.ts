@@ -25,42 +25,39 @@ describe("search autocomplete", () => {
     });
   });
 
-  it("suggests and quotes known label values", () => {
-    const result = getSearchAutocomplete("from:amy label:proj", 19, context);
-
-    expect(result.suggestions.map((suggestion) => suggestion.label)).toEqual([
-      'label:"Project Alpha"',
-    ]);
-    expect(applySearchSuggestion("from:amy label:proj", result, result.suggestions[0]!)).toEqual({
-      value: 'from:amy label:"Project Alpha" ',
-      cursor: 31,
-    });
-  });
-
-  it("suggests account values by display name", () => {
-    const result = getSearchAutocomplete("account:work", 12, context);
-
-    expect(result.suggestions[0]).toMatchObject({
-      label: "account:dev@fluxmail.test",
-      description: "Work",
-    });
-  });
-
-  it("keeps negation and surrounding boolean syntax", () => {
-    const result = getSearchAutocomplete("is:unread OR (-ha)", 17, context);
+  it("keeps attachment negation", () => {
+    const result = getSearchAutocomplete("hello -ha", 9, context);
     const attachment = result.suggestions.find((suggestion) => suggestion.label === "has:");
 
     expect(attachment).toBeDefined();
-    expect(applySearchSuggestion("is:unread OR (-ha)", result, attachment!)).toEqual({
-      value: "is:unread OR (-has:)",
-      cursor: 19,
+    expect(applySearchSuggestion("hello -ha", result, attachment!)).toEqual({
+      value: "hello -has:",
+      cursor: 11,
     });
   });
 
   it("offers values for status and attachment filters", () => {
     expect(
       getSearchAutocomplete("is:u", 4, context).suggestions.map((suggestion) => suggestion.label),
-    ).toEqual(["is:unread"]);
+    ).toEqual(["is:unread", "is:unstarred"]);
     expect(getSearchAutocomplete("has:", 4, context).suggestions[0]?.label).toBe("has:attachment");
+  });
+
+  it("only advertises operators supported by portable search", () => {
+    for (const operator of [
+      "account",
+      "label",
+      "cc",
+      "bcc",
+      "filename",
+      "filetype",
+      "newer",
+      "older",
+    ])
+      expect(getSearchAutocomplete(operator, operator.length, context).suggestions).toEqual([]);
+    expect(getSearchAutocomplete("after:", 6, context).suggestions).toEqual([]);
+    expect(
+      getSearchAutocomplete("in:", 3, context).suggestions.map(({ label }) => label),
+    ).not.toContain("in:starred");
   });
 });

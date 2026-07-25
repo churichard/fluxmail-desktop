@@ -140,14 +140,12 @@ const config: ForgeConfig = {
       LSMinimumSystemVersion: "13.0",
       NSAppTransportSecurity: { NSAllowsArbitraryLoads: false },
     },
-    extraResource: ["vendor/fluxmail-mcp/LICENSE.md"],
+    extraResource: ["node_modules/fluxmail/LICENSE.md"],
     prune: false,
     ignore: shouldIgnorePackagedPath,
     ...macPackagingConfig,
   },
-  // postinstall rebuilds the root copy for Electron. Ignoring it here keeps
-  // Forge from following the Fluxmail workspace symlink into a standalone
-  // submodule install and rebuilding a second, incompatible copy.
+  // postinstall rebuilds the hoisted native module for Electron.
   rebuildConfig: { force: true, ignoreModules: ["better-sqlite3"] },
   hooks: {
     async generateAssets() {

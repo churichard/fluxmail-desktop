@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { VERSION as reportedFluxmailEngineVersion } from "../vendor/fluxmail-mcp/packages/server/src/version";
+import { VERSION as reportedFluxmailEngineVersion } from "fluxmail";
 import {
   loadDesktopOAuthConfig,
-  loadFluxmailEngineVersion,
+  loadInstalledFluxmailVersion,
   mainExternalDependencies,
 } from "../vite.main.config";
 
@@ -17,8 +17,9 @@ afterEach(() => {
 });
 
 describe("main Vite configuration", () => {
-  it("reads the engine version from the pinned Fluxmail package", () => {
-    expect(loadFluxmailEngineVersion()).toBe(reportedFluxmailEngineVersion);
+  it("uses the pinned Fluxmail npm package", () => {
+    expect(loadInstalledFluxmailVersion()).toBe(reportedFluxmailEngineVersion);
+    expect(reportedFluxmailEngineVersion).toBe("0.7.0");
   });
 
   it("leaves native dependencies for Electron to load", () => {

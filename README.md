@@ -1,6 +1,6 @@
 # Fluxmail Desktop
 
-Fluxmail Desktop is a fast, local-first Gmail client for macOS. It uses Electron and calls the pinned Fluxmail mail service directly in the main process. There is no local REST server, MCP transport, or hosted web API between the interface and Gmail.
+Fluxmail Desktop is a fast, local-first Gmail client for macOS. It uses Electron and calls the pinned Fluxmail npm package directly in the main process. There is no local REST server, MCP transport, or hosted web API between the interface and Gmail.
 
 The first release focuses on the work people do every day: a unified inbox, account and folder navigation, search, conversations, attachments, bulk actions, drafts, compose, reply, reply all, and forward. It supports multiple Gmail accounts and keeps the normal macOS app process running for sync and notifications after its last window closes.
 
@@ -13,18 +13,15 @@ The first release focuses on the work people do every day: a unified inbox, acco
 
 ## Set up the repository
 
-Clone with submodules, then install and build the pinned Fluxmail packages:
+Clone the repository and install its dependencies:
 
 ```sh
-git clone --recurse-submodules git@github.com:churichard/fluxmail-desktop.git
+git clone git@github.com:churichard/fluxmail-desktop.git
 cd fluxmail-desktop
 pnpm install
-pnpm build:mcp
 ```
 
-If the repository is already cloned, run `git submodule update --init --recursive` before installing.
-
-Fluxmail uses the OAuth app bundled with the pinned Fluxmail package by default. To use a different Google OAuth desktop client, copy `.env.example` to `.env` and set `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID` and `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`. Vite injects these overrides into the Electron main bundle only. They are not available to the renderer. The bundled client uses `gmail.modify`, while a custom client requests full Gmail access. Fluxmail shows permanent deletion only after Google grants that scope. Reconnect accounts that were added before the custom client was configured.
+Fluxmail uses the OAuth app included in the installed package by default. To use a different Google OAuth desktop client, copy `.env.example` to `.env` and set `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_ID` and `FLUXMAIL_DESKTOP_GOOGLE_CLIENT_SECRET`. Vite injects these overrides into the Electron main bundle only. They are not available to the renderer. The bundled client uses `gmail.modify`, while a custom client requests full Gmail access. Fluxmail shows permanent deletion only after Google grants that scope. Reconnect accounts that were added before the custom client was configured.
 
 Private image relay is available with an active Pro, Team, or Enterprise license. It works with every supported mailbox provider and does not depend on the Google OAuth client. The desktop app exchanges its cached signed license lease for a relay token that lasts up to 24 hours. If the license is unavailable, expired, or in its grace period, Fluxmail leaves remote images blocked instead of loading them directly.
 
@@ -34,7 +31,7 @@ Start the app with:
 pnpm dev
 ```
 
-Fluxmail uses `~/.fluxmail` for accounts, encrypted credentials, licensing, configuration, the analytics preference, and the anonymous installation ID. A separately installed `fluxmail` npm CLI uses the same directory by default, so it sees the same accounts and settings. Desktop and CLI versions may differ when both support the stored data format. An incompatible version stops before changing the shared data and asks the user to update it.
+Fluxmail uses `~/.fluxmail` for accounts, encrypted credentials, licensing, configuration, the analytics preference, and the anonymous installation ID. A separately installed `fluxmail` CLI uses the same directory by default, so it sees the same accounts and settings. Desktop and CLI versions may differ when both support the stored data format. An incompatible version stops before changing the shared data and asks the user to update it.
 
 `FLUXMAIL_DATA_DIR` changes the whole shared data directory, while `FLUXMAIL_DB_PATH` changes only the SQLite database path. Shell variables and `.env.local` or `.env` files in the CLI working directory take priority over settings saved in `~/.fluxmail/config.env`. These overrides can intentionally give the CLI a separate installation.
 

@@ -48,6 +48,7 @@ export function EmailHtml({
   const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
   const clickCleanupRef = useRef<(() => void) | undefined>(undefined);
   const frameResizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
+  const layoutCleanupRef = useRef<(() => void) | undefined>(undefined);
   const darkMode = useResolvedDarkTheme();
   const rawHtml = message.body?.html || textToHtml(message.body?.text || "");
   const policyKey = remoteImagePolicyKey(
@@ -78,6 +79,7 @@ export function EmailHtml({
       resizeObserverRef.current?.disconnect();
       frameResizeObserverRef.current?.disconnect();
       clickCleanupRef.current?.();
+      layoutCleanupRef.current?.();
     },
     [],
   );
@@ -219,6 +221,7 @@ export function EmailHtml({
           resizeObserverRef.current?.disconnect();
           frameResizeObserverRef.current?.disconnect();
           clickCleanupRef.current?.();
+          layoutCleanupRef.current?.();
           const frame = iframeRef.current;
           const document = frame?.contentDocument;
           if (!document) return;
@@ -228,16 +231,36 @@ export function EmailHtml({
             const contentHeight = root
               ? Math.max(root.scrollHeight, root.offsetHeight) * scale
               : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-            setHeight(Math.max(80, Math.ceil(contentHeight)));
+            const nextHeight = Math.max(80, Math.ceil(contentHeight));
+            setHeight((current) => (current === nextHeight ? current : nextHeight));
           };
           resize();
-          const observer = new ResizeObserver(resize);
+          const view = document.defaultView;
+          let active = true;
+          let resizeFrame = 0;
+          const scheduleResize = () => {
+            if (!active || !view || resizeFrame) return;
+            resizeFrame = view.requestAnimationFrame(() => {
+              resizeFrame = 0;
+              resize();
+            });
+          };
+          const observer = new ResizeObserver(scheduleResize);
           observer.observe(document.body);
           observer.observe(document.documentElement);
+          const root = document.getElementById("email-root");
+          if (root) observer.observe(root);
           resizeObserverRef.current = observer;
-          const frameObserver = new ResizeObserver(resize);
+          const frameObserver = new ResizeObserver(scheduleResize);
           frameObserver.observe(frame);
           frameResizeObserverRef.current = frameObserver;
+          document.addEventListener("load", scheduleResize, true);
+          void document.fonts?.ready.then(scheduleResize);
+          layoutCleanupRef.current = () => {
+            active = false;
+            document.removeEventListener("load", scheduleResize, true);
+            if (view && resizeFrame) view.cancelAnimationFrame(resizeFrame);
+          };
           const forwardKeyboard = (event: KeyboardEvent) => {
             const forwarded = new KeyboardEvent(event.type, {
               key: event.key,
@@ -354,8 +377,11 @@ function buildEmailContent(
         muted: "#666666",
         link: "#315ecc",
       };
+  const senderStyles = [...document.head.querySelectorAll("style")]
+    .map((style) => style.outerHTML)
+    .join("");
   return {
-    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}mark[data-fluxmail-find-match]{border-radius:2px;padding:0;background:#f9d65c;color:#191919;box-shadow:0 0 0 1px rgb(132 91 0 / .16)}mark[data-fluxmail-find-match].active{background:#f39a3b;box-shadow:0 0 0 2px rgb(181 90 0 / .4)}</style></head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
+    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}mark[data-fluxmail-find-match]{border-radius:2px;padding:0;background:#f9d65c;color:#191919;box-shadow:0 0 0 1px rgb(132 91 0 / .16)}mark[data-fluxmail-find-match].active{background:#f39a3b;box-shadow:0 0 0 2px rgb(181 90 0 / .4)}</style>${senderStyles}</head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
     trackingPixels: trackingReport.trackingPixels,
   };
 }
@@ -610,6 +636,7 @@ function escapeRegularExpression(value: string): string {
 
 function sanitizeEmailHtml(rawHtml: string): string {
   return DOMPurify.sanitize(rawHtml, {
+    WHOLE_DOCUMENT: true,
     USE_PROFILES: { html: true },
     FORBID_TAGS: [
       "script",
