@@ -33,18 +33,8 @@ const FILTERS: FilterDefinition[] = [
   { operator: "is", description: "Read, unread, or starred" },
   { operator: "has", description: "Messages with attachments" },
   { operator: "in", description: "Folder" },
-  { operator: "after", description: "After a date or period" },
-  { operator: "before", description: "Before a date or period" },
-  { operator: "label", description: "Label" },
-  { operator: "account", description: "Mail account" },
-  { operator: "cc", description: "Copied recipient" },
-  { operator: "bcc", description: "Blind copied recipient" },
-  { operator: "filename", description: "Attachment name" },
-  { operator: "filetype", description: "Attachment extension" },
-  { operator: "newer", description: "After a date or period" },
-  { operator: "newer_than", description: "Within a period, such as 7d" },
-  { operator: "older", description: "Before a date or period" },
-  { operator: "older_than", description: "Older than a period, such as 30d" },
+  { operator: "after", description: "Received on or after YYYY-MM-DD" },
+  { operator: "before", description: "Received before YYYY-MM-DD" },
 ];
 
 const VALUE_SUGGESTIONS: Record<string, Array<{ value: string; description: string }>> = {
@@ -52,6 +42,7 @@ const VALUE_SUGGESTIONS: Record<string, Array<{ value: string; description: stri
     { value: "unread", description: "Unread messages" },
     { value: "read", description: "Read messages" },
     { value: "starred", description: "Starred messages" },
+    { value: "unstarred", description: "Unstarred messages" },
   ],
   has: [{ value: "attachment", description: "Messages with attachments" }],
   in: [
@@ -59,49 +50,9 @@ const VALUE_SUGGESTIONS: Record<string, Array<{ value: string; description: stri
     { value: "sent", description: "Sent" },
     { value: "drafts", description: "Drafts" },
     { value: "archive", description: "Archive" },
-    { value: "starred", description: "Starred" },
     { value: "spam", description: "Spam" },
     { value: "trash", description: "Trash" },
     { value: "all", description: "All mail" },
-  ],
-  filetype: [
-    { value: "pdf", description: "PDF files" },
-    { value: "docx", description: "Word documents" },
-    { value: "xlsx", description: "Excel workbooks" },
-    { value: "csv", description: "CSV files" },
-    { value: "zip", description: "ZIP archives" },
-    { value: "jpg", description: "JPEG images" },
-    { value: "png", description: "PNG images" },
-  ],
-  after: [
-    { value: "7d", description: "Past 7 days" },
-    { value: "30d", description: "Past 30 days" },
-    { value: "1y", description: "Past year" },
-  ],
-  newer: [
-    { value: "7d", description: "Past 7 days" },
-    { value: "30d", description: "Past 30 days" },
-    { value: "1y", description: "Past year" },
-  ],
-  newer_than: [
-    { value: "7d", description: "Past 7 days" },
-    { value: "30d", description: "Past 30 days" },
-    { value: "1y", description: "Past year" },
-  ],
-  before: [
-    { value: "7d", description: "Before 7 days ago" },
-    { value: "30d", description: "Before 30 days ago" },
-    { value: "1y", description: "Before a year ago" },
-  ],
-  older: [
-    { value: "7d", description: "Before 7 days ago" },
-    { value: "30d", description: "Before 30 days ago" },
-    { value: "1y", description: "Before a year ago" },
-  ],
-  older_than: [
-    { value: "7d", description: "Before 7 days ago" },
-    { value: "30d", description: "Before 30 days ago" },
-    { value: "1y", description: "Before a year ago" },
   ],
 };
 
@@ -169,16 +120,8 @@ export function applySearchSuggestion(
 
 function valuesForOperator(
   operator: string,
-  context: SearchAutocompleteContext,
+  _context: SearchAutocompleteContext,
 ): Array<{ value: string; description: string; searchValue?: string }> {
-  if (operator === "label")
-    return context.labels.map((label) => ({ value: label, description: "Label" }));
-  if (operator === "account")
-    return context.accounts.map((account) => ({
-      value: account.email,
-      description: account.displayName ?? account.provider,
-      searchValue: [account.email, account.displayName, account.provider].filter(Boolean).join(" "),
-    }));
   return VALUE_SUGGESTIONS[operator] ?? [];
 }
 

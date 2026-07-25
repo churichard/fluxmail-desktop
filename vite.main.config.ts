@@ -12,25 +12,29 @@ export function loadDesktopOAuthConfig(mode: string, root = process.cwd()) {
   };
 }
 
-export function loadFluxmailEngineVersion(root = process.cwd()): string {
-  const manifestPath = path.join(root, "vendor/fluxmail-mcp/packages/server/package.json");
+export function loadInstalledFluxmailVersion(root = process.cwd()): string {
+  const manifestPath = path.join(root, "node_modules/fluxmail/package.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: unknown };
   if (typeof manifest.version !== "string" || !manifest.version.trim()) {
-    throw new Error(`Fluxmail engine package at ${manifestPath} has no version.`);
+    throw new Error(`Installed Fluxmail package at ${manifestPath} has no version.`);
   }
   return manifest.version;
 }
 
 export default defineConfig(({ mode }) => {
   const oauth = loadDesktopOAuthConfig(mode);
-  const engineVersion = loadFluxmailEngineVersion();
+  const engineVersion = loadInstalledFluxmailVersion();
   return {
     plugins: [
       {
-        name: "fluxmail-pinned-version",
+        name: "fluxmail-installed-version",
         enforce: "pre",
         transform(_source, id) {
-          if (id.endsWith("/fluxmail-mcp/packages/server/dist/version.js")) {
+          const normalizedId = id.replaceAll("\\", "/");
+          if (
+            normalizedId.includes("/node_modules/fluxmail/") &&
+            normalizedId.endsWith("/dist/version.js")
+          ) {
             return `export const VERSION = ${JSON.stringify(engineVersion)};`;
           }
         },

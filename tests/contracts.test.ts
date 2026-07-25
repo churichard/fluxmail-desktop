@@ -12,14 +12,13 @@ import {
 } from "../src/shared/contracts";
 import {
   CUSTOM_GMAIL_SCOPES,
-  DEFAULT_GOOGLE_CLIENT_ID,
   GMAIL_FULL_ACCESS_SCOPE,
   GMAIL_SCOPES,
   googleCredentialsAllowPermanentDelete,
   googleCredentialsWithGrantedScopes,
-  googleOAuthClientAllowsPermanentDelete,
   googleOAuthRedirectUri,
   googleOAuthScopes,
+  googleOAuthSourceAllowsPermanentDelete,
   isOAuthStateValid,
 } from "../src/main/oauth";
 import { toEmailQuery } from "../src/main/mail-mapping";
@@ -88,69 +87,47 @@ describe("desktop contracts", () => {
       folder: "inbox",
     });
     expect(toEmailQuery(threadListInputSchema.parse({ view: "starred" }))).toEqual({
-      starredOnly: true,
+      starred: true,
     });
     expect(
       toEmailQuery(threadListInputSchema.parse({ view: "search", query: "from:team" })),
-    ).toEqual({ expression: { type: "field", field: "from", value: "team" } });
+    ).toEqual({ from: "team" });
     expect(toEmailQuery(threadListInputSchema.parse({ view: "label", label: "Projects" }))).toEqual(
       { folder: "Projects" },
     );
   });
 
-  it("preserves search boolean operators and lowers provider-wide filters", () => {
+  it("maps typed search operators while preserving literal text", () => {
     expect(
       toEmailQuery(
         threadListInputSchema.parse({
           view: "search",
-          query: "(from:amy OR from:david) is:unread -has:attachment after:2026-07-01",
+          query: "from:amy@example.com is:unread -has:attachment after:2026-07-01 quarterly report",
         }),
       ),
     ).toEqual({
+      from: "amy@example.com",
       read: false,
       hasAttachment: false,
-      after: "2026-07-01T00:00:00.000Z",
-      expression: {
-        type: "or",
-        operands: [
-          { type: "field", field: "from", value: "amy" },
-          { type: "field", field: "from", value: "david" },
-        ],
-      },
+      after: "2026-07-01",
+      text: "quarterly report",
     });
+    expect(
+      toEmailQuery(
+        threadListInputSchema.parse({ view: "search", query: '"from:amy@example.com"' }),
+      ),
+    ).toEqual({ text: "from:amy@example.com" });
   });
 
-  it("resolves account filters independently for each provider request", () => {
-    const input = threadListInputSchema.parse({
-      view: "search",
-      query: "account:personal OR subject:shared",
-    });
-    expect(
-      toEmailQuery(input, {
-        id: "personal-account",
-        email: "me@example.com",
-        displayName: "Personal",
-        provider: "gmail",
-        status: "active",
-      }),
-    ).toEqual({});
-    expect(
-      toEmailQuery(input, {
-        id: "work-account",
-        email: "me@company.example",
-        displayName: "Work",
-        provider: "outlook",
-        status: "active",
-      }),
-    ).toEqual({ expression: { type: "field", field: "subject", value: "shared" } });
-    expect(
-      toEmailQuery(threadListInputSchema.parse({ view: "search", query: "account:missing" }), {
-        id: "work-account",
-        email: "me@company.example",
-        provider: "outlook",
-        status: "active",
-      }),
-    ).toEqual({ expression: { type: "none" } });
+  it("rejects invalid typed searches before contacting a provider", () => {
+    expect(() =>
+      toEmailQuery(
+        threadListInputSchema.parse({
+          view: "search",
+          query: "after:2026-07-31 before:2026-07-01",
+        }),
+      ),
+    ).toThrow("after must be earlier than before");
   });
 
   it("accepts cache-first mailbox refresh requests", () => {
@@ -200,8 +177,8 @@ describe("desktop contracts", () => {
   });
 
   it("requests and detects permanent deletion access for custom OAuth clients", () => {
-    expect(googleOAuthClientAllowsPermanentDelete(DEFAULT_GOOGLE_CLIENT_ID)).toBe(false);
-    expect(googleOAuthClientAllowsPermanentDelete("custom-client-id")).toBe(true);
+    expect(googleOAuthSourceAllowsPermanentDelete("built-in")).toBe(false);
+    expect(googleOAuthSourceAllowsPermanentDelete("stored")).toBe(true);
     expect(googleOAuthScopes(true)).toEqual(CUSTOM_GMAIL_SCOPES);
     expect(
       googleCredentialsAllowPermanentDelete(

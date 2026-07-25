@@ -1,9 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { OAuth2Client, type Credentials } from "google-auth-library";
-import { DEFAULT_GOOGLE_CLIENT_ID } from "../../vendor/fluxmail-mcp/packages/server/src/accounts/defaultGoogleOAuth";
-
-export { DEFAULT_GOOGLE_CLIENT_ID };
 
 export const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 export const GMAIL_FULL_ACCESS_SCOPE = "https://mail.google.com/";
@@ -128,8 +125,10 @@ export function googleOAuthScopes(allowPermanentDelete: boolean): string[] {
   return allowPermanentDelete ? CUSTOM_GMAIL_SCOPES : GMAIL_SCOPES;
 }
 
-export function googleOAuthClientAllowsPermanentDelete(clientId: string): boolean {
-  return clientId !== DEFAULT_GOOGLE_CLIENT_ID;
+export function googleOAuthSourceAllowsPermanentDelete(
+  source: "built-in" | "stored" | "environment" | "environment-file",
+): boolean {
+  return source !== "built-in";
 }
 
 export function googleCredentialsWithGrantedScopes(
