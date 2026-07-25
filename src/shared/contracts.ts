@@ -526,6 +526,7 @@ export interface FluxmailDesktopApi {
   analytics: { trackFeature(event: FeatureEvent): Promise<void> };
   system: {
     openExternal(url: string): Promise<void>;
+    openLegalNotices(): Promise<void>;
     cancelWindowClose(): Promise<void>;
     confirmWindowClose(): Promise<void>;
     restart(): Promise<void>;
@@ -569,6 +570,7 @@ export const IPC = {
   imagesProxy: "fluxmail:images:proxy",
   analyticsFeature: "fluxmail:analytics:feature",
   systemOpenExternal: "fluxmail:system:open-external",
+  systemOpenLegalNotices: "fluxmail:system:open-legal-notices",
   systemWindowCloseCancel: "fluxmail:system:window-close-cancel",
   systemWindowCloseConfirm: "fluxmail:system:window-close-confirm",
   systemRestart: "fluxmail:system:restart",

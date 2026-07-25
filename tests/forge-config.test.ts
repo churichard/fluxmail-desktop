@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import forgeConfig, {
   createMacPackagingConfig,
   dmgMakerConfig,
+  legalResources,
   shouldIgnorePackagedPath,
 } from "../forge.config";
 
@@ -41,6 +42,18 @@ describe("Forge package filtering", () => {
 
   it("uses the Electron binary prepared by postinstall instead of rebuilding workspace copies", () => {
     expect(forgeConfig.rebuildConfig?.ignoreModules).toContain("better-sqlite3");
+  });
+
+  it("copies the desktop, engine, distribution, and third-party notices into the app", () => {
+    expect(legalResources).toEqual([
+      "LICENSE",
+      "DISTRIBUTION_NOTICES.md",
+      "THIRD_PARTY_NOTICES.md",
+      "ELECTRON_LICENSE",
+      "node_modules/electron/dist/LICENSES.chromium.html",
+      "node_modules/fluxmail/LICENSE.md",
+    ]);
+    expect(forgeConfig.packagerConfig?.extraResource).toEqual(legalResources);
   });
 
   it("uses an ad hoc signature when no signing identity is configured", () => {

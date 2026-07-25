@@ -101,6 +101,28 @@ describe("SettingsDialog private image relay", () => {
   });
 });
 
+describe("SettingsDialog About links", () => {
+  it("opens the bundled software licenses and the external links", async () => {
+    const openExternal = vi.fn(async () => undefined);
+    const openLegalNotices = vi.fn(async () => undefined);
+    installApi(undefined, undefined, undefined, openExternal, openLegalNotices);
+    render(<SettingsHarness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Source code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Software licenses" }));
+    fireEvent.click(screen.getByRole("button", { name: "Terms" }));
+
+    await waitFor(() =>
+      expect(openExternal).toHaveBeenNthCalledWith(
+        1,
+        "https://github.com/churichard/fluxmail-desktop",
+      ),
+    );
+    expect(openExternal).toHaveBeenNthCalledWith(2, "https://www.fluxmail.ai/terms");
+    expect(openLegalNotices).toHaveBeenCalledOnce();
+  });
+});
+
 describe("SettingsDialog undo send", () => {
   it("can turn undo send off", async () => {
     const setUndoSendDelaySeconds = vi.fn(async () => 0 as const);
@@ -173,6 +195,8 @@ function installApi(
   }> = vi.fn(),
   setOpenNextAfterArchive: (enabled: boolean) => Promise<boolean> = async (enabled) => enabled,
   setUndoSendDelaySeconds = vi.fn(),
+  openExternal = vi.fn(async () => undefined),
+  openLegalNotices = vi.fn(async () => undefined),
 ): void {
   Object.defineProperty(window, "fluxmail", {
     configurable: true,
@@ -180,7 +204,7 @@ function installApi(
       license: { activate },
       preferences: { setOpenNextAfterArchive, setUndoSendDelaySeconds },
       analytics: { trackFeature: vi.fn(async () => undefined) },
-      system: { openExternal: vi.fn(async () => undefined) },
+      system: { openExternal, openLegalNotices },
     } as unknown as FluxmailDesktopApi,
   });
 }

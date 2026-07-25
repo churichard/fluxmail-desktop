@@ -1071,6 +1071,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await sharedDataFormat.scrollIntoViewIfNeeded();
     await expect(settings.getByText("Fluxmail version", { exact: true })).toBeVisible();
     await expect(sharedDataFormat.getByText(/^\d+$/)).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Source code" })).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Software licenses" })).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Terms" })).toBeVisible();
     expect(
       await settings.evaluate((dialog) => {
         const dialogBounds = dialog.getBoundingClientRect();

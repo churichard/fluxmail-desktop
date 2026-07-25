@@ -25,6 +25,8 @@ Fluxmail uses the OAuth app included in the installed package by default. To use
 
 Private image relay is available with an active Pro, Team, or Enterprise license. It works with every supported mailbox provider and does not depend on the Google OAuth client. The desktop app exchanges its cached signed license lease for a relay token that lasts up to 24 hours. If the license is unavailable, expired, or in its grace period, Fluxmail leaves remote images blocked instead of loading them directly.
 
+The image relay is operated by Fluxmail and remains a subscription service. The same applies to protected Fluxmail engine entitlements. The software licenses do not provide hosted-service access or paid license keys. See the [Fluxmail Terms](https://www.fluxmail.ai/terms) for subscription and service terms.
+
 Start the app with:
 
 ```sh
@@ -100,4 +102,8 @@ The workflow attaches both architectures to the GitHub Release that matches the 
 
 ## License
 
-Fluxmail Desktop is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+Files owned by Fluxmail in this repository are licensed under the [Mozilla Public License 2.0](LICENSE). Source code for released versions is available from this repository and its tags.
+
+Fluxmail Desktop bundles the Fluxmail engine as a separate component. The engine packages keep their own license and source files, and their code is not copied into Desktop-owned source files. Other bundled software remains subject to its own license.
+
+See [Distribution notices](DISTRIBUTION_NOTICES.md) for the component boundaries, source repositories, software licenses, and third-party notice locations.
