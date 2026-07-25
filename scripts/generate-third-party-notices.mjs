@@ -7,6 +7,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const outputPath = path.join(repositoryRoot, "THIRD_PARTY_NOTICES.md");
 const electronLicenseSource = path.join(repositoryRoot, "node_modules/electron/LICENSE");
 const electronLicenseOutput = path.join(repositoryRoot, "ELECTRON_LICENSE");
+const licenseFallbacksPath = path.join(repositoryRoot, "scripts", "third-party-license-fallbacks");
 const checkOnly = process.argv.includes("--check");
 const excludedPackages = new Set(["fluxmail"]);
 // Native Argon2 packages share @node-rs/argon2's project and license.
@@ -14,6 +15,143 @@ const excludedPackages = new Set(["fluxmail"]);
 const packagesCoveredByParentNotice = new Set([
   "@node-rs/argon2-darwin-arm64",
   "@node-rs/argon2-darwin-x64",
+]);
+// Keep immutable upstream sources beside each fallback so license changes can be reviewed.
+const reviewedLicenseFallbacks = new Map([
+  [
+    "@hono/zod-openapi@0.19.10",
+    {
+      license: "MIT",
+      file: "hono-middleware.txt",
+      sources: [
+        "https://github.com/honojs/middleware/tree/3705fe6560121c3dd1c933ab8302095aed23d16d/packages/zod-openapi",
+        "https://github.com/honojs/node-server/blob/3b1dd6875812e0b5aee43ec3fac66c191fd6251f/LICENSE",
+      ],
+    },
+  ],
+  [
+    "@hono/zod-validator@0.7.6",
+    {
+      license: "MIT",
+      file: "hono-middleware.txt",
+      sources: [
+        "https://github.com/honojs/middleware/tree/da024821e3d1211f9a280b6cceca78654f99d26b/packages/zod-validator",
+        "https://github.com/honojs/node-server/blob/3b1dd6875812e0b5aee43ec3fac66c191fd6251f/LICENSE",
+      ],
+    },
+  ],
+  [
+    "@pnpm/config.env-replace@1.1.0",
+    {
+      license: "MIT",
+      file: "pnpm-components.txt",
+      sources: [
+        "https://github.com/pnpm/components/blob/d8c73634415cb24b558c06990846a2d6045c1de7/LICENSE",
+      ],
+    },
+  ],
+  [
+    "@pnpm/network.ca-file@1.0.2",
+    {
+      license: "MIT",
+      file: "pnpm-components.txt",
+      sources: [
+        "https://github.com/pnpm/components/blob/4deec61c5389e232c6905e508db93b21ebf26816/LICENSE",
+      ],
+    },
+  ],
+  [
+    "@posthog/core@1.41.1",
+    {
+      license: "MIT",
+      file: "posthog-core.txt",
+      package: "@posthog/types@1.394.0",
+      sources: [
+        "https://github.com/PostHog/posthog-js/blob/6d9c3148ddd79175598f8d08483a6a8b2b4004b2/packages/core/package.json",
+        "https://github.com/PostHog/posthog-js/blob/6d9c3148ddd79175598f8d08483a6a8b2b4004b2/LICENSE",
+      ],
+    },
+  ],
+  [
+    "data-uri-to-buffer@4.0.1",
+    {
+      license: "MIT",
+      file: "data-uri-to-buffer.txt",
+      sources: [
+        "https://github.com/TooTallNate/node-data-uri-to-buffer/blob/85cd8c854aefbf1bb636789d80364cfac8ea1583/README.md#license",
+      ],
+    },
+  ],
+  [
+    "drizzle-orm@0.45.2",
+    {
+      license: "Apache-2.0",
+      file: "drizzle-orm.txt",
+      sources: [
+        "https://github.com/drizzle-team/drizzle-orm/blob/273c78071d4841b497f5144734b38294df7ec64b/LICENSE",
+      ],
+    },
+  ],
+  [
+    "eastasianwidth@0.2.0",
+    {
+      license: "MIT",
+      file: "eastasianwidth.txt",
+      sources: [
+        "https://github.com/komagata/eastasianwidth/blob/b89f04d44dc786885615e94cd6e2ba1ef7866fa4/package.json",
+        "https://spdx.org/licenses/MIT.html",
+      ],
+    },
+  ],
+]);
+// Some packages declare one license in package.json but bundle a notice led by another.
+// Prepend the missing declared-license notice while retaining the package's notice.
+const reviewedLicenseConflicts = new Map([
+  [
+    "@pkgjs/parseargs@0.11.0",
+    {
+      license: "MIT",
+      bundledLicense: "Apache-2.0",
+      file: "pkgjs-parseargs.txt",
+      sources: [
+        "https://github.com/pkgjs/parseargs/blob/1e3a94a5f8fd42e7b56ac4a672adcb224ee3c9ff/package.json",
+        "https://github.com/pkgjs/parseargs/blob/1e3a94a5f8fd42e7b56ac4a672adcb224ee3c9ff/LICENSE",
+        "https://github.com/pkgjs/parseargs/blob/1e3a94a5f8fd42e7b56ac4a672adcb224ee3c9ff/internal/primordials.js",
+      ],
+    },
+  ],
+  [
+    "@posthog/types@1.394.0",
+    {
+      license: "MIT",
+      bundledLicense: "Apache-2.0",
+      file: "posthog-core.txt",
+      sources: [
+        "https://github.com/PostHog/posthog-js/blob/d35f5f14f1a070aa2f1cb7d6bb8886969447440c/packages/types/package.json",
+        "https://github.com/PostHog/posthog-js/blob/d35f5f14f1a070aa2f1cb7d6bb8886969447440c/LICENSE",
+      ],
+    },
+  ],
+  [
+    "posthog-node@5.42.0",
+    {
+      license: "MIT",
+      bundledLicense: "Apache-2.0",
+      file: "posthog-core.txt",
+      sources: [
+        "https://github.com/PostHog/posthog-js/blob/d35f5f14f1a070aa2f1cb7d6bb8886969447440c/packages/node/package.json",
+        "https://github.com/PostHog/posthog-js/blob/d35f5f14f1a070aa2f1cb7d6bb8886969447440c/LICENSE",
+      ],
+    },
+  ],
+]);
+
+const licenseSignatures = new Map([
+  [
+    "MIT",
+    /Permission is hereby granted,\s+free of charge,\s+to any person\s+obtaining\s+(?:a\s+)?copy/i,
+  ],
+  ["Apache-2.0", /Apache License\s+Version 2\.0/i],
 ]);
 
 function productionPackageKeys() {
@@ -73,6 +211,100 @@ function packageLicenseFile(packagePath) {
   return path.join(packagePath, fileName);
 }
 
+function readLicenseText(licensePath) {
+  return readFileSync(licensePath, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+function primaryLicense(text) {
+  return [...licenseSignatures]
+    .map(([license, signature]) => ({ license, index: text.search(signature) }))
+    .filter(({ index }) => index >= 0)
+    .sort((left, right) => left.index - right.index)[0]?.license;
+}
+
+function reviewedIncludedLicenseText(key, license, text) {
+  const conflict = reviewedLicenseConflicts.get(key);
+  if (!licenseSignatures.has(license)) {
+    if (conflict) {
+      throw new Error(
+        `${key} now declares ${license}, but its reviewed exception expects ${conflict.license}. Review the package license before updating the exception.`,
+      );
+    }
+    return text;
+  }
+
+  const bundledLicense = primaryLicense(text);
+  if (!bundledLicense || bundledLicense === license) {
+    if (conflict) {
+      throw new Error(
+        `${key} no longer has the reviewed ${license}/${conflict.bundledLicense} license conflict. Review the package and remove or update its exact-version exception.`,
+      );
+    }
+    return text;
+  }
+
+  if (!conflict) {
+    throw new Error(
+      `${key} declares ${license}, but its bundled notice begins with ${bundledLicense}. Review both licenses and add an exact-version exception before generating notices.`,
+    );
+  }
+  if (conflict.license !== license || conflict.bundledLicense !== bundledLicense) {
+    throw new Error(
+      `${key} now has a ${license}/${bundledLicense} license conflict, but its reviewed exception expects ${conflict.license}/${conflict.bundledLicense}. Review the package before updating the exception.`,
+    );
+  }
+
+  const addition = readLicenseText(path.join(licenseFallbacksPath, conflict.file));
+  const combinedText = [addition, text].filter(Boolean).join("\n\n");
+  if (primaryLicense(combinedText) !== license) {
+    throw new Error(
+      `The reviewed license addition for ${key} does not contain its declared ${license} notice.`,
+    );
+  }
+  return combinedText;
+}
+
+function reviewedLicenseText(key, license, installed) {
+  const fallback = reviewedLicenseFallbacks.get(key);
+  if (!fallback) {
+    throw new Error(
+      `${key} has no standalone license file or reviewed fallback. Review its license and add an exact-version fallback before generating notices.`,
+    );
+  }
+  if (fallback.license !== license) {
+    throw new Error(
+      `${key} now declares ${license}, but its reviewed fallback expects ${fallback.license}. Review the package license before updating the fallback.`,
+    );
+  }
+
+  const texts = [];
+  if (fallback.file) {
+    texts.push(readLicenseText(path.join(licenseFallbacksPath, fallback.file)));
+  }
+
+  if (fallback.package) {
+    const sourcePackage = installed.get(fallback.package);
+    const sourcePath = sourcePackage && packageLicenseFile(sourcePackage.packagePath);
+    if (!sourcePath) {
+      throw new Error(
+        `The reviewed fallback for ${key} requires ${fallback.package} and its license file. Review the fallback before generating notices.`,
+      );
+    }
+    texts.push(readLicenseText(sourcePath));
+  }
+  const text = texts.filter(Boolean).join("\n\n");
+  if (!text) {
+    throw new Error(
+      `The reviewed fallback for ${key} has no license text. Add a fallback file or package before generating notices.`,
+    );
+  }
+  return text;
+}
+
 function packageNameFromKey(key) {
   return key.slice(0, key.lastIndexOf("@"));
 }
@@ -116,12 +348,16 @@ function productionPackages() {
 
     const licensePath = packageLicenseFile(packagePath);
     if (packages.has(key)) continue;
+    const license = packageLicense(manifest.license);
+    const includedLicenseText = licensePath && readLicenseText(licensePath);
     packages.set(key, {
       name: manifest.name,
       version: manifest.version,
-      license: packageLicense(manifest.license),
+      license,
       homepage: packageHomepage(manifest),
-      text: licensePath ? readFileSync(licensePath, "utf8").trim() : undefined,
+      text: includedLicenseText
+        ? reviewedIncludedLicenseText(key, license, includedLicenseText)
+        : reviewedLicenseText(key, license, installed),
     });
   }
   return [...packages.values()].sort((left, right) =>
@@ -132,7 +368,7 @@ function productionPackages() {
 function renderNotices(packages) {
   const header = `# Third-party software notices
 
-Fluxmail Desktop includes the packages listed below. Each package is governed by the license printed with its entry.
+Fluxmail Desktop includes the packages listed below. Each entry names the license declared by the package and reproduces its bundled or reviewed license notices.
 
 The separately licensed Fluxmail engine is documented in \`DISTRIBUTION_NOTICES.md\`. Its license is included in the application resources as \`LICENSE.md\`.
 
@@ -143,7 +379,7 @@ This file is generated by \`pnpm notices:generate\`. Do not edit it by hand.
     const licenseText = entry.text ? `\n\n${entry.text}` : "";
     return `## ${entry.name} ${entry.version}
 
-License: ${entry.license}${project}${licenseText}
+Declared license: ${entry.license}${project}${licenseText}
 `;
   });
   return `${header.trimEnd()}\n\n${entries.join("\n")}`;
