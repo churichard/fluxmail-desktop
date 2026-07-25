@@ -634,6 +634,9 @@ function MessageCard({
   const senderEmail =
     message.from?.email && message.from.email !== senderName ? message.from.email : undefined;
   const contentExpanded = expanded || Boolean(findQuery);
+  const toggleExpanded = () => {
+    if (!findQuery) setExpanded((value) => !value);
+  };
   return (
     <article className="message-card">
       <div className="message-header">
@@ -643,7 +646,7 @@ function MessageCard({
           aria-label={contentExpanded ? "Collapse message" : "Expand message"}
           aria-expanded={contentExpanded}
           disabled={Boolean(findQuery)}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggleExpanded}
         />
         <span className="sender-avatar">{senderName.slice(0, 1).toUpperCase()}</span>
         <span className="message-sender">
@@ -661,7 +664,19 @@ function MessageCard({
               <TrackingPixelIndicator trackingPixels={trackingPixels} />
             ) : null}
           </span>
-          <small>to {formatRecipients(message.to)}</small>
+          <small title={`to ${formatRecipients(message.to)}`} onClick={toggleExpanded}>
+            to {formatRecipients(message.to)}
+          </small>
+          {message.cc?.length ? (
+            <small title={`cc ${formatRecipients(message.cc)}`} onClick={toggleExpanded}>
+              cc {formatRecipients(message.cc)}
+            </small>
+          ) : null}
+          {message.bcc?.length ? (
+            <small title={`bcc ${formatRecipients(message.bcc)}`} onClick={toggleExpanded}>
+              bcc {formatRecipients(message.bcc)}
+            </small>
+          ) : null}
         </span>
         <time>
           {new Intl.DateTimeFormat(undefined, {
@@ -1067,7 +1082,15 @@ function InlineComposer({
 }
 
 function formatRecipients(recipients: Array<{ name?: string; email: string }>): string {
-  return recipients.map((recipient) => recipient.name || recipient.email).join(", ") || "me";
+  return (
+    recipients
+      .map((recipient) =>
+        recipient.name && recipient.name !== recipient.email
+          ? `${recipient.name} <${recipient.email}>`
+          : recipient.email,
+      )
+      .join(", ") || "me"
+  );
 }
 
 export function shouldOfferReplyAll(accountEmail: string, message: MailMessage): boolean {

@@ -113,6 +113,37 @@ describe("ReadingPane", () => {
     expect(screen.getByRole("button", { name: "Expand message" })).toBeTruthy();
   });
 
+  it("shows full To, CC, and BCC recipient addresses", async () => {
+    const thread = detail("Recipient details", "message-1");
+    thread.messages[0]!.to = [
+      { name: "Richard Chu", email: "richard@example.com" },
+      { email: "second@example.com" },
+    ];
+    thread.messages[0]!.cc = [{ name: "Jamie Park", email: "jamie@example.com" }];
+    thread.messages[0]!.bcc = [{ name: "Hidden Person", email: "hidden@example.com" }];
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: { mail: { getThread: vi.fn(async () => thread) } } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary());
+
+    await screen.findByText("Recipient details");
+
+    const toRecipients = screen.getByText(
+      "to Richard Chu <richard@example.com>, second@example.com",
+    );
+    expect(toRecipients.getAttribute("title")).toBe(
+      "to Richard Chu <richard@example.com>, second@example.com",
+    );
+    expect(screen.getByText("cc Jamie Park <jamie@example.com>")).toBeTruthy();
+    expect(screen.getByText("bcc Hidden Person <hidden@example.com>")).toBeTruthy();
+
+    fireEvent.click(toRecipients);
+
+    expect(screen.queryByText("Email body")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand message" })).toBeTruthy();
+  });
+
   it("reloads an open conversation when its message count changes", async () => {
     const getThread = vi
       .fn<() => Promise<MailThread>>()
