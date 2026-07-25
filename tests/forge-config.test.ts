@@ -59,7 +59,7 @@ describe("Forge package filtering", () => {
       "LICENSE",
       "DISTRIBUTION_NOTICES.md",
       "THIRD_PARTY_NOTICES.md",
-      "ELECTRON_LICENSE",
+      "licenses/ELECTRON_LICENSE",
       "node_modules/electron/dist/LICENSES.chromium.html",
       "node_modules/fluxmail/LICENSE.md",
     ]);
