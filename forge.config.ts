@@ -140,7 +140,7 @@ const config: ForgeConfig = {
       LSMinimumSystemVersion: "13.0",
       NSAppTransportSecurity: { NSAllowsArbitraryLoads: false },
     },
-    extraResource: ["node_modules/fluxmail/LICENSE.md"],
+    extraResource: ["LICENSE", "node_modules/fluxmail/LICENSE.md"],
     prune: false,
     ignore: shouldIgnorePackagedPath,
     ...macPackagingConfig,
