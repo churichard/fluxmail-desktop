@@ -97,3 +97,7 @@ Developer ID signing and notarization also require these three secrets:
 Leave all Apple secrets unset to build with ad hoc signatures. Set only the signing group for persistent self-signed releases. Set both complete groups for Developer ID signing, hardened runtime, and notarization. The workflow rejects partial groups. macOS requires users to approve both ad hoc and self-signed apps before opening them.
 
 The workflow attaches both architectures to the GitHub Release that matches the pushed tag. Unnotarized releases include a warning in their release notes.
+
+## License
+
+Fluxmail Desktop is licensed under the [GNU Affero General Public License v3.0](LICENSE).
