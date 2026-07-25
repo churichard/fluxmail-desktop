@@ -59,7 +59,7 @@ const e2eMessages: Message[] = [
     date: todayAt(23),
     snippet: "Your desktop inbox is ready.",
     body: {
-      html: '<p>Your desktop inbox is ready.</p><script>window.evil = true</script><img src="https://tracker.invalid/pixel" width="1"><img src="https://t.yesware.com/tt/message-1"><img src = "https://images.invalid/welcome.png" width="320" height="180">',
+      html: '<!doctype html><html><head><style>.newsletter-copy{font-size:22px;text-align:center}</style></head><body><p class="newsletter-copy">Your desktop inbox is ready.</p><script>window.evil = true</script><img src="https://tracker.invalid/pixel" width="1"><img src="https://t.yesware.com/tt/message-1"><img src = "https://images.invalid/welcome.png" width="320" height="180"></body></html>',
     },
     flags: { read: false, starred: false, draft: false },
   },

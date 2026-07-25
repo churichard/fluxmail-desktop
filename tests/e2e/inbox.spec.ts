@@ -653,6 +653,8 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     const messageFrame = page.frameLocator('iframe[title="Email message"]');
     await expect(messageFrame.locator("script")).toHaveCount(0);
     await expect(messageFrame.locator("img")).toHaveCount(1);
+    await expect(messageFrame.locator(".newsletter-copy")).toHaveCSS("font-size", "22px");
+    await expect(messageFrame.locator(".newsletter-copy")).toHaveCSS("text-align", "center");
     const trackingIndicator = page.locator(".message-from").getByLabel("Blocked 2 tracking pixels");
     await expect(trackingIndicator).toBeVisible();
     await expect(trackingIndicator).toHaveCSS("user-select", "none");
@@ -739,6 +741,18 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       root.innerHTML = '<div style="height: 4200px">Long message</div>';
     });
     await expect(page.locator('iframe[title="Email message"]')).toHaveCSS("height", "4200px");
+    await messageFrame.locator("#email-root").evaluate((root) => {
+      root.innerHTML =
+        '<div style="height: 100px; overflow: visible"><img id="late-image" style="display: block; width: 600px"></div>';
+    });
+    await expect(page.locator('iframe[title="Email message"]')).toHaveCSS("height", "100px");
+    await messageFrame.locator("#late-image").evaluate((image) => {
+      image.setAttribute(
+        "src",
+        "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='1200'%3E%3C/svg%3E",
+      );
+    });
+    await expect(page.locator('iframe[title="Email message"]')).toHaveCSS("height", "1200px");
     const conversationScrollBox = await page
       .locator(".conversation-scroll")
       .evaluate((element) => ({

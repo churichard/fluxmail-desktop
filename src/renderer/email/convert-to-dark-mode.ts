@@ -175,7 +175,7 @@ export function convertEmailToDarkMode(html: string, options: DarkModeOptions = 
     const parser = new DOMParser();
     const doc = parser.parseFromString(processedHtml, "text/html");
 
-    // Step 4: Inline transformed stylesheet rules before head styles are dropped.
+    // Step 4: Inline unscoped stylesheet rules. Media-scoped rules remain in the head.
     inlineTransformedStyleRules(doc);
 
     // Step 5: Set base dark theme
@@ -188,7 +188,10 @@ export function convertEmailToDarkMode(html: string, options: DarkModeOptions = 
     ensureOverallContrast(doc, opts);
 
     // Step 8: Final cleanup - aggressive replacement of problematic colors
-    let result = doc.body.innerHTML;
+    const headStyles = [...doc.head.querySelectorAll("style")]
+      .map((style) => style.outerHTML)
+      .join("");
+    let result = `${headStyles}${doc.body.innerHTML}`;
     if (preservedBodyBackground) {
       result = wrapWithBodyBackground(result, preservedBodyBackground);
     }

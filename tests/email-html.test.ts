@@ -104,6 +104,40 @@ describe("email HTML security", () => {
     expect(document).toContain('style="white-space: normal;"');
   });
 
+  it("preserves embedded newsletter styles without loading external stylesheets", () => {
+    for (const darkMode of [false, true]) {
+      const document = buildEmailDocument(
+        `<!doctype html>
+         <html>
+           <head>
+             <link rel="stylesheet" href="https://fonts.example/newsletter.css">
+             <style>
+               .mceText h2 {
+                 font-family: Montserrat, sans-serif;
+                 font-size: 32px;
+                 line-height: 1;
+                 text-align: center;
+               }
+               @media only screen and (max-width: 480px) {
+                 .mceText h2 { font-size: 26px !important; }
+               }
+             </style>
+           </head>
+           <body><div class="mceText"><h2>Cold-Tossed Tofu</h2></div></body>
+         </html>`,
+        {},
+        false,
+        darkMode,
+      );
+
+      expect(document).toContain(".mceText h2 {");
+      expect(document).toContain("font-size: 32px");
+      expect(document).toContain("text-align: center");
+      expect(document).toContain("@media only screen and (max-width: 480px)");
+      expect(document).not.toContain("fonts.example");
+    }
+  });
+
   it("contains message margins so the iframe height includes the whole email", () => {
     const document = buildEmailDocument("<p>First line</p><p>Last line</p>", {}, false);
 
@@ -486,16 +520,21 @@ describe("email HTML security", () => {
     expect(document).not.toContain("prefers-color-scheme");
   });
 
-  it("does not inline media-scoped stylesheet rules", () => {
+  it("preserves media-scoped stylesheet rules without inlining them", () => {
     const document = convertEmailToDarkMode(
       `<style media="(max-width: 600px)">.desktop { display: none; }</style>
        <style>.desktop { font-weight: bold; }</style>
        <div class="desktop">Desktop content</div>`,
     );
+    const parsed = new DOMParser().parseFromString(document, "text/html");
+    const desktop = parsed.querySelector<HTMLElement>(".desktop");
 
-    expect(document).toContain("font-weight: bold");
-    expect(document).not.toContain("display: none");
-    expect(document).toContain("Desktop content");
+    expect(parsed.querySelector('style[media="(max-width: 600px)"]')?.textContent).toContain(
+      "display: none",
+    );
+    expect(desktop?.style.fontWeight).toBe("bold");
+    expect(desktop?.style.display).toBe("");
+    expect(desktop?.textContent).toBe("Desktop content");
   });
 
   it("removes inline color-scheme declarations without dropping surrounding content", () => {
