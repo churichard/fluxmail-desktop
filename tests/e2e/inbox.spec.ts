@@ -833,7 +833,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
       element.scrollTop = Math.max(0, element.scrollTop - 80);
     });
     expect(Math.abs((await placeholderOffset()) - placeholderOffsetBeforeScroll)).toBeLessThan(1);
-    await page.locator(".quick-reply").locator('[contenteditable="true"]').fill("Reply later.");
+    const quickReply = page.locator(".quick-reply");
+    const quickReplyEditor = quickReply.locator('[contenteditable="true"]');
+    const quickReplyBulletedList = quickReply.getByRole("button", { name: "Bulleted list" });
+    await quickReplyBulletedList.click();
+    await expect(quickReplyEditor.locator("ul")).toHaveCSS("list-style-type", "disc");
+    await expect(replyPlaceholder).toHaveCount(0);
+    await quickReplyBulletedList.click();
+    await expect(replyPlaceholder).toBeVisible();
+    await quickReplyEditor.fill("Reply later.");
     await expect(quickReplySend).toBeEnabled();
     await expect(quickReplySendOptions).toBeEnabled();
     await quickReplySendOptions.click();
@@ -953,9 +961,21 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(compose.locator("header strong")).toHaveText("Desktop test");
     await expect(compose.locator(".recipient-summary")).toContainText("friend@example.com");
     await expect(compose.locator(".recipient-summary")).toContainText("copy@example.com");
-    await expect(compose.getByRole("button", { name: "Bulleted list" })).toBeVisible();
+    const bulletedListButton = compose.getByRole("button", { name: "Bulleted list" });
+    await expect(bulletedListButton).toBeVisible();
     await expect(compose.getByRole("button", { name: "Undo" })).toBeVisible();
-    await compose.locator('[contenteditable="true"]').fill("Sent from the desktop client.");
+    const composerEditor = compose.locator('[contenteditable="true"]');
+    await composerEditor.fill("Sent from the desktop client.");
+    await bulletedListButton.click();
+    await expect(composerEditor.locator("ul > li")).toHaveText("Sent from the desktop client.");
+    await expect(composerEditor.locator("ul")).toHaveCSS("list-style-type", "disc");
+    await expect(bulletedListButton).toHaveClass(/active/);
+    await bulletedListButton.click();
+    await expect(composerEditor.locator("ul")).toHaveCount(0);
+    await expect(
+      composerEditor.getByText("Sent from the desktop client.", { exact: true }),
+    ).toBeVisible();
+    await expect(bulletedListButton).not.toHaveClass(/active/);
     const editorBounds = await compose.locator(".compose-editor").boundingBox();
     if (!editorBounds) throw new Error("Compose editor did not render.");
     await compose.locator(".compose-editor").click({
