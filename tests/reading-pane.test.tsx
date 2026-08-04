@@ -475,6 +475,37 @@ describe("ReadingPane", () => {
     expect(screen.queryByLabelText("Subject")).toBeNull();
   });
 
+  it("hides reply actions when an undo-pending draft is the only message", async () => {
+    const thread = detail("Pending message", "pending-message");
+    thread.messages[0] = {
+      ...thread.messages[0]!,
+      draftId: "pending-draft",
+      from: { email: "me@example.com" },
+      to: [{ email: "friend@example.com" }],
+      body: { text: "Pending body" },
+      flags: { read: true, starred: false, draft: true },
+    };
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+      } as unknown as FluxmailDesktopApi,
+    });
+
+    renderPane(
+      summary({
+        draft: true,
+        draftId: "pending-draft",
+        scheduleId: "pending-schedule",
+        pendingSend: true,
+      }),
+    );
+
+    await screen.findByText("Pending message");
+    expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Forward" })).toBeNull();
+  });
+
   it("keeps an edited draft mounted when its refreshed summary date changes", async () => {
     const thread = detail("Saved reply", "original-message");
     thread.messages.push({

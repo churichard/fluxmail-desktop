@@ -356,9 +356,9 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     (total, message) => total + (findMatchCounts[message.id] ?? 0),
     0,
   );
-  const lastMessage = messages.at(-1);
+  const replyTarget = [...messages].reverse().find((message) => !message.flags.draft);
   const replyAllAvailable = Boolean(
-    lastMessage && shouldOfferReplyAll(detail.accountEmail, lastMessage),
+    replyTarget && shouldOfferReplyAll(detail.accountEmail, replyTarget),
   );
   const deleteAction = mailboxDeleteAction(view, allowPermanentDelete);
   const showNextFindMatch = (direction: 1 | -1) => {
@@ -560,7 +560,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               }}
               onError={onError}
             />
-          ) : lastMessage ? (
+          ) : replyTarget ? (
             <div className="reply-actions">
               <button
                 aria-keyshortcuts={KEYBOARD_SHORTCUTS.reply.keys}
@@ -587,12 +587,12 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
               </button>
             </div>
           ) : null}
-          {!draftSeed && composer && lastMessage ? (
+          {!draftSeed && composer && replyTarget ? (
             <InlineComposer
               key={composer.mode}
               accountId={thread.accountId}
               threadId={thread.id}
-              message={lastMessage}
+              message={replyTarget}
               mode={composer.mode}
               initialAttachments={composer.initialAttachments}
               imageRelay={imageRelay}

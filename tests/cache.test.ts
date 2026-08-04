@@ -324,10 +324,12 @@ describe("MailCache", () => {
       sendAt: "2026-07-15T10:00:10Z",
       pendingSend: true,
     };
+    cache.recordResultPage(primary.id, "sent::", [], true);
 
     expect(
       cache.listThreads({
         view: "sent",
+        resultSetKey: "sent::",
         scheduledDrafts: [pendingSend],
         offset: 0,
         limit: 20,
@@ -344,6 +346,13 @@ describe("MailCache", () => {
       { id: "original-message", body: { text: "Original body" } },
       { id: "pending-message", body: { text: "Pending body" } },
     ]);
+    expect(
+      cache.countThreads({
+        view: "sent",
+        resultSetKey: "sent::",
+        scheduledDrafts: [pendingSend],
+      }),
+    ).toBe(1);
     cache.close();
   });
 

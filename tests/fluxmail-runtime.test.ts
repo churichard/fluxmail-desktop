@@ -2321,7 +2321,7 @@ describe("FluxmailRuntime draft mutations", () => {
     );
   });
 
-  it("lists an undo send in Sent with its optimistic body", async () => {
+  it("keeps an undo send in Sent through a provider refresh", async () => {
     vi.useFakeTimers();
     vi.setSystemTime("2026-07-21T12:00:00.000Z");
     const cache = createCache();
@@ -2344,6 +2344,7 @@ describe("FluxmailRuntime draft mutations", () => {
         ),
         scheduleSend: vi.fn(async () => scheduled),
         listScheduled: vi.fn(() => [scheduled]),
+        listMessages: vi.fn(async () => ({ items: [] })),
       },
       onCacheChanged: vi.fn(),
     });
@@ -2356,7 +2357,7 @@ describe("FluxmailRuntime draft mutations", () => {
       delaySeconds: 10,
     });
 
-    await expect(runtime.listThreads({ view: "sent" })).resolves.toMatchObject({
+    await expect(runtime.listThreads({ view: "sent", refresh: true })).resolves.toMatchObject({
       items: [
         {
           id: "draft-thread",
