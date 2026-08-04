@@ -2053,6 +2053,33 @@ textarea:focus-visible,
   margin-top: 0;
 }
 
+.mail-editor .tiptap ul,
+.mail-editor .tiptap ol {
+  margin: 0.5em 0;
+  padding-left: 1.5rem;
+}
+
+.mail-editor .tiptap > ul:first-child,
+.mail-editor .tiptap > ol:first-child {
+  margin-top: 0;
+}
+
+.mail-editor .tiptap ul {
+  list-style: disc;
+}
+
+.mail-editor .tiptap ol {
+  list-style: decimal;
+}
+
+.mail-editor .tiptap li {
+  margin: 0.2em 0;
+}
+
+.mail-editor .tiptap li > p {
+  margin: 0;
+}
+
 .mail-editor .tiptap a {
   color: var(--accent);
   text-decoration: underline;

@@ -85,6 +85,10 @@ export function MailEditorContent({
   className?: string;
   onFocus?(): void;
 }) {
+  const emptyList = Boolean(
+    empty && (editor?.isActive("bulletList") || editor?.isActive("orderedList")),
+  );
+
   return (
     <div
       className={`mail-editor ${className}`}
@@ -96,7 +100,9 @@ export function MailEditorContent({
         editor?.commands.focus();
       }}
     >
-      {empty && placeholder ? <span className="mail-editor-placeholder">{placeholder}</span> : null}
+      {empty && placeholder && !emptyList ? (
+        <span className="mail-editor-placeholder">{placeholder}</span>
+      ) : null}
       <EditorContent editor={editor} />
     </div>
   );
