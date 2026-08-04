@@ -62,6 +62,7 @@ export interface ScheduledDraftRef {
   accountId: string;
   draftId: string;
   sendAt: string;
+  pendingSend?: boolean;
 }
 
 const CACHE_SCHEMA_VERSION = 5;
@@ -390,6 +391,32 @@ export class MailCache {
     })();
   }
 
+  putOptimisticDraft(account: AccountInfo, draft: Message): void {
+    const existing = this.getThread(account.id, draft.threadId);
+    this.putMessages(account, [draft], { invalidateBodies: true });
+    const messages = [
+      ...(existing?.messages.filter(
+        (message) => message.id !== draft.id && message.draftId !== draft.draftId,
+      ) ?? []),
+      { ...draft, folderRole: draft.folder?.role },
+    ].sort((left, right) => Date.parse(left.date) - Date.parse(right.date));
+    const preview: MailThread = {
+      id: draft.threadId,
+      accountId: account.id,
+      accountEmail: account.email,
+      subject: existing?.subject ?? draft.subject,
+      messages,
+    };
+    const encrypted = this.cipher.encrypt(JSON.stringify(preview));
+    if (!encrypted) return;
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO thread_bodies(account_id, thread_id, encrypted_payload, hydrated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(account.id, draft.threadId, encrypted, Date.now());
+  }
+
   putThread(
     account: AccountInfo,
     thread: Thread,
@@ -463,10 +490,7 @@ export class MailCache {
       params.push(...input.accountIds);
     }
     const role = viewFolderRole(input.view);
-    if (role) {
-      conditions.push("folder_roles_json LIKE ?");
-      params.push(`%"${role}"%`);
-    }
+    if (role) addFolderRoleCondition(conditions, params, role, input.scheduledDrafts);
     if (input.view === "all") {
       conditions.push(`(
         json_array_length(folder_roles_json) = 0 OR EXISTS (
@@ -488,13 +512,13 @@ export class MailCache {
       params.push(input.label);
     }
     if (input.resultSetKey) {
-      conditions.push(`EXISTS (
-        SELECT 1 FROM view_results
-        WHERE view_results.account_id = threads.account_id
-          AND view_results.thread_id = threads.thread_id
-          AND view_results.view_key = ?
-      )`);
-      params.push(input.resultSetKey);
+      addResultSetCondition(
+        conditions,
+        params,
+        input.resultSetKey,
+        input.view,
+        input.scheduledDrafts,
+      );
     } else if (input.query?.trim()) {
       const keys = this.searchKeys(input.query, input.limit * 3);
       if (!keys.length) return [];
@@ -554,6 +578,7 @@ export class MailCache {
             ...summary,
             scheduleId: scheduled.scheduleId,
             draftId: scheduled.draftId,
+            ...(scheduled.pendingSend ? { pendingSend: true } : {}),
           }
         : summary;
     });
@@ -576,10 +601,7 @@ export class MailCache {
       params.push(...input.accountIds);
     }
     const role = viewFolderRole(input.view);
-    if (role) {
-      conditions.push("folder_roles_json LIKE ?");
-      params.push(`%"${role}"%`);
-    }
+    if (role) addFolderRoleCondition(conditions, params, role, input.scheduledDrafts);
     if (input.view === "all") {
       conditions.push(`(
         json_array_length(folder_roles_json) = 0 OR EXISTS (
@@ -600,15 +622,14 @@ export class MailCache {
       );
       params.push(input.label);
     }
-    if (input.resultSetKey) {
-      conditions.push(`EXISTS (
-        SELECT 1 FROM view_results
-        WHERE view_results.account_id = threads.account_id
-          AND view_results.thread_id = threads.thread_id
-          AND view_results.view_key = ?
-      )`);
-      params.push(input.resultSetKey);
-    }
+    if (input.resultSetKey)
+      addResultSetCondition(
+        conditions,
+        params,
+        input.resultSetKey,
+        input.view,
+        input.scheduledDrafts,
+      );
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const row = this.db
       .prepare(`SELECT COUNT(*) AS count FROM threads ${where}`)
@@ -1283,6 +1304,63 @@ function addScheduledDraftExclusion(
       scheduledDrafts.map((draft) => JSON.stringify([draft.accountId, draft.draftId])),
     ),
   );
+}
+
+function addFolderRoleCondition(
+  conditions: string[],
+  params: Array<string | number>,
+  role: string,
+  scheduledDrafts: ScheduledDraftRef[] | undefined,
+): void {
+  const pendingSendKeys = pendingScheduledDraftKeys(scheduledDrafts);
+  if (role !== "sent" || !pendingSendKeys.length) {
+    conditions.push("folder_roles_json LIKE ?");
+    params.push(`%"${role}"%`);
+    return;
+  }
+  conditions.push(`(
+    folder_roles_json LIKE ? OR ${pendingSendThreadCondition("pending_messages")}
+  )`);
+  params.push(`%"${role}"%`, JSON.stringify(pendingSendKeys));
+}
+
+function addResultSetCondition(
+  conditions: string[],
+  params: Array<string | number>,
+  resultSetKey: string,
+  view: MailboxView,
+  scheduledDrafts: ScheduledDraftRef[] | undefined,
+): void {
+  const pendingSendKeys = view === "sent" ? pendingScheduledDraftKeys(scheduledDrafts) : [];
+  conditions.push(`(
+    EXISTS (
+      SELECT 1 FROM view_results
+      WHERE view_results.account_id = threads.account_id
+        AND view_results.thread_id = threads.thread_id
+        AND view_results.view_key = ?
+    )${pendingSendKeys.length ? ` OR ${pendingSendThreadCondition("pending_results")}` : ""}
+  )`);
+  params.push(resultSetKey);
+  if (pendingSendKeys.length) params.push(JSON.stringify(pendingSendKeys));
+}
+
+function pendingScheduledDraftKeys(scheduledDrafts: ScheduledDraftRef[] | undefined): string[] {
+  return (scheduledDrafts ?? [])
+    .filter((draft) => draft.pendingSend)
+    .map((draft) => scheduledDraftKey(draft.accountId, draft.draftId));
+}
+
+function pendingSendThreadCondition(messageAlias: string): string {
+  return `EXISTS (
+    SELECT 1
+    FROM messages AS ${messageAlias}
+    WHERE ${messageAlias}.account_id = threads.account_id
+      AND ${messageAlias}.thread_id = threads.thread_id
+      AND json_array(
+        ${messageAlias}.account_id,
+        json_extract(${messageAlias}.payload_json, '$.draftId')
+      ) IN (SELECT value FROM json_each(?))
+  )`;
 }
 
 function viewFolderRole(view: MailboxView): string | undefined {

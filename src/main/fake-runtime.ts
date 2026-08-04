@@ -256,7 +256,33 @@ export class FakeFluxmailRuntime {
         .filter(([, item]) => item.visible)
         .map(([scheduleId, item]) => [item.draftId, { scheduleId, sendAt: item.sendAt }]),
     );
-    const summaries = this.summaries();
+    const activeScheduleByDraft = new Map(
+      [...this.scheduled.entries()].map(([scheduleId, item]) => [
+        item.draftId,
+        { scheduleId, sendAt: item.sendAt, pendingSend: !item.visible },
+      ]),
+    );
+    const summaries = this.summaries().map((thread) => {
+      const scheduledDraft = [...this.messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.threadId === thread.id &&
+            message.draftId &&
+            activeScheduleByDraft.has(message.draftId),
+        );
+      const schedule = scheduledDraft?.draftId
+        ? activeScheduleByDraft.get(scheduledDraft.draftId)
+        : undefined;
+      return schedule && scheduledDraft?.draftId
+        ? {
+            ...thread,
+            scheduleId: schedule.scheduleId,
+            draftId: scheduledDraft.draftId,
+            ...(schedule.pendingSend ? { pendingSend: true } : {}),
+          }
+        : thread;
+    });
     const summariesByThread = new Map(summaries.map((thread) => [thread.id, thread]));
     const visibleThreads =
       input.view === "scheduled"
@@ -297,6 +323,7 @@ export class FakeFluxmailRuntime {
           return false;
         if (
           !["all", "starred", "label", "search"].includes(input.view) &&
+          !(input.view === "sent" && thread.pendingSend) &&
           !thread.folderRoles.includes(input.view)
         )
           return false;

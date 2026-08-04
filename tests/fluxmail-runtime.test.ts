@@ -2321,6 +2321,58 @@ describe("FluxmailRuntime draft mutations", () => {
     );
   });
 
+  it("keeps an undo send in Sent through a provider refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-21T12:00:00.000Z");
+    const cache = createCache();
+    const scheduled = {
+      scheduleId: "schedule-1",
+      accountId: account.id,
+      draftId: "draft-1",
+      sendAt: "2026-07-21T12:00:10.000Z",
+      status: "pending" as const,
+      attempts: 0,
+    };
+    const runtime = createRuntimeWithCache({
+      cache,
+      service: {
+        createDraft: vi.fn(async () =>
+          draftMessage({
+            subject: "Optimistic subject",
+            body: { text: "Optimistic body" },
+          }),
+        ),
+        scheduleSend: vi.fn(async () => scheduled),
+        listScheduled: vi.fn(() => [scheduled]),
+        listMessages: vi.fn(async () => ({ items: [] })),
+      },
+      onCacheChanged: vi.fn(),
+    });
+
+    await runtime.schedule({
+      accountId: account.id,
+      to: [{ email: "friend@example.com" }],
+      subject: "Optimistic subject",
+      text: "Optimistic body",
+      delaySeconds: 10,
+    });
+
+    await expect(runtime.listThreads({ view: "sent", refresh: true })).resolves.toMatchObject({
+      items: [
+        {
+          id: "draft-thread",
+          scheduleId: "schedule-1",
+          draftId: "draft-1",
+          pendingSend: true,
+        },
+      ],
+    });
+    await expect(runtime.getThread(account.id, "draft-thread")).resolves.toMatchObject({
+      messages: [{ id: "draft-message", body: { text: "Optimistic body" } }],
+    });
+    cache.close();
+  });
+
   it("removes a delivered schedule from Drafts and caches its Sent thread", async () => {
     vi.useFakeTimers();
     vi.setSystemTime("2026-07-21T12:00:00.000Z");
@@ -2883,6 +2935,7 @@ function createRuntime(input: {
 }): FluxmailRuntime {
   const cache = {
     putThread: vi.fn(),
+    putOptimisticDraft: vi.fn(),
     invalidateThread: vi.fn(),
     recordResultPage: vi.fn(),
     ...input.cache,

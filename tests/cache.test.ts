@@ -293,6 +293,69 @@ describe("MailCache", () => {
     cache.close();
   });
 
+  it("keeps an undo send preview available in Sent", () => {
+    const cache = createCache();
+    const original = message({
+      id: "original-message",
+      threadId: "shared-thread",
+      body: { text: "Original body" },
+    });
+    cache.putThread(primary, {
+      id: "shared-thread",
+      subject: "Project update",
+      messages: [original],
+    });
+    const optimistic = message({
+      id: "pending-message",
+      threadId: "shared-thread",
+      draftId: "pending-draft",
+      from: { email: primary.email },
+      to: [{ email: "friend@example.com" }],
+      date: "2026-07-15T10:00:00Z",
+      body: { text: "Pending body" },
+      folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
+      flags: { read: true, starred: false, draft: true },
+    });
+    cache.putOptimisticDraft(primary, optimistic);
+    const pendingSend = {
+      scheduleId: "pending-schedule",
+      accountId: primary.id,
+      draftId: "pending-draft",
+      sendAt: "2026-07-15T10:00:10Z",
+      pendingSend: true,
+    };
+    cache.recordResultPage(primary.id, "sent::", [], true);
+
+    expect(
+      cache.listThreads({
+        view: "sent",
+        resultSetKey: "sent::",
+        scheduledDrafts: [pendingSend],
+        offset: 0,
+        limit: 20,
+      }),
+    ).toMatchObject([
+      {
+        id: "shared-thread",
+        scheduleId: "pending-schedule",
+        draftId: "pending-draft",
+        pendingSend: true,
+      },
+    ]);
+    expect(cache.getThread(primary.id, "shared-thread")?.messages).toMatchObject([
+      { id: "original-message", body: { text: "Original body" } },
+      { id: "pending-message", body: { text: "Pending body" } },
+    ]);
+    expect(
+      cache.countThreads({
+        view: "sent",
+        resultSetKey: "sent::",
+        scheduledDrafts: [pendingSend],
+      }),
+    ).toBe(1);
+    cache.close();
+  });
+
   it("keeps scheduled drafts in the same conversation distinct", () => {
     const cache = createCache();
     cache.putMessages(primary, [

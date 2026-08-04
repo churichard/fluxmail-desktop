@@ -778,7 +778,7 @@ export function App() {
       if (!changesThread) return;
       const canNavigate = prepareReadingNavigation();
       if (canNavigate === false || (canNavigate !== true && !(await canNavigate))) return;
-      if (thread.scheduleId) {
+      if (thread.scheduleId && !thread.pendingSend) {
         try {
           await window.fluxmail.drafts.cancelScheduled({ scheduleId: thread.scheduleId });
         } catch (caught) {
@@ -1202,8 +1202,10 @@ export async function loadThreadPages(
   };
 }
 
-export function threadKey(thread: Pick<ThreadSummary, "accountId" | "id" | "scheduleId">): string {
-  return `${thread.accountId}:${thread.scheduleId ?? thread.id}`;
+export function threadKey(
+  thread: Pick<ThreadSummary, "accountId" | "id" | "scheduleId" | "pendingSend">,
+): string {
+  return `${thread.accountId}:${thread.pendingSend ? thread.id : (thread.scheduleId ?? thread.id)}`;
 }
 
 export function reconcileAccountSelection(
