@@ -272,6 +272,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
           if (thread.draft) onDraftMissing?.(thread);
           return;
         }
+        if (thread.pendingSend) return;
         const replyTarget = [...result.messages].reverse().find((message) => !message.flags.draft);
         const [initialAttachments, recipientFields] = await Promise.all([
           draft.attachments?.length
@@ -326,6 +327,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
     thread?.draftId,
     thread?.id,
     thread?.messageCount,
+    thread?.pendingSend,
     thread?.scheduleId,
   ]);
 
@@ -345,7 +347,11 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
         <p role="status">Opening conversation...</p>
       </section>
     );
-  const messages = detail.messages.filter((message) => !message.flags.draft);
+  const messages = detail.messages.filter(
+    (message) =>
+      !message.flags.draft ||
+      Boolean(thread.pendingSend && thread.draftId && message.draftId === thread.draftId),
+  );
   const totalFindMatches = messages.reduce(
     (total, message) => total + (findMatchCounts[message.id] ?? 0),
     0,

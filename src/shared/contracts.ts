@@ -79,6 +79,7 @@ export type MailMessage = z.infer<typeof messageSchema>;
 export const threadSummarySchema = z.object({
   id: z.string(),
   scheduleId: z.string().optional(),
+  pendingSend: z.boolean().optional(),
   draftId: z.string().optional(),
   accountId: z.string(),
   accountEmail: z.string(),

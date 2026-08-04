@@ -323,6 +323,34 @@ describe("App thread navigation", () => {
     expect(await screen.findByText(`Reading ${scheduled.subject}`)).toBeTruthy();
   });
 
+  it("keeps an undo-pending send selected without canceling it", async () => {
+    const original = thread("shared-thread", "Pending reply", false);
+    const api = installApi(
+      [original],
+      vi.fn(async () => mailThread(original)),
+    );
+    installMatchMedia();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: original.subject }));
+    expect(await screen.findByText(`Reading ${original.subject}`)).toBeTruthy();
+
+    api.setVisibleThreads([
+      {
+        ...original,
+        scheduleId: "pending-schedule",
+        draftId: "pending-draft",
+        pendingSend: true,
+        draft: true,
+        messageCount: 2,
+      },
+    ]);
+    act(() => api.emit({ type: "cache-changed" }));
+
+    await waitFor(() => expect(window.fluxmail.mail.listThreads).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(`Reading ${original.subject}`)).toBeTruthy();
+    expect(window.fluxmail.drafts.cancelScheduled).not.toHaveBeenCalled();
+  });
+
   it("deletes only the selected scheduled draft", async () => {
     const scheduled = {
       ...thread("shared-thread", "Scheduled reply", true),

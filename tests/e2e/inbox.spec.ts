@@ -984,6 +984,15 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     await expect(compose).toBeHidden();
     const undoToast = page.getByRole("status").filter({ hasText: "Message sent." });
     await expect(undoToast).toContainText("Message sent.");
+    await page.locator(".sidebar").getByRole("button", { name: "Sent" }).click();
+    const pendingSendRow = page.locator(".thread-row", { hasText: "Desktop test" });
+    await expect(pendingSendRow).toBeVisible();
+    await expect(pendingSendRow.locator(".thread-draft-label")).toHaveCount(0);
+    await pendingSendRow.locator(".thread-open").click();
+    await expect(page.locator(".conversation-title h1")).toHaveText("Desktop test");
+    await expect(
+      page.frameLocator('iframe[title="Email message"]').locator("#email-root"),
+    ).toContainText("Sent from the desktop client.");
     await undoToast.getByRole("button", { name: "Undo" }).click();
     await expect(
       page.getByRole("status").filter({ hasText: "Sending canceled. The message is in Drafts." }),

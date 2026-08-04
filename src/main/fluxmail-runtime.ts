@@ -919,7 +919,8 @@ export class FluxmailRuntime {
             await this.toSendInput(input, true),
           );
       if (!draft.draftId) throw new Error("The provider did not return a draft ID.");
-      this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
+      if (input.delaySeconds) this.options.cache.putOptimisticDraft(account, draft);
+      else this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
       if (input.recipientFields)
         this.options.cache.putDraftRecipientFields(
           input.accountId,
@@ -927,7 +928,11 @@ export class FluxmailRuntime {
           input.recipientFields,
           draft,
         );
-      this.includeThreadInViews(input.accountId, draft.threadId, ["drafts", "all"]);
+      this.includeThreadInViews(input.accountId, draft.threadId, [
+        "drafts",
+        "all",
+        ...(input.delaySeconds ? (["sent"] as const) : []),
+      ]);
       const canceledSchedules = input.draftId
         ? this.cancelSchedulesForDraft(input.accountId, draft.draftId)
         : [];
@@ -1069,8 +1074,13 @@ export class FluxmailRuntime {
         const account = this.requireAccount(input.accountId);
         const draft = await this.context.service.createDraft(input.accountId, payload);
         if (!draft.draftId) throw new Error("The provider did not return a draft ID.");
-        this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
-        this.includeThreadInViews(input.accountId, draft.threadId, ["drafts", "all"]);
+        if (input.delaySeconds) this.options.cache.putOptimisticDraft(account, draft);
+        else this.options.cache.putMessages(account, [draft], { invalidateBodies: true });
+        this.includeThreadInViews(input.accountId, draft.threadId, [
+          "drafts",
+          "all",
+          ...(input.delaySeconds ? (["sent"] as const) : []),
+        ]);
         const sendAt = scheduledSendAt(
           input.delaySeconds ? { delaySeconds: input.delaySeconds } : { sendAt: input.sendAt! },
         );
@@ -1165,6 +1175,7 @@ export class FluxmailRuntime {
         accountId: item.accountId,
         draftId: item.draftId,
         sendAt: item.sendAt,
+        ...(this.undoScheduleIds.has(item.scheduleId) ? { pendingSend: true } : {}),
       }));
   }
 
