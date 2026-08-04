@@ -2,7 +2,16 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.0...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.1...HEAD)
+
+## [0.4.1](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.1) - 2026-08-04
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Fixed
+
+- Show Undo Send messages immediately in Sent and keep their content visible while delivery is pending ([#54](https://github.com/churichard/fluxmail-desktop/pull/54))
+- Restore bullets, numbers, and indentation for lists in compose and quick reply ([#55](https://github.com/churichard/fluxmail-desktop/pull/55))
 
 ## [0.4.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.0) - 2026-07-25
 
