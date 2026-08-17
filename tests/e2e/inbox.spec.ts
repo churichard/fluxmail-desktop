@@ -1242,6 +1242,67 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
   }
 });
 
+test("reopens an undone reply without the quoted message in the editor", async () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-undo-reply-e2e-"));
+  writeFileSync(
+    path.join(dataDirectory, "desktop-preferences.json"),
+    JSON.stringify({
+      version: 5,
+      appearance: "system",
+      dockBadge: true,
+      blockRemoteImages: true,
+      imageRelay: false,
+      undoSendDelaySeconds: 30,
+    }),
+  );
+  const electronApp = await electron.launch({
+    args: [mockKeychainArgument, process.cwd()],
+    env: {
+      ...process.env,
+      FLUXMAIL_DESKTOP_FAKE_MAIL: "1",
+      FLUXMAIL_DESKTOP_E2E_HEADLESS: "1",
+      FLUXMAIL_DESKTOP_TEST_DATA_DIR: dataDirectory,
+      FLUXMAIL_DATA_DIR: path.join(dataDirectory, ".fluxmail"),
+      FLUXMAIL_TELEMETRY: "0",
+    },
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await page
+      .locator(".thread-row")
+      .filter({ hasText: "Welcome to Fluxmail" })
+      .locator(".thread-open")
+      .click();
+    await expect(page.locator(".conversation-title h1")).toHaveText("Welcome to Fluxmail");
+
+    await page
+      .locator(".reply-actions")
+      .getByRole("button", { name: "Reply", exact: true })
+      .click();
+    await page.locator('.quick-reply [contenteditable="true"]').fill("Reply later.");
+    await page.locator(".quick-reply").getByRole("button", { name: "Send", exact: true }).click();
+
+    const undoToast = page.getByRole("status").filter({ hasText: "Message sent." });
+    await undoToast.getByRole("button", { name: "Undo" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Sending canceled. The message is in Drafts." }),
+    ).toBeVisible();
+
+    const draftEditor = page.locator('.inline-draft-composer [contenteditable="true"]');
+    await expect(draftEditor).toHaveText("Reply later.");
+    await expect(draftEditor).not.toContainText("Your desktop inbox is ready.");
+    await expect(draftEditor).not.toContainText("wrote:");
+    await expect(
+      page.locator(".inline-draft-composer").getByRole("button", { name: "Show quoted message" }),
+    ).toBeVisible();
+  } finally {
+    await electronApp.close();
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("advances after archive unless the setting is disabled", async () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "fluxmail-iframe-shortcut-e2e-"));
   const electronApp = await electron.launch({

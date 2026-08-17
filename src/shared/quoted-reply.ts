@@ -43,7 +43,9 @@ export const QUOTED_REPLY_CLASSES = new Set([
 export const QUOTED_REPLY_IDS = new Set(["divrplyfwdmsg"]);
 
 const QUOTED_TEXT_PATTERNS = [
-  /(?:^|\n)On [^\n]+ wrote:\s*\n(?:>[^\n]*(?:\n|$))+/i,
+  // The quoted lines lose their "> " markers once an editor rewrites the draft, so the attribution
+  // line alone ends the reply.
+  /(?:^|\n)On [^\n]+ wrote:\s*(?:\n|$)/i,
   /(?:^|\n)-{2,}\s*Original Message\s*-{2,}(?:\n|$)/i,
 ];
 const ATTRIBUTION_PATTERN = /(?:On\b[^\n]{0,300}\bwrote:|-{2,}\s*Original Message\s*-{2,})/i;

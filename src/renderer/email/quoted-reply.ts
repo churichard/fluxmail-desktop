@@ -44,6 +44,14 @@ function findQuotedReplyMarker(root: HTMLElement): Element | undefined {
     if (classes.some((className) => QUOTED_REPLY_CLASSES.has(className))) return element;
     const id = element.getAttribute("id")?.toLowerCase();
     if (id && QUOTED_REPLY_IDS.has(id)) return element;
+    // An editor that rewrote the draft can strip the quote markup and leave the attribution line
+    // in front of the loose quoted blocks, so cut from the attribution itself.
+    if (
+      BLOCK_TAGS.has(element.tagName.toLowerCase()) &&
+      element.nextSibling &&
+      isQuoteAttribution(element.textContent ?? "")
+    )
+      return element;
     if (element.tagName !== "BLOCKQUOTE") continue;
     if (element.getAttribute("type")?.toLowerCase() === "cite") return element;
     // Only treat an unmarked blockquote as history when an attribution introduces it, so quotes

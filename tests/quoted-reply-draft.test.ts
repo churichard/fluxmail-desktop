@@ -65,6 +65,25 @@ describe("reopening a saved reply", () => {
     expect(replyWithoutQuotedHtml(html)).toEqual({ html: "<div>test</div>", quoted: true });
   });
 
+  it("removes quoted history that lost its markup in an earlier editor round trip", () => {
+    const html =
+      "<p>test</p><p>On Mon, Aug 17, 2026 at 11:03 AM PayPal &lt;service@paypal.com&gt; wrote:</p>" +
+      "<p>Payment details are inside.</p><p><strong>Hello, Richard Chu</strong></p>";
+
+    expect(replyWithoutQuotedHtml(html)).toEqual({ html: "<p>test</p>", quoted: true });
+    expect(
+      replyWithoutQuotedText(
+        "test\nOn Mon, Aug 17, 2026 at 11:03 AM PayPal wrote:\nPayment details are inside.",
+      ),
+    ).toBe("test");
+  });
+
+  it("keeps a trailing attribution that introduces nothing", () => {
+    const html = "<p>test</p><p>On Monday Sam wrote:</p>";
+
+    expect(replyWithoutQuotedHtml(html)).toEqual({ html, quoted: false });
+  });
+
   it("removes quoted history nested beside the reply", () => {
     const html =
       '<div dir="ltr"><div>test</div><div class="gmail_quote"><blockquote>Quoted</blockquote></div>' +
