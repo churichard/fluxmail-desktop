@@ -51,16 +51,25 @@ export const addressSchema = z.object({
 });
 export type Address = z.infer<typeof addressSchema>;
 
+// Received headers carry whatever the sender wrote, including addresses that are not valid email.
+// Those messages still have to open, so inbound addresses are kept as-is and only outbound
+// recipients (composeInputSchema, mailForwardInputSchema) are validated.
+export const receivedAddressSchema = z.object({
+  name: z.string().optional(),
+  email: z.string(),
+});
+export type ReceivedAddress = z.infer<typeof receivedAddressSchema>;
+
 export const messageSchema = z.object({
   id: z.string(),
   threadId: z.string(),
   accountId: z.string(),
   draftId: z.string().optional(),
-  from: addressSchema.optional(),
-  replyTo: z.array(addressSchema).optional(),
-  to: z.array(addressSchema),
-  cc: z.array(addressSchema).optional(),
-  bcc: z.array(addressSchema).optional(),
+  from: receivedAddressSchema.optional(),
+  replyTo: z.array(receivedAddressSchema).optional(),
+  to: z.array(receivedAddressSchema),
+  cc: z.array(receivedAddressSchema).optional(),
+  bcc: z.array(receivedAddressSchema).optional(),
   subject: z.string(),
   date: z.string(),
   snippet: z.string().optional(),

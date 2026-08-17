@@ -21,6 +21,7 @@ import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEdito
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
 import { quotedReplyCitation, replyWithoutQuotedText } from "../../shared/quoted-reply";
+import { replyTargets } from "../../shared/reply-recipients";
 import { attachmentsWithoutQuotedInline, replyWithoutQuotedHtml } from "../email/quoted-reply";
 import { SendControls } from "./SendControls";
 
@@ -807,12 +808,7 @@ function htmlFromText(value: string): string {
 
 export function replyRecipient(accountEmail: string, message: MailMessage): string {
   const ownAddress = accountEmail.toLowerCase();
-  const replyTargets = message.replyTo?.length
-    ? message.replyTo
-    : message.from
-      ? [message.from]
-      : [];
-  const externalReplyTargets = replyTargets.filter(
+  const externalReplyTargets = replyTargets(message).filter(
     (address) => address.email.toLowerCase() !== ownAddress,
   );
   if (externalReplyTargets.length) return externalReplyTargets.map(formatAddress).join(", ");

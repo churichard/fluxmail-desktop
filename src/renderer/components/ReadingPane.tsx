@@ -59,6 +59,11 @@ import {
 } from "../mail-actions";
 import type { TrackingPixelDetail } from "../email/tracking-pixels";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+import {
+  hasUnsendableReplyRecipient,
+  replyRecipients,
+  replyTargets,
+} from "../../shared/reply-recipients";
 import { SendControls } from "./SendControls";
 
 interface Props {
@@ -591,6 +596,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
             <InlineComposer
               key={composer.mode}
               accountId={thread.accountId}
+              accountEmail={thread.accountEmail}
               threadId={thread.id}
               message={replyTarget}
               mode={composer.mode}
@@ -742,6 +748,7 @@ function MessageCard({
 
 function InlineComposer({
   accountId,
+  accountEmail,
   threadId,
   message,
   mode,
@@ -756,6 +763,7 @@ function InlineComposer({
   undoSendDelaySeconds,
 }: {
   accountId: string;
+  accountEmail: string;
   threadId: string;
   message: MailMessage;
   mode: InlineComposerMode;
@@ -777,10 +785,21 @@ function InlineComposer({
     : message.subject.toLowerCase().startsWith("re:")
       ? message.subject
       : `Re: ${message.subject}`;
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
+  // A reply normally leaves its recipients to the engine, which derives them from the original
+  // message. When a header address is not one a provider will accept, the reply names them
+  // instead so the sender sees the address and can correct it.
+  const namesRecipients =
+    !forwarding && hasUnsendableReplyRecipient(accountEmail, message, mode === "replyAll");
+  const showRecipientFields = forwarding || namesRecipients;
+  const derivedRecipients = namesRecipients
+    ? replyRecipients(accountEmail, message, mode === "replyAll")
+    : { to: [], cc: [] };
+  const initialTo = formatAddresses(derivedRecipients.to);
+  const initialCc = formatAddresses(derivedRecipients.cc);
+  const [to, setTo] = useState(initialTo);
+  const [cc, setCc] = useState(initialCc);
   const [bcc, setBcc] = useState("");
-  const [showCc, setShowCc] = useState(false);
+  const [showCc, setShowCc] = useState(Boolean(initialCc));
   const [showBcc, setShowBcc] = useState(false);
   const [subject, setSubject] = useState(initialSubject);
   const [html, setHtml] = useState("<p></p>");
@@ -798,7 +817,7 @@ function InlineComposer({
   const ccRef = useRef<HTMLInputElement>(null);
   const bccRef = useRef<HTMLInputElement>(null);
   const editor = useMailEditor({
-    autoFocus: !forwarding,
+    autoFocus: !showRecipientFields,
     onChange: (value) => {
       setHtml(value.html);
       setText(value.text);
@@ -820,10 +839,26 @@ function InlineComposer({
       Boolean(
         text.trim() ||
         attachmentsChanged ||
-        (forwarding && (to.trim() || cc.trim() || bcc.trim() || subject !== initialSubject)),
+        (showRecipientFields &&
+          (to.trim() !== initialTo.trim() ||
+            cc.trim() !== initialCc.trim() ||
+            bcc.trim() ||
+            subject !== initialSubject)),
       ),
     );
-  }, [attachmentsChanged, bcc, cc, forwarding, initialSubject, onDirtyChange, subject, text, to]);
+  }, [
+    attachmentsChanged,
+    bcc,
+    cc,
+    initialCc,
+    initialSubject,
+    initialTo,
+    onDirtyChange,
+    showRecipientFields,
+    subject,
+    text,
+    to,
+  ]);
 
   useEffect(() => {
     window.clearTimeout(releaseTimer.current);
@@ -837,8 +872,12 @@ function InlineComposer({
     const toField = parseAddressField(to);
     const ccField = parseAddressField(cc);
     const bccField = parseAddressField(bcc);
-    if (forwarding && (toField.invalid || ccField.invalid || bccField.invalid)) {
-      onError("Check the recipient addresses and try again.");
+    if (showRecipientFields && (toField.invalid || ccField.invalid || bccField.invalid)) {
+      onError(
+        namesRecipients
+          ? "Fluxmail cannot send to the reply address on this message. Correct it and try again."
+          : "Check the recipient addresses and try again.",
+      );
       return;
     }
     if (
@@ -849,6 +888,12 @@ function InlineComposer({
         !bccField.addresses.length)
     )
       return;
+    // Without a To recipient the engine would derive one from the original message again,
+    // which is where the address Fluxmail cannot send to came from.
+    if (namesRecipients && !toField.addresses.length) {
+      onError("Add a recipient before sending this reply.");
+      return;
+    }
     const kind = timing ? "scheduled" : hasUndoSendDelay(undoSendDelaySeconds) ? "undo" : "sent";
     setDeliveryKind(kind);
     setSending(true);
@@ -878,7 +923,9 @@ function InlineComposer({
       } else {
         const input = {
           accountId,
-          to: [],
+          to: namesRecipients ? toField.addresses : [],
+          ...(namesRecipients && ccField.addresses.length ? { cc: ccField.addresses } : {}),
+          ...(namesRecipients && bccField.addresses.length ? { bcc: bccField.addresses } : {}),
           subject,
           text,
           html,
@@ -911,7 +958,9 @@ function InlineComposer({
   };
 
   const sendDisabled =
-    (!forwarding && !text.trim()) || (forwarding && !to.trim() && !cc.trim() && !bcc.trim());
+    (!forwarding && !text.trim()) ||
+    (forwarding && !to.trim() && !cc.trim() && !bcc.trim()) ||
+    (namesRecipients && !to.trim());
   return (
     <div
       className="quick-reply"
@@ -923,7 +972,7 @@ function InlineComposer({
         }
       }}
     >
-      {forwarding ? (
+      {showRecipientFields ? (
         <div className="compose-fields inline-compose-fields">
           <label className="recipient-row">
             <span>To</span>
@@ -981,14 +1030,16 @@ function InlineComposer({
               />
             </label>
           ) : null}
-          <label>
-            <span>Subject</span>
-            <input
-              aria-label="Subject"
-              value={subject}
-              onChange={(event) => setSubject(event.target.value)}
-            />
-          </label>
+          {forwarding ? (
+            <label>
+              <span>Subject</span>
+              <input
+                aria-label="Subject"
+                value={subject}
+                onChange={(event) => setSubject(event.target.value)}
+              />
+            </label>
+          ) : null}
         </div>
       ) : null}
       <MailEditorContent
@@ -1101,17 +1152,13 @@ function formatRecipients(recipients: Array<{ name?: string; email: string }>): 
 
 export function shouldOfferReplyAll(accountEmail: string, message: MailMessage): boolean {
   const ownAddress = normalizeAddress(accountEmail);
-  const replyTargets = message.replyTo?.length
-    ? message.replyTo
-    : message.from
-      ? [message.from]
-      : [];
-  const replyRecipients = uniqueAddresses(replyTargets).filter((address) => address !== ownAddress);
+  const targets = replyTargets(message);
+  const replyToTargets = uniqueAddresses(targets).filter((address) => address !== ownAddress);
   const normalRecipients = new Set(
-    replyRecipients.length ? replyRecipients : uniqueAddresses(message.to),
+    replyToTargets.length ? replyToTargets : uniqueAddresses(message.to),
   );
   const replyAllRecipients = uniqueAddresses([
-    ...replyTargets,
+    ...targets,
     ...message.to,
     ...(message.cc ?? []),
   ]).filter((address) => address !== ownAddress);

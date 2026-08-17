@@ -20,6 +20,10 @@ globalThis.ResizeObserver = class ResizeObserver {
   disconnect(): void {}
 } as unknown as typeof ResizeObserver;
 
+// The editor measures its selection when its content changes, which jsdom cannot do.
+Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -868,7 +872,101 @@ describe("ReadingPane", () => {
       "Email body",
     );
   });
+
+  it("leaves reply recipients to the engine when the headers are sendable", async () => {
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => detail("Reply subject", "message-1")) },
+        drafts: { send },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary());
+    await screen.findByText("Reply subject");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(screen.queryByRole("textbox", { name: "To" })).toBeNull();
+
+    await writeReply("Thanks");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ to: [], replyToMessageId: "message-1" }),
+      ),
+    );
+  });
+
+  it("names the recipients when a reply address is one Fluxmail cannot send to", async () => {
+    const thread = detail("Payment receipt", "message-1");
+    thread.messages[0]!.from = { name: "PayPal", email: "service@paypal.example" };
+    thread.messages[0]!.replyTo = [{ name: "Richard Chu", email: "someone@gmail.c..." }];
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    const onError = vi.fn();
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: { send },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    render(
+      <ReadingPane
+        view="inbox"
+        thread={summary()}
+        labels={[]}
+        allowPermanentDelete={false}
+        onModify={vi.fn(async () => undefined)}
+        onError={onError}
+        onQuickReplyDirtyChange={vi.fn()}
+        undoSendDelaySeconds={0}
+      />,
+    );
+    await screen.findByText("Payment receipt");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    const to = (await screen.findByRole("textbox", { name: "To" })) as HTMLInputElement;
+
+    expect(to.value).toBe("Richard Chu <someone@gmail.c...>");
+
+    await writeReply("Thanks");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onError).toHaveBeenCalledWith(
+      "Fluxmail cannot send to the reply address on this message. Correct it and try again.",
+    );
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.change(to, { target: { value: "" } });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(to, { target: { value: "Richard Chu <someone@gmail.com>" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: [{ name: "Richard Chu", email: "someone@gmail.com" }],
+          replyToMessageId: "message-1",
+        }),
+      ),
+    );
+  });
 });
+
+async function writeReply(text: string): Promise<void> {
+  const paragraph = document.querySelector(".quick-reply .tiptap p")!;
+  paragraph.textContent = text;
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
+  );
+}
 
 function renderPane(
   thread: ThreadSummary,
