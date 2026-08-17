@@ -3,8 +3,10 @@ import { createRef, StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadingPane, type ReadingPaneHandle } from "../src/renderer/components/ReadingPane";
+import { quotedReplyCitation } from "../src/shared/quoted-reply";
 import type {
   FluxmailDesktopApi,
+  MailMessage,
   MailThread,
   ModifyActionInput,
   ThreadSummary,
@@ -362,14 +364,7 @@ describe("ReadingPane", () => {
       draftId: "draft-1",
       from: { email: "me@example.com" },
       to: [{ email: "sender@example.com" }],
-      body: {
-        html:
-          '<p>Saved answer</p><div class="gmail_quote gmail_quote_container">' +
-          '<div dir="ltr" class="gmail_attr">On Thu, Jul 16, 2026 sender@example.com wrote:<br></div>' +
-          '<blockquote class="gmail_quote"><table><tr><td><b>Receipt</b></td></tr></table>' +
-          "</blockquote></div>",
-        text: "Saved answer\n\nOn Thu, Jul 16, 2026 sender@example.com wrote:\n> Receipt",
-      },
+      body: quotedDraftBody("Saved answer", thread.messages[0]!),
       attachments: [
         {
           id: "logo",
@@ -428,6 +423,124 @@ describe("ReadingPane", () => {
         html: "<p>Saved answer</p>",
         text: "Saved answer",
         attachments: [],
+      }),
+    );
+  });
+
+  it("answers the message a reply draft quotes instead of the newest one", async () => {
+    const thread = detail("Saved reply", "original-message");
+    const quotedBody = quotedDraftBody("Saved answer", thread.messages[0]!);
+    thread.messages.push(
+      {
+        ...thread.messages[0]!,
+        id: "later-message",
+        from: { email: "someone@example.com" },
+        date: "2026-07-18T12:00:00Z",
+      },
+      {
+        ...thread.messages[0]!,
+        id: "draft-message",
+        draftId: "draft-1",
+        from: { email: "me@example.com" },
+        to: [{ email: "sender@example.com" }],
+        body: quotedBody,
+        flags: { read: true, starred: false, draft: true },
+      },
+    );
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save: vi.fn(async () => ({ draftId: "draft-1", messageId: "draft-message" })),
+          delete: vi.fn(async () => undefined),
+          send,
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary({ draft: true, messageCount: 3 }));
+
+    expect(await screen.findByRole("region", { name: "Draft" })).toBeTruthy();
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toBe(
+      "Saved answer",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftId: "draft-1",
+        replyToMessageId: "original-message",
+        html: "<p>Saved answer</p>",
+      }),
+    );
+  });
+
+  it("keeps a quote it cannot attribute to a message in the conversation", async () => {
+    const thread = detail("Saved reply", "original-message");
+    const foreignQuote =
+      "<p>Saved answer</p><p>Le 16 juillet 2026, sender@example.com a ecrit:</p>" +
+      "<blockquote><p>Receipt</p></blockquote>";
+    thread.messages.push(
+      {
+        ...thread.messages[0]!,
+        id: "later-message",
+        from: { email: "someone@example.com" },
+        date: "2026-07-18T12:00:00Z",
+      },
+      {
+        ...thread.messages[0]!,
+        id: "draft-message",
+        draftId: "draft-1",
+        from: { email: "me@example.com" },
+        to: [{ email: "sender@example.com" }],
+        body: { html: foreignQuote, text: "Saved answer" },
+        flags: { read: true, starred: false, draft: true },
+      },
+    );
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save: vi.fn(async () => ({ draftId: "draft-1", messageId: "draft-message" })),
+          delete: vi.fn(async () => undefined),
+          send,
+        },
+        attachments: {
+          prepare: vi.fn(async () => []),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary({ draft: true, messageCount: 3 }));
+
+    expect(await screen.findByRole("region", { name: "Draft" })).toBeTruthy();
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toContain(
+      "Receipt",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftId: "draft-1",
+        replyToMessageId: "later-message",
+        html: foreignQuote,
       }),
     );
   });
@@ -1014,6 +1127,19 @@ function summary(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     labels: [],
     folderRoles: ["inbox"],
     ...overrides,
+  };
+}
+
+/** A saved reply body shaped like the one the send path writes back to the provider. */
+function quotedDraftBody(reply: string, quoted: MailMessage): { html: string; text: string } {
+  const citation = quotedReplyCitation(quoted);
+  return {
+    html:
+      `<p>${reply}</p><div class="gmail_quote gmail_quote_container">` +
+      `<div dir="ltr" class="gmail_attr">${citation}<br></div>` +
+      '<blockquote class="gmail_quote"><table><tr><td><b>Receipt</b></td></tr></table>' +
+      "</blockquote></div>",
+    text: `${reply}\n\n${citation}\n> Receipt`,
   };
 }
 

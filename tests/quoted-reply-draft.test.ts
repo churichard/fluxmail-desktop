@@ -4,10 +4,11 @@ import { describe, expect, it } from "vitest";
 import { buildQuotedReplyBody, containsQuotedReply } from "../src/main/quoted-reply";
 import {
   attachmentsWithoutQuotedInline,
+  quotedReplyTarget,
   replyWithoutQuotedHtml,
 } from "../src/renderer/email/quoted-reply";
 import { replyWithoutQuotedText } from "../src/shared/quoted-reply";
-import type { ComposeAttachment } from "../src/shared/contracts";
+import type { ComposeAttachment, MailMessage } from "../src/shared/contracts";
 
 const original: Message = {
   id: "original",
@@ -35,9 +36,9 @@ describe("reopening a saved reply", () => {
 
     expect(html.quoted).toBe(true);
     expect(html.html).toBe("<p>test</p>");
-    expect(replyWithoutQuotedText(draft.text!)).toBe("test");
+    expect(replyWithoutQuotedText(draft.text!)).toEqual({ text: "test", quoted: true });
     expect(
-      containsQuotedReply({ html: html.html, text: replyWithoutQuotedText(draft.text!) }),
+      containsQuotedReply({ html: html.html, text: replyWithoutQuotedText(draft.text!).text }),
     ).toBe(false);
   });
 
@@ -52,9 +53,10 @@ describe("reopening a saved reply", () => {
     const html = "<p>test</p><blockquote>Something <b>I</b> quoted myself</blockquote>";
 
     expect(replyWithoutQuotedHtml(html)).toEqual({ html, quoted: false });
-    expect(replyWithoutQuotedText("test\n\nSomething I quoted myself")).toBe(
-      "test\n\nSomething I quoted myself",
-    );
+    expect(replyWithoutQuotedText("test\n\nSomething I quoted myself")).toEqual({
+      text: "test\n\nSomething I quoted myself",
+      quoted: false,
+    });
   });
 
   it("removes an attribution line left in front of a bare quote", () => {
@@ -74,7 +76,7 @@ describe("reopening a saved reply", () => {
     expect(
       replyWithoutQuotedText(
         "test\nOn Mon, Aug 17, 2026 at 11:03 AM PayPal wrote:\nPayment details are inside.",
-      ),
+      ).text,
     ).toBe("test");
   });
 
@@ -95,10 +97,26 @@ describe("reopening a saved reply", () => {
   it("cuts plain-text replies at the quoted history", () => {
     const text = "test\n\nOn Mon, Aug 17, 2026 PayPal wrote:\n> Payment details are inside.\n>";
 
-    expect(replyWithoutQuotedText(text)).toBe("test");
-    expect(replyWithoutQuotedText("test\n\n----- Original Message -----\nPayment details")).toBe(
-      "test",
+    expect(replyWithoutQuotedText(text).text).toBe("test");
+    expect(
+      replyWithoutQuotedText("test\n\n----- Original Message -----\nPayment details").text,
+    ).toBe("test");
+  });
+
+  it("finds the message a draft quotes, ignoring newer replies", () => {
+    const newer: MailMessage = {
+      ...(original as unknown as MailMessage),
+      id: "newer",
+      from: { name: "Valve", email: "support@valve.test" },
+      date: "2026-08-18T09:00:00Z",
+    };
+    const draft = buildQuotedReplyBody({ html: "<p>test</p>", text: "test" }, original);
+
+    expect(quotedReplyTarget(draft, [newer, original as unknown as MailMessage])?.id).toBe(
+      "original",
     );
+    expect(quotedReplyTarget(draft, [newer])).toBeUndefined();
+    expect(quotedReplyTarget({ html: "<p>test</p>" }, [newer])).toBeUndefined();
   });
 
   it("drops inline attachments that only the quoted history referenced", () => {

@@ -60,13 +60,18 @@ export function quotedReplyCitation(original: Message): string {
 }
 
 /** Drops the quoted history from a plain-text reply, keeping only what the sender wrote. */
-export function replyWithoutQuotedText(text: string): string {
+export function replyWithoutQuotedText(text: string): { text: string; quoted: boolean } {
   const normalized = text.replace(/\r\n?/g, "\n");
   const start = QUOTED_TEXT_PATTERNS.reduce((earliest, pattern) => {
     const index = normalized.search(pattern);
     return index >= 0 && index < earliest ? index : earliest;
   }, normalized.length);
-  return normalized.slice(0, start).trimEnd();
+  return { text: normalized.slice(0, start).trimEnd(), quoted: start < normalized.length };
+}
+
+/** Normalizes the spacing that differs between a citation and its rendered markup. */
+export function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ");
 }
 
 /** True when text ends with the attribution line that introduces a quoted message. */

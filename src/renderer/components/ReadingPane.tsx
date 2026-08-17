@@ -59,6 +59,7 @@ import {
 } from "../mail-actions";
 import type { TrackingPixelDetail } from "../email/tracking-pixels";
 import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { quotedReplyTarget } from "../email/quoted-reply";
 import {
   hasUnsendableReplyRecipient,
   replyRecipients,
@@ -278,7 +279,10 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
           return;
         }
         if (thread.pendingSend) return;
-        const replyTarget = [...result.messages].reverse().find((message) => !message.flags.draft);
+        const answerable = [...result.messages].reverse().filter((message) => !message.flags.draft);
+        // A draft answers the message it quotes, even once newer replies have arrived.
+        const quotedTarget = quotedReplyTarget(draft.body, answerable);
+        const replyTarget = quotedTarget ?? answerable[0];
         const [initialAttachments, recipientFields] = await Promise.all([
           draft.attachments?.length
             ? window.fluxmail.attachments.prepare({
@@ -309,6 +313,7 @@ export const ReadingPane = forwardRef<ReadingPaneHandle, Props>(function Reading
           initialHtml: draft.body?.html,
           initialText: draft.body?.text,
           ...(replyTarget ? { threadId: thread.id, replyToMessageId: replyTarget.id } : {}),
+          ...(quotedTarget ? { quotedMessageId: quotedTarget.id } : {}),
           initialAttachments,
         });
       })

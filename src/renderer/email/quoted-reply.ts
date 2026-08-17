@@ -1,12 +1,14 @@
-import type { ComposeAttachment } from "../../shared/contracts";
+import type { ComposeAttachment, MailMessage } from "../../shared/contracts";
 import {
   BLOCK_TAGS,
+  collapseWhitespace,
   endsWithQuoteAttribution,
   HIDDEN_TAGS,
   isQuoteAttribution,
   normalizeContentId,
   QUOTED_REPLY_CLASSES,
   QUOTED_REPLY_IDS,
+  quotedReplyCitation,
   referencedInlineContentIds,
 } from "../../shared/quoted-reply";
 
@@ -24,6 +26,22 @@ export function replyWithoutQuotedHtml(html: string): { html: string; quoted: bo
   return { html: document.body.innerHTML, quoted: true };
 }
 
+/**
+ * The message a saved draft quotes, found by the citation the quote carries. A draft written by
+ * another client can cite the original in a form Fluxmail does not produce, which leaves the quote
+ * unattributed rather than attributed to the wrong message.
+ */
+export function quotedReplyTarget<T extends MailMessage>(
+  body: { html?: string; text?: string } | undefined,
+  candidates: T[],
+): T | undefined {
+  if (!body?.html && !body?.text) return undefined;
+  const quoted = collapseWhitespace(`${body.text ?? ""}\n${body.html ? plainText(body.html) : ""}`);
+  return candidates.find((candidate) =>
+    quoted.includes(collapseWhitespace(quotedReplyCitation(candidate))),
+  );
+}
+
 /** Drops inline attachments that only the removed quote referenced. */
 export function attachmentsWithoutQuotedInline(
   attachments: ComposeAttachment[],
@@ -36,6 +54,10 @@ export function attachmentsWithoutQuotedInline(
       !attachment.contentId ||
       referenced.has(normalizeContentId(attachment.contentId)),
   );
+}
+
+function plainText(html: string): string {
+  return new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
 }
 
 function findQuotedReplyMarker(root: HTMLElement): Element | undefined {
