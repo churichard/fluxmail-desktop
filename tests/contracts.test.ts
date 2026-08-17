@@ -253,4 +253,32 @@ describe("desktop contracts", () => {
       }).replyTo,
     ).toEqual([{ name: "Support", email: "support@example.com" }]);
   });
+
+  // PayPal sends receipts with a truncated Reply-To such as "Richard Chu <someone@gmail.c...>".
+  it("opens messages whose headers carry addresses that are not valid email", () => {
+    const message = messageSchema.parse({
+      id: "message-1",
+      threadId: "thread-1",
+      accountId: "account-1",
+      from: { name: "Sender", email: "sender@localhost" },
+      replyTo: [{ name: "Richard Chu", email: "someone@gmail.c..." }],
+      to: [{ email: "me@example.com" }],
+      subject: "Hello",
+      date: "2026-07-16T12:00:00Z",
+      flags: { read: true, starred: false, draft: false },
+    });
+    expect(message.replyTo).toEqual([{ name: "Richard Chu", email: "someone@gmail.c..." }]);
+    expect(message.from?.email).toBe("sender@localhost");
+  });
+
+  it("still rejects invalid recipients when composing", () => {
+    expect(() =>
+      composeInputSchema.parse({
+        accountId: "account-1",
+        to: [{ email: "noreply" }],
+        subject: "Hello",
+        text: "Hi",
+      }),
+    ).toThrow();
+  });
 });
