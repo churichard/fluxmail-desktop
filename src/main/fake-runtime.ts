@@ -23,6 +23,7 @@ import type {
   UndoSendDelaySeconds,
 } from "../shared/contracts";
 import type { DesktopAnalytics } from "./analytics";
+import { buildQuotedReplyBody } from "./quoted-reply";
 import {
   buildDemoMessages,
   DEMO_ACCOUNT_EMAIL,
@@ -468,9 +469,13 @@ export class FakeFluxmailRuntime {
       : undefined;
     const draftId = input.draftId ?? `test-draft-${this.messages.length + 1}`;
     const messageId = existing?.id ?? `test-draft-message-${this.messages.length + 1}`;
+    // Providers file a reply draft in the thread it answers.
+    const replyTarget = input.replyToMessageId
+      ? this.messages.find((message) => message.id === input.replyToMessageId)
+      : undefined;
     const draft: Message = {
       id: messageId,
-      threadId: existing?.threadId ?? messageId,
+      threadId: existing?.threadId ?? replyTarget?.threadId ?? messageId,
       accountId: account.id,
       draftId,
       folder: { id: "DRAFT", name: "Drafts", role: "drafts" },
@@ -506,7 +511,28 @@ export class FakeFluxmailRuntime {
     return this.draftRecipientValues.get(draftId);
   }
 
-  async send(input: ComposeInput): Promise<{ id: string; threadId: string }> {
+  /** Mirrors the real runtime, which appends the quoted original when a reply leaves the composer. */
+  private withQuotedReply<T extends ComposeInput>(input: T): T {
+    const original = input.replyToMessageId
+      ? this.messages.find((message) => message.id === input.replyToMessageId)
+      : undefined;
+    if (!original) return input;
+    const body = buildQuotedReplyBody(
+      {
+        ...(input.text === undefined ? {} : { text: input.text }),
+        ...(input.html === undefined ? {} : { html: input.html }),
+      },
+      original,
+    );
+    return {
+      ...input,
+      ...(body.text === undefined ? {} : { text: body.text }),
+      ...(body.html === undefined ? {} : { html: body.html }),
+    };
+  }
+
+  async send(rawInput: ComposeInput): Promise<{ id: string; threadId: string }> {
+    const input = this.withQuotedReply(rawInput);
     if (input.draftId) {
       this.cancelFakeSchedulesForDraft(input.draftId);
       this.messages = this.messages.filter((message) => message.draftId !== input.draftId);
@@ -531,8 +557,9 @@ export class FakeFluxmailRuntime {
   }
 
   async schedule(
-    input: ScheduledSendInput,
+    rawInput: ScheduledSendInput,
   ): Promise<{ scheduleId: string; draftId: string; sendAt: string }> {
+    const input = this.withQuotedReply(rawInput);
     const draft = await this.saveDraft(input);
     this.cancelFakeSchedulesForDraft(draft.draftId);
     const sendAt = fakeScheduledSendAt(input);

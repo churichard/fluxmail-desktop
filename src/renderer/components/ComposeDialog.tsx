@@ -20,8 +20,9 @@ import {
 import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEditor";
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
-import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { quotedReplyCitation, replyWithoutQuotedText } from "../../shared/quoted-reply";
 import { replyTargets } from "../../shared/reply-recipients";
+import { attachmentsWithoutQuotedInline, replyWithoutQuotedHtml } from "../email/quoted-reply";
 import { SendControls } from "./SendControls";
 
 export type ComposeDelivery =
@@ -39,6 +40,8 @@ export interface ComposeSeed {
   initialText?: string;
   threadId?: string;
   replyToMessageId?: string;
+  /** The message the saved draft already quotes, when it can be identified. */
+  quotedMessageId?: string;
   replyAll?: boolean;
   forwardMessageId?: string;
   initialAttachments?: ComposeAttachment[];
@@ -76,19 +79,27 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   },
   ref,
 ) {
-  const initialEditorHtml = seed.initialHtml ?? htmlFromText(seed.initialText ?? "");
+  const seededBody = useMemo(
+    () => composerBody(seed),
+    [
+      seed.initialAttachments,
+      seed.initialHtml,
+      seed.initialText,
+      seed.quotedMessageId,
+      seed.replyToMessageId,
+    ],
+  );
+  const initialEditorHtml = seededBody.html;
   const [accountId, setAccountId] = useState(seed.accountId);
   const [to, setTo] = useState(seed.to ?? "");
   const [cc, setCc] = useState(seed.cc ?? "");
   const [bcc, setBcc] = useState(seed.bcc ?? "");
   const [subject, setSubject] = useState(seed.subject ?? "");
   const [replyToMessageId, setReplyToMessageId] = useState(seed.replyToMessageId);
-  const [attachments, setAttachments] = useState<ComposeAttachment[]>(
-    seed.initialAttachments ?? [],
-  );
+  const [attachments, setAttachments] = useState<ComposeAttachment[]>(seededBody.attachments);
   const [draftId, setDraftId] = useState(seed.draftId);
   const [html, setHtml] = useState(initialEditorHtml);
-  const [text, setText] = useState(() => seed.initialText ?? textFromHtml(seed.initialHtml));
+  const [text, setText] = useState(seededBody.text);
   const [showCc, setShowCc] = useState(Boolean(seed.cc));
   const [showBcc, setShowBcc] = useState(Boolean(seed.bcc));
   const [recipientsCollapsed, setRecipientsCollapsed] = useState(Boolean(seed.to));
@@ -756,6 +767,38 @@ function splitAddressEntries(value: string): string[] {
   }
   entries.push(current);
   return entries;
+}
+
+/**
+ * Seeds the editor with the reply itself. A saved reply carries the quoted message, and the
+ * editor cannot round-trip the original markup, so the quote is left out here and appended again
+ * from the original message when the reply is sent. That only reproduces the draft when the quote
+ * belongs to the message this reply answers, so any other quote stays in the body.
+ */
+function composerBody(seed: ComposeSeed): {
+  html: string;
+  text: string;
+  attachments: ComposeAttachment[];
+} {
+  const attachments = seed.initialAttachments ?? [];
+  const saved = {
+    html: seed.initialHtml ?? htmlFromText(seed.initialText ?? ""),
+    text: seed.initialText ?? textFromHtml(seed.initialHtml),
+    attachments,
+  };
+  if (!seed.replyToMessageId) return saved;
+  const replyHtml = seed.initialHtml ? replyWithoutQuotedHtml(seed.initialHtml) : undefined;
+  const replyText =
+    seed.initialText === undefined ? undefined : replyWithoutQuotedText(seed.initialText);
+  const quoted = Boolean(replyHtml?.quoted || replyText?.quoted);
+  if (quoted && seed.quotedMessageId !== seed.replyToMessageId) return saved;
+  const text = replyText ? replyText.text : textFromHtml(replyHtml?.html);
+  const html = replyHtml?.html ?? htmlFromText(text);
+  return {
+    html,
+    text,
+    attachments: quoted ? attachmentsWithoutQuotedInline(attachments, html) : attachments,
+  };
 }
 
 function textFromHtml(value?: string): string {
