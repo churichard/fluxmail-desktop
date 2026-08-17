@@ -20,7 +20,8 @@ import {
 import { MailEditorContent, MailEditorToolbar, useMailEditor } from "./MailEditor";
 import { EmailHtml } from "./EmailHtml";
 import { IconButton } from "./Controls";
-import { quotedReplyCitation } from "../../shared/quoted-reply";
+import { quotedReplyCitation, replyWithoutQuotedText } from "../../shared/quoted-reply";
+import { attachmentsWithoutQuotedInline, replyWithoutQuotedHtml } from "../email/quoted-reply";
 import { SendControls } from "./SendControls";
 
 export type ComposeDelivery =
@@ -75,19 +76,21 @@ export const ComposeDialog = forwardRef<ComposeDialogHandle, Props>(function Com
   },
   ref,
 ) {
-  const initialEditorHtml = seed.initialHtml ?? htmlFromText(seed.initialText ?? "");
+  const seededBody = useMemo(
+    () => composerBody(seed),
+    [seed.initialAttachments, seed.initialHtml, seed.initialText, seed.replyToMessageId],
+  );
+  const initialEditorHtml = seededBody.html;
   const [accountId, setAccountId] = useState(seed.accountId);
   const [to, setTo] = useState(seed.to ?? "");
   const [cc, setCc] = useState(seed.cc ?? "");
   const [bcc, setBcc] = useState(seed.bcc ?? "");
   const [subject, setSubject] = useState(seed.subject ?? "");
   const [replyToMessageId, setReplyToMessageId] = useState(seed.replyToMessageId);
-  const [attachments, setAttachments] = useState<ComposeAttachment[]>(
-    seed.initialAttachments ?? [],
-  );
+  const [attachments, setAttachments] = useState<ComposeAttachment[]>(seededBody.attachments);
   const [draftId, setDraftId] = useState(seed.draftId);
   const [html, setHtml] = useState(initialEditorHtml);
-  const [text, setText] = useState(() => seed.initialText ?? textFromHtml(seed.initialHtml));
+  const [text, setText] = useState(seededBody.text);
   const [showCc, setShowCc] = useState(Boolean(seed.cc));
   const [showBcc, setShowBcc] = useState(Boolean(seed.bcc));
   const [recipientsCollapsed, setRecipientsCollapsed] = useState(Boolean(seed.to));
@@ -755,6 +758,37 @@ function splitAddressEntries(value: string): string[] {
   }
   entries.push(current);
   return entries;
+}
+
+/**
+ * Seeds the editor with the reply itself. A saved reply carries the quoted message, and the
+ * editor cannot round-trip the original markup, so the quote is left out here and appended again
+ * from the original message when the reply is sent.
+ */
+function composerBody(seed: ComposeSeed): {
+  html: string;
+  text: string;
+  attachments: ComposeAttachment[];
+} {
+  const attachments = seed.initialAttachments ?? [];
+  if (!seed.replyToMessageId) {
+    return {
+      html: seed.initialHtml ?? htmlFromText(seed.initialText ?? ""),
+      text: seed.initialText ?? textFromHtml(seed.initialHtml),
+      attachments,
+    };
+  }
+  const reply = seed.initialHtml ? replyWithoutQuotedHtml(seed.initialHtml) : undefined;
+  const text =
+    seed.initialText === undefined
+      ? textFromHtml(reply?.html)
+      : replyWithoutQuotedText(seed.initialText);
+  const html = reply?.html ?? htmlFromText(text);
+  return {
+    html,
+    text,
+    attachments: reply?.quoted ? attachmentsWithoutQuotedInline(attachments, html) : attachments,
+  };
 }
 
 function textFromHtml(value?: string): string {

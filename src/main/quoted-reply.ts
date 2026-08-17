@@ -1,50 +1,17 @@
 import type { Message, MessageBody } from "@fluxmail/core";
 import { parseFragment, type DefaultTreeAdapterTypes } from "parse5";
-import { quotedReplyCitation } from "../shared/quoted-reply";
+import {
+  BLOCK_TAGS,
+  HIDDEN_TAGS,
+  QUOTED_REPLY_CLASSES,
+  QUOTED_REPLY_IDS,
+  quotedReplyCitation,
+} from "../shared/quoted-reply";
+
+export { normalizeContentId, referencedInlineContentIds } from "../shared/quoted-reply";
 
 const INLINE_BLOCKQUOTE_STYLE =
   "margin:0.5rem 0 0.5rem 0.25rem;border-left:0.125rem solid #d1d5db;padding-left:0.75rem;background:transparent;color:inherit;";
-const BLOCK_TAGS = new Set([
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "caption",
-  "dd",
-  "div",
-  "dl",
-  "dt",
-  "figcaption",
-  "figure",
-  "footer",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "pre",
-  "section",
-  "table",
-  "tr",
-  "ul",
-]);
-const HIDDEN_TAGS = new Set(["head", "script", "style", "template"]);
-const QUOTED_REPLY_CLASSES = new Set([
-  "gmail_quote",
-  "gmail_quote_container",
-  "moz-cite-prefix",
-  "protonmail_quote",
-  "yahoo_quoted",
-]);
-const QUOTED_REPLY_IDS = new Set(["divrplyfwdmsg"]);
 
 export function buildQuotedReplyBody(reply: MessageBody, original: Message): MessageBody {
   if (containsQuotedReply(reply)) return { ...reply };
@@ -75,24 +42,6 @@ export function containsQuotedReply(body: MessageBody): boolean {
     (body.html && htmlContainsQuotedReply(body.html)) ||
     (body.text && plainTextContainsQuotedReply(body.text)),
   );
-}
-
-export function referencedInlineContentIds(html: string | undefined): Set<string> {
-  const contentIds = new Set<string>();
-  for (const match of html?.matchAll(/\bcid:([^"'()\s<>]+)/gi) ?? []) {
-    let value = match[1];
-    try {
-      value = decodeURIComponent(value);
-    } catch {
-      // Keep malformed percent escapes as-is so they can still match provider metadata.
-    }
-    contentIds.add(normalizeContentId(value));
-  }
-  return contentIds;
-}
-
-export function normalizeContentId(value: string): string {
-  return value.replace(/^<|>$/g, "").toLowerCase();
 }
 
 function htmlToPlainText(html: string): string {

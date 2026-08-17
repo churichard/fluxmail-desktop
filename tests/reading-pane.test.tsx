@@ -350,6 +350,84 @@ describe("ReadingPane", () => {
     expect(onDraftFinished).toHaveBeenCalledOnce();
   });
 
+  it("leaves the quoted message out of a reply draft reopened after undo", async () => {
+    const thread = detail("Saved reply", "original-message");
+    thread.messages.push({
+      ...thread.messages[0]!,
+      id: "draft-message",
+      draftId: "draft-1",
+      from: { email: "me@example.com" },
+      to: [{ email: "sender@example.com" }],
+      body: {
+        html:
+          '<p>Saved answer</p><div class="gmail_quote gmail_quote_container">' +
+          '<div dir="ltr" class="gmail_attr">On Thu, Jul 16, 2026 sender@example.com wrote:<br></div>' +
+          '<blockquote class="gmail_quote"><table><tr><td><b>Receipt</b></td></tr></table>' +
+          "</blockquote></div>",
+        text: "Saved answer\n\nOn Thu, Jul 16, 2026 sender@example.com wrote:\n> Receipt",
+      },
+      attachments: [
+        {
+          id: "logo",
+          filename: "logo.png",
+          mimeType: "image/png",
+          sizeBytes: 10,
+          contentId: "<logo@example.com>",
+          disposition: "inline",
+        },
+      ],
+      flags: { read: true, starred: false, draft: true },
+    });
+    const send = vi.fn(async () => ({ id: "sent-message", threadId: "thread-1" }));
+    Object.defineProperty(window, "fluxmail", {
+      configurable: true,
+      value: {
+        mail: { getThread: vi.fn(async () => thread) },
+        drafts: {
+          recipientFields: vi.fn(async () => undefined),
+          save: vi.fn(async () => ({ draftId: "draft-1", messageId: "draft-message" })),
+          delete: vi.fn(async () => undefined),
+          send,
+        },
+        attachments: {
+          prepare: vi.fn(async () => [
+            {
+              token: "logo-token",
+              filename: "logo.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+              contentId: "<logo@example.com>",
+              disposition: "inline",
+            },
+          ]),
+          release: vi.fn(async () => undefined),
+          pick: vi.fn(async () => []),
+        },
+        analytics: { trackFeature: vi.fn(async () => undefined) },
+      } as unknown as FluxmailDesktopApi,
+    });
+    renderPane(summary({ draft: true, messageCount: 2 }));
+
+    expect(await screen.findByRole("region", { name: "Draft" })).toBeTruthy();
+    expect(document.querySelector(".inline-draft-composer .tiptap")?.textContent).toBe(
+      "Saved answer",
+    );
+    expect(screen.queryByText("logo.png")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftId: "draft-1",
+        replyToMessageId: "original-message",
+        html: "<p>Saved answer</p>",
+        text: "Saved answer",
+        attachments: [],
+      }),
+    );
+  });
+
   it("opens the scheduled draft selected within a shared conversation", async () => {
     const thread = detail("Original subject", "original-message");
     thread.messages.push(
