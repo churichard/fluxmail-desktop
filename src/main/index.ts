@@ -222,7 +222,9 @@ async function createServices(): Promise<void> {
     sendEvent({ type: "cache-changed" });
     updateDockBadge();
   };
-  const onLicenseChanged = () => sendEvent({ type: "license-changed" });
+  const onLicenseChanged = () => {
+    void disableImageRelayIfUnavailable().finally(() => sendEvent({ type: "license-changed" }));
+  };
   runtime =
     !app.isPackaged && process.env.FLUXMAIL_DESKTOP_FAKE_MAIL === "1"
       ? new FakeFluxmailRuntime({ analytics, onCacheChanged, onLicenseChanged })
@@ -387,6 +389,7 @@ function registerAppProtocol(): void {
 function registerIpc(): void {
   handle(IPC.bootstrap, z.undefined(), bootstrapSchema, async () => {
     if (startupError) throw startupError;
+    await disableImageRelayIfUnavailable();
     const bootstrap = await requireRuntime().bootstrap(syncState);
     return {
       ...bootstrap,
@@ -544,9 +547,12 @@ function registerIpc(): void {
   handle(IPC.licenseActivate, licenseKeySchema, licenseActivationResultSchema, (key) =>
     requireRuntime().activateLicense(key),
   );
-  handle(IPC.preferencesImageRelaySet, z.boolean(), z.boolean(), (enabled) =>
-    requirePreferences().setImageRelay(enabled),
-  );
+  handle(IPC.preferencesImageRelaySet, z.boolean(), z.boolean(), async (enabled) => {
+    if (enabled && !requireRuntime().license().canUsePrivateImageRelay) {
+      throw new Error("Private image relay is available on Pro, Team, and Enterprise.");
+    }
+    return requirePreferences().setImageRelay(enabled);
+  });
   handle(
     IPC.preferencesUndoSendDelaySet,
     undoSendDelaySecondsSchema,
@@ -972,6 +978,17 @@ function requireAnalytics(): DesktopAnalytics {
 function requirePreferences(): DesktopPreferences {
   if (!preferences) throw new Error("Fluxmail preferences are not ready.");
   return preferences;
+}
+
+async function disableImageRelayIfUnavailable(): Promise<void> {
+  try {
+    if (!runtime || !preferences) return;
+    if (!runtime.license().canUsePrivateImageRelay && preferences.imageRelay()) {
+      await preferences.setImageRelay(false);
+    }
+  } catch {
+    // Leave the saved preference untouched when the license state is unknown.
+  }
 }
 
 function requireImageRelay(): HostedImageRelay {

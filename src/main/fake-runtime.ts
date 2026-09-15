@@ -157,6 +157,9 @@ export class FakeFluxmailRuntime {
   ) {}
 
   async initialize(): Promise<void> {}
+  license(): BootstrapState["license"] {
+    return this.licenseValue;
+  }
   async shutdown(): Promise<void> {
     for (const item of this.scheduled.values()) clearTimeout(item.timer);
     this.scheduled.clear();
