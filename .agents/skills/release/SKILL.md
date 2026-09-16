@@ -102,7 +102,7 @@ Accept one of three modes:
 - With the complete signing group only, require the persistent self-signed Fluxmail identity, no hardened runtime, and no notarization.
 - With both complete groups, require Developer ID signing, hardened runtime, and notarization.
 
-Stop if either group is partial or the notarization group is present without the signing group. Never create a new self-signed identity during a release. Reuse the encrypted P12 so each version keeps the same certificate and designated requirement. Confirm that a private backup exists outside GitHub; repository secrets cannot be downloaded later.
+Stop if either group is partial or the notarization group is present without the signing group. Never create a new self-signed identity during a release. Reuse the encrypted P12 so each version keeps the same certificate and designated requirement. The maintainer confirmed on 2026-09-16 that a private backup of the current P12 and its password exists outside GitHub. Do not ask for this confirmation again during routine releases. If the signing identity or P12 secrets are replaced, confirm that the replacement has a private backup before releasing because repository secrets cannot be downloaded later.
 
 Do not describe fallback builds as unsigned. For ad hoc signing in `forge.config.ts`, use an explicit identity and disable hardened runtime and timestamping for every signed file:
 

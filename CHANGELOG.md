@@ -2,7 +2,17 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.1...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.2...HEAD)
+
+## [0.4.2](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.2) - 2026-09-16
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Fixed
+
+- Open messages even when a sender includes a malformed header address, and show invalid reply recipients so they can be corrected before sending ([#57](https://github.com/churichard/fluxmail-desktop/pull/57))
+- Preserve original message formatting when reopening an undone reply, and keep the reply linked to the message it answers ([#58](https://github.com/churichard/fluxmail-desktop/pull/58))
+- Turn off private image relay when the active license no longer includes it ([#59](https://github.com/churichard/fluxmail-desktop/pull/59))
 
 ## [0.4.1](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.1) - 2026-08-04
 
