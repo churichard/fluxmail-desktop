@@ -2868,12 +2868,12 @@ describe("FluxmailRuntime OAuth configuration", () => {
 });
 
 describe("FluxmailRuntime store compatibility", () => {
-  it("accepts a store that has already been upgraded to format 2", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "fluxmail-format-two-"));
+  it("accepts a store that has already been upgraded to format 3", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "fluxmail-format-three-"));
     directories.push(directory);
     const dbPath = path.join(directory, "fluxmail.db");
     const sqlite = new Database(dbPath);
-    sqlite.pragma("user_version = 2");
+    sqlite.pragma("user_version = 3");
     sqlite.close();
 
     const fluxmail = {
@@ -2882,7 +2882,7 @@ describe("FluxmailRuntime store compatibility", () => {
       IncompatibleStoreError,
     };
 
-    expect(MAX_SUPPORTED_STORE_FORMAT).toBeGreaterThanOrEqual(2);
+    expect(MAX_SUPPORTED_STORE_FORMAT).toBeGreaterThanOrEqual(3);
     expect(prepareFluxmailConfiguration(fluxmail, "", "")).toBe(false);
   });
 
