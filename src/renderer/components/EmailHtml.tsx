@@ -8,6 +8,7 @@ import { collectRemoteImageUrls, rewriteRemoteImageUrls } from "../email/remote-
 import { blockTrackingPixels, type TrackingPixelDetail } from "../email/tracking-pixels";
 
 const EMPTY_IMAGE_URLS: Record<string, string> = {};
+const EMAIL_SOURCE_ATTRIBUTE = "data-fluxmail-source";
 
 export function EmailHtml({
   message,
@@ -45,10 +46,9 @@ export function EmailHtml({
   const [height, setHeight] = useState(120);
   const [frameVersion, setFrameVersion] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
-  const clickCleanupRef = useRef<(() => void) | undefined>(undefined);
-  const frameResizeObserverRef = useRef<ResizeObserver | undefined>(undefined);
-  const layoutCleanupRef = useRef<(() => void) | undefined>(undefined);
+  const attachedDocumentRef = useRef<Document | undefined>(undefined);
+  const scheduleResizeRef = useRef<(() => void) | undefined>(undefined);
+  const frameCleanupRef = useRef<(() => void) | undefined>(undefined);
   const darkMode = useResolvedDarkTheme();
   const rawHtml = message.body?.html || textToHtml(message.body?.text || "");
   const policyKey = remoteImagePolicyKey(
@@ -59,8 +59,10 @@ export function EmailHtml({
   );
   const currentPolicyKeyRef = useRef(policyKey);
   const onFindMatchCountChangeRef = useRef(onFindMatchCountChange);
+  const onErrorRef = useRef(onError);
   currentPolicyKeyRef.current = policyKey;
   onFindMatchCountChangeRef.current = onFindMatchCountChange;
+  onErrorRef.current = onError;
   const currentRemoteImages =
     remoteImages.policyKey === policyKey
       ? remoteImages
@@ -74,15 +76,91 @@ export function EmailHtml({
   const relayUrls = currentRemoteImages.relayUrls;
   const cidUrls = inlineImages.messageId === message.id ? inlineImages.urls : EMPTY_IMAGE_URLS;
 
-  useEffect(
-    () => () => {
-      resizeObserverRef.current?.disconnect();
-      frameResizeObserverRef.current?.disconnect();
-      clickCleanupRef.current?.();
-      layoutCleanupRef.current?.();
-    },
-    [],
-  );
+  useEffect(() => () => frameCleanupRef.current?.(), []);
+
+  const attachFrame = useCallback((document: Document) => {
+    const frame = iframeRef.current;
+    if (!frame) return;
+    if (attachedDocumentRef.current === document) {
+      scheduleResizeRef.current?.();
+      return;
+    }
+    frameCleanupRef.current?.();
+    attachedDocumentRef.current = document;
+    setFrameVersion((current) => current + 1);
+    const resize = () => {
+      const scale = applyContentScaling(document, frame.clientWidth);
+      const root = document.getElementById("email-root");
+      const contentHeight = root
+        ? Math.max(root.scrollHeight, root.offsetHeight) * scale
+        : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+      const nextHeight = Math.max(80, Math.ceil(contentHeight));
+      setHeight((current) => (current === nextHeight ? current : nextHeight));
+    };
+    resize();
+    const view = document.defaultView;
+    let active = true;
+    let resizeFrame = 0;
+    const scheduleResize = () => {
+      if (!active || !view || resizeFrame) return;
+      resizeFrame = view.requestAnimationFrame(() => {
+        resizeFrame = 0;
+        resize();
+      });
+    };
+    scheduleResizeRef.current = scheduleResize;
+    const observer = new ResizeObserver(scheduleResize);
+    observer.observe(document.body);
+    observer.observe(document.documentElement);
+    const root = document.getElementById("email-root");
+    if (root) observer.observe(root);
+    const frameObserver = new ResizeObserver(scheduleResize);
+    frameObserver.observe(frame);
+    document.addEventListener("load", scheduleResize, true);
+    void document.fonts?.ready.then(scheduleResize);
+    const forwardKeyboard = (event: KeyboardEvent) => {
+      const forwarded = new KeyboardEvent(event.type, {
+        key: event.key,
+        code: event.code,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(forwarded);
+      if (forwarded.defaultPrevented) event.preventDefault();
+    };
+    const forwardPointer = () => window.dispatchEvent(new CustomEvent("iframe-pointerdown"));
+    document.addEventListener("keydown", forwardKeyboard);
+    document.addEventListener("pointerdown", forwardPointer);
+    const openLink = (event: MouseEvent) => {
+      const link = (event.target as Element | null)?.closest("a");
+      if (!link) return;
+      event.preventDefault();
+      const href = link.getAttribute("href");
+      if (href)
+        void window.fluxmail.system
+          .openExternal(href)
+          .catch((error) =>
+            onErrorRef.current?.(
+              error instanceof Error ? error.message : "Fluxmail could not open this link.",
+            ),
+          );
+    };
+    document.addEventListener("click", openLink);
+    frameCleanupRef.current = () => {
+      active = false;
+      if (view && resizeFrame) view.cancelAnimationFrame(resizeFrame);
+      observer.disconnect();
+      frameObserver.disconnect();
+      document.removeEventListener("load", scheduleResize, true);
+      document.removeEventListener("keydown", forwardKeyboard);
+      document.removeEventListener("pointerdown", forwardPointer);
+      document.removeEventListener("click", openLink);
+    };
+  }, []);
 
   useEffect(() => {
     const inline = (message.attachments ?? []).filter((attachment) => attachment.contentId);
@@ -124,14 +202,22 @@ export function EmailHtml({
     }
     const urls = collectRemoteImageUrls(rawHtml);
     if (!urls.length) {
-      setRemoteImages({ policyKey: requestPolicyKey, status: "loaded", relayUrls: {} });
+      setRemoteImages({
+        policyKey: requestPolicyKey,
+        status: "loaded",
+        relayUrls: {},
+      });
       return;
     }
     setRemoteImages({ policyKey: requestPolicyKey, status: "loading" });
     try {
       const proxied = await proxyRemoteImageUrls(urls);
       if (currentPolicyKeyRef.current !== requestPolicyKey) return;
-      setRemoteImages({ policyKey: requestPolicyKey, status: "loaded", relayUrls: proxied });
+      setRemoteImages({
+        policyKey: requestPolicyKey,
+        status: "loaded",
+        relayUrls: proxied,
+      });
     } catch (error) {
       if (currentPolicyKeyRef.current !== requestPolicyKey) return;
       setRemoteImages({ policyKey: requestPolicyKey, status: "blocked" });
@@ -169,6 +255,31 @@ export function EmailHtml({
     () => onTrackingPixelsChange?.(rendered.trackingPixels),
     [onTrackingPixelsChange, rendered.trackingPixels],
   );
+
+  // The frame's load event waits for every remote image, so one slow image server would leave
+  // the frame at its initial height. Start sizing as soon as the new document has been parsed.
+  useEffect(() => {
+    const frame = iframeRef.current;
+    if (!frame) return;
+    const staleDocument = attachedDocumentRef.current;
+    let pollFrame = 0;
+    const poll = () => {
+      const document = frame.contentDocument;
+      if (
+        document &&
+        document !== staleDocument &&
+        document.readyState !== "loading" &&
+        document.getElementById("email-root")?.getAttribute(EMAIL_SOURCE_ATTRIBUTE) ===
+          rendered.sourceId
+      ) {
+        attachFrame(document);
+        return;
+      }
+      pollFrame = window.requestAnimationFrame(poll);
+    };
+    poll();
+    return () => window.cancelAnimationFrame(pollFrame);
+  }, [attachFrame, rendered.sourceId]);
 
   useEffect(() => {
     const document = iframeRef.current?.contentDocument;
@@ -217,87 +328,8 @@ export function EmailHtml({
         srcDoc={rendered.source}
         style={{ height }}
         onLoad={() => {
-          setFrameVersion((current) => current + 1);
-          resizeObserverRef.current?.disconnect();
-          frameResizeObserverRef.current?.disconnect();
-          clickCleanupRef.current?.();
-          layoutCleanupRef.current?.();
-          const frame = iframeRef.current;
-          const document = frame?.contentDocument;
-          if (!document) return;
-          const resize = () => {
-            const scale = applyContentScaling(document, frame?.clientWidth ?? 0);
-            const root = document.getElementById("email-root");
-            const contentHeight = root
-              ? Math.max(root.scrollHeight, root.offsetHeight) * scale
-              : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-            const nextHeight = Math.max(80, Math.ceil(contentHeight));
-            setHeight((current) => (current === nextHeight ? current : nextHeight));
-          };
-          resize();
-          const view = document.defaultView;
-          let active = true;
-          let resizeFrame = 0;
-          const scheduleResize = () => {
-            if (!active || !view || resizeFrame) return;
-            resizeFrame = view.requestAnimationFrame(() => {
-              resizeFrame = 0;
-              resize();
-            });
-          };
-          const observer = new ResizeObserver(scheduleResize);
-          observer.observe(document.body);
-          observer.observe(document.documentElement);
-          const root = document.getElementById("email-root");
-          if (root) observer.observe(root);
-          resizeObserverRef.current = observer;
-          const frameObserver = new ResizeObserver(scheduleResize);
-          frameObserver.observe(frame);
-          frameResizeObserverRef.current = frameObserver;
-          document.addEventListener("load", scheduleResize, true);
-          void document.fonts?.ready.then(scheduleResize);
-          layoutCleanupRef.current = () => {
-            active = false;
-            document.removeEventListener("load", scheduleResize, true);
-            if (view && resizeFrame) view.cancelAnimationFrame(resizeFrame);
-          };
-          const forwardKeyboard = (event: KeyboardEvent) => {
-            const forwarded = new KeyboardEvent(event.type, {
-              key: event.key,
-              code: event.code,
-              altKey: event.altKey,
-              ctrlKey: event.ctrlKey,
-              metaKey: event.metaKey,
-              shiftKey: event.shiftKey,
-              bubbles: true,
-              cancelable: true,
-            });
-            window.dispatchEvent(forwarded);
-            if (forwarded.defaultPrevented) event.preventDefault();
-          };
-          const forwardPointer = () => window.dispatchEvent(new CustomEvent("iframe-pointerdown"));
-          document.addEventListener("keydown", forwardKeyboard);
-          document.addEventListener("pointerdown", forwardPointer);
-          const openLink = (event: MouseEvent) => {
-            const link = (event.target as Element | null)?.closest("a");
-            if (!link) return;
-            event.preventDefault();
-            const href = link.getAttribute("href");
-            if (href)
-              void window.fluxmail.system
-                .openExternal(href)
-                .catch((error) =>
-                  onError?.(
-                    error instanceof Error ? error.message : "Fluxmail could not open this link.",
-                  ),
-                );
-          };
-          document.addEventListener("click", openLink);
-          clickCleanupRef.current = () => {
-            document.removeEventListener("click", openLink);
-            document.removeEventListener("keydown", forwardKeyboard);
-            document.removeEventListener("pointerdown", forwardPointer);
-          };
+          const document = iframeRef.current?.contentDocument;
+          if (document) attachFrame(document);
         }}
       />
     </div>
@@ -320,7 +352,7 @@ function buildEmailContent(
   loadImages: boolean,
   darkMode = false,
   relayUrls?: Record<string, string>,
-): { source: string; trackingPixels: TrackingPixelDetail[] } {
+): { source: string; sourceId: string; trackingPixels: TrackingPixelDetail[] } {
   const clean = sanitizeEmailHtml(rawHtml);
   const themedHtml = darkMode
     ? convertEmailToDarkMode(clean, {
@@ -380,10 +412,25 @@ function buildEmailContent(
   const senderStyles = [...document.head.querySelectorAll("style")]
     .map((style) => style.outerHTML)
     .join("");
+  const head = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}mark[data-fluxmail-find-match]{border-radius:2px;padding:0;background:#f9d65c;color:#191919;box-shadow:0 0 0 1px rgb(132 91 0 / .16)}mark[data-fluxmail-find-match].active{background:#f39a3b;box-shadow:0 0 0 2px rgb(181 90 0 / .4)}</style>${senderStyles}</head>`;
+  const body = document.body.innerHTML;
+  // Tag the root with a hash of the content so the component can tell this document apart from
+  // the one it replaces while the frame is still navigating.
+  const sourceId = hashString(`${head}\u0000${body}`);
   return {
-    source: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${darkMode ? "dark" : "light"}"><style>html,body{width:100%;min-width:0;height:auto!important;margin:0!important;padding:0!important;background:${palette.background};color:${palette.color};font:14px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden!important;overflow-wrap:anywhere;box-sizing:border-box}#email-root{display:flow-root;width:100%;min-width:0;max-width:100%;box-sizing:border-box;transform-origin:top left;overflow-wrap:anywhere}#email-root>:first-child{margin-block-start:0!important}#email-root>:last-child{margin-block-end:0!important}a{color:${palette.link};cursor:pointer;overflow-wrap:anywhere;word-break:break-word}table{max-width:100%;overflow-wrap:break-word}td{overflow-wrap:break-word}img{border:0;max-width:100%!important;height:auto!important;object-fit:contain!important}blockquote{border-left:2px solid ${palette.quote};margin-left:4px;padding-left:12px;color:${palette.muted}}pre,pre code{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}mark[data-fluxmail-find-match]{border-radius:2px;padding:0;background:#f9d65c;color:#191919;box-shadow:0 0 0 1px rgb(132 91 0 / .16)}mark[data-fluxmail-find-match].active{background:#f39a3b;box-shadow:0 0 0 2px rgb(181 90 0 / .4)}</style>${senderStyles}</head><body><div id="email-root">${document.body.innerHTML}</div></body></html>`,
+    source: `${head}<body><div id="email-root" ${EMAIL_SOURCE_ATTRIBUTE}="${sourceId}">${body}</div></body></html>`,
+    sourceId,
     trackingPixels: trackingReport.trackingPixels,
   };
+}
+
+function hashString(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 const FIND_MATCH_ATTRIBUTE = "data-fluxmail-find-match";
@@ -585,7 +632,10 @@ function isVisibleFindText(node: Text, root: Element): boolean {
   const parent = node.parentElement;
   if (parent && typeof parent.checkVisibility === "function") {
     try {
-      return parent.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      return parent.checkVisibility({
+        checkOpacity: true,
+        checkVisibilityCSS: true,
+      });
     } catch {
       // Older Chromium versions may expose checkVisibility without supporting its options.
       return parent.checkVisibility();

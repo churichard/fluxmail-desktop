@@ -690,6 +690,9 @@ test("uses the desktop bridge for the inbox, secure reading, search, compose, an
     });
     await expect(loadImagesButton).toHaveCSS("border-top-width", "0px");
     await expect(loadImagesButton).toHaveCSS("border-bottom-width", "0px");
+    // Leave the image request pending so the frame's load event never fires. Sizing and find must
+    // still attach to the new document.
+    await electronApp.context().route("https://images.invalid/**", () => {});
     await loadImagesButton.click();
     await expect(page.getByRole("button", { name: "Load remote images" })).toHaveCount(0);
     await expect(messageFrame.locator('img[src="https://images.invalid/welcome.png"]')).toHaveCount(
