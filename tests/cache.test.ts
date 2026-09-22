@@ -961,6 +961,45 @@ describe("MailCache", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not notify for older messages sliding into view after archiving", () => {
+    const cache = createCache();
+    const newest = message({
+      id: "newest",
+      threadId: "thread-newest",
+      date: "2026-07-15T12:00:00Z",
+    });
+    const middle = message({
+      id: "middle",
+      threadId: "thread-middle",
+      date: "2026-07-15T11:00:00Z",
+    });
+    const older = message({
+      id: "older",
+      threadId: "thread-older",
+      date: "2026-07-15T09:00:00Z",
+    });
+    const brandNew = message({
+      id: "brand-new",
+      threadId: "thread-brand-new",
+      date: "2026-07-15T13:00:00Z",
+    });
+
+    // Initial page establishes the watermark; nothing notifies.
+    expect(cache.recordInboxPage(primary.id, [newest, middle]).newMessages).toEqual([]);
+    // Archiving `newest` pulls `older` (previously paged out) into the first
+    // page. It was never seen, but its date predates the watermark.
+    expect(
+      cache.recordInboxPage(primary.id, [middle, older]).newMessages.map((item) => item.id),
+    ).toEqual([]);
+    // A genuinely new message still notifies.
+    expect(
+      cache
+        .recordInboxPage(primary.id, [brandNew, middle, older])
+        .newMessages.map((item) => item.id),
+    ).toEqual(["brand-new"]);
+    cache.close();
+  });
 });
 
 function createCache(): MailCache {
