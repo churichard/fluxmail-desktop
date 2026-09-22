@@ -176,6 +176,16 @@ export class MailCache {
         "ALTER TABLE draft_recipient_fields ADD COLUMN provider_recipients_json TEXT NOT NULL DEFAULT ''",
       );
     }
+    const notificationStateColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(notification_state)").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name),
+    );
+    if (!notificationStateColumns.has("max_date")) {
+      this.db.exec("ALTER TABLE notification_state ADD COLUMN max_date TEXT");
+    }
     const storedVersion = Number(
       (
         this.db.prepare("SELECT value FROM cache_meta WHERE key = 'schema_version'").get() as
@@ -1055,31 +1065,87 @@ export class MailCache {
     accountId: string,
     messages: Message[],
   ): { initialized: boolean; newMessages: Message[] } {
-    const initialized = Boolean(
-      this.db.prepare("SELECT 1 FROM notification_state WHERE account_id = ?").get(accountId),
-    );
+    const state = this.db
+      .prepare("SELECT initialized_at, max_date FROM notification_state WHERE account_id = ?")
+      .get(accountId) as { initialized_at: number; max_date: string | null } | undefined;
+    const initialized = Boolean(state);
     const incoming = messages.filter(
       (message) => message.folder?.role === "inbox" && !message.flags.draft,
     );
-    const unseen = initialized
-      ? incoming.filter(
-          (message) =>
-            !this.db
-              .prepare("SELECT 1 FROM notification_seen WHERE account_id = ? AND message_id = ?")
-              .get(accountId, message.id),
-        )
-      : [];
+    let unseen: Message[] = [];
+    let watermarkTime: number | undefined;
+    let watermarkDate: string | undefined;
+    if (initialized) {
+      // Watermark against the newest previously seen message so paged-out
+      // mail sliding into the first page (e.g. after archiving) is not
+      // treated as new. Without this, archiving the newest N messages pulls
+      // older, never-seen IDs into view and fires false notifications.
+      watermarkDate = state?.max_date ?? undefined;
+      if (watermarkDate) {
+        const parsed = Date.parse(watermarkDate);
+        if (!Number.isNaN(parsed)) watermarkTime = parsed;
+        else watermarkDate = undefined;
+      }
+      if (watermarkDate === undefined) {
+        // Upgrade path for databases created before max_date existed.
+        const legacy = this.db
+          .prepare(
+            `SELECT MAX(date) AS max_date FROM messages
+             WHERE account_id = ?
+               AND message_id IN (
+                 SELECT message_id FROM notification_seen WHERE account_id = ?
+               )`,
+          )
+          .get(accountId, accountId) as { max_date: string | null } | undefined;
+        if (legacy?.max_date && !Number.isNaN(Date.parse(legacy.max_date))) {
+          watermarkDate = legacy.max_date;
+          watermarkTime = Date.parse(legacy.max_date);
+        }
+      }
+      const seen = this.db.prepare(
+        "SELECT 1 FROM notification_seen WHERE account_id = ? AND message_id = ?",
+      );
+      const hasWatermark = watermarkTime !== undefined;
+      unseen = incoming.filter((message) => {
+        if (seen.get(accountId, message.id)) return false;
+        if (!hasWatermark) return true;
+        const messageTime = Date.parse(message.date);
+        // If either date is unparseable, fall back to notifying rather than
+        // silently dropping what may be genuine new mail.
+        if (Number.isNaN(messageTime)) return true;
+        return messageTime >= (watermarkTime as number);
+      });
+    }
+    let nextWatermarkDate = watermarkDate;
+    let nextWatermarkTime = watermarkTime;
+    for (const message of incoming) {
+      const messageTime = Date.parse(message.date);
+      if (Number.isNaN(messageTime)) continue;
+      if (nextWatermarkTime === undefined || messageTime > nextWatermarkTime) {
+        nextWatermarkTime = messageTime;
+        nextWatermarkDate = message.date;
+      }
+    }
     const insert = this.db.prepare(
       `INSERT INTO notification_seen(account_id, message_id, seen_at)
        VALUES (?, ?, ?)
        ON CONFLICT(account_id, message_id) DO UPDATE SET seen_at = excluded.seen_at`,
     );
+    // Compare against the stored value, not the computed watermark: the legacy
+    // MAX(date) fallback must be persisted even when no newer mail arrives,
+    // otherwise upgraded DBs re-run the fallback every refresh.
+    const storedMaxDate = state?.max_date ?? undefined;
     this.db.transaction(() => {
       this.db
         .prepare(
           "INSERT OR IGNORE INTO notification_state(account_id, initialized_at) VALUES (?, ?)",
         )
         .run(accountId, Date.now());
+      if (nextWatermarkDate !== storedMaxDate || !initialized) {
+        this.db
+          .prepare("UPDATE notification_state SET max_date = ? WHERE account_id = ?")
+          .run(nextWatermarkDate ?? null, accountId);
+      }
       for (const message of incoming) insert.run(accountId, message.id, Date.now());
       this.db
         .prepare("DELETE FROM notification_seen WHERE account_id = ? AND seen_at < ?")
