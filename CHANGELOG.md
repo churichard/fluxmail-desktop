@@ -2,7 +2,21 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.4.2...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.5.0...HEAD)
+
+## [0.5.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.5.0) - 2026-09-25
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Changed
+
+- Back up the shared Fluxmail data directory before opening Desktop: the bundled Fluxmail 0.11.0 engine moves it to format 5, which older CLI versions cannot read ([upgrade guide](https://fluxmail.ai/docs/upgrades/0.11.0/))
+
+### Fixed
+
+- Stop older inbox messages from triggering new-mail notifications when they appear after archiving ([#62](https://github.com/churichard/fluxmail-desktop/pull/62))
+- Size email content before remote images finish loading so messages remain readable ([#63](https://github.com/churichard/fluxmail-desktop/pull/63))
+- Reuse proxy connections for Gmail sign-in and mail requests to avoid repeated connection delays ([#99](https://github.com/churichard/fluxmail/pull/99), [#100](https://github.com/churichard/fluxmail/pull/100))
 
 ## [0.4.2](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.4.2) - 2026-09-16
 
