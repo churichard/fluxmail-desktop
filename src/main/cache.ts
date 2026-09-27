@@ -65,7 +65,7 @@ export interface ScheduledDraftRef {
   pendingSend?: boolean;
 }
 
-const CACHE_SCHEMA_VERSION = 5;
+const CACHE_SCHEMA_VERSION = 6;
 
 export class MailCache {
   readonly hasCachedMail: boolean;
@@ -200,6 +200,7 @@ export class MailCache {
       })();
     }
     if (storedVersion < 5) this.db.prepare("DELETE FROM page_tokens").run();
+    if (storedVersion < 6) this.db.prepare("DELETE FROM thread_bodies").run();
     this.db
       .prepare("INSERT OR REPLACE INTO cache_meta(key, value) VALUES ('schema_version', ?)")
       .run(String(CACHE_SCHEMA_VERSION));
