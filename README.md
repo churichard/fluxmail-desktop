@@ -37,7 +37,7 @@ Fluxmail uses `~/.fluxmail` for accounts, encrypted credentials, licensing, conf
 
 `FLUXMAIL_DATA_DIR` changes the whole shared data directory, while `FLUXMAIL_DB_PATH` changes only the SQLite database path. Shell variables and `.env.local` or `.env` files in the CLI working directory take priority over settings saved in `~/.fluxmail/config.env`. These overrides can intentionally give the CLI a separate installation.
 
-Desktop message metadata and interface preferences live in the app's macOS Application Support directory. Opened message bodies are encrypted with Electron `safeStorage` before they enter the desktop cache.
+Desktop message metadata and interface preferences live in the app's macOS Application Support directory. Fluxmail encrypts opened message bodies in the desktop cache with a key derived from its credential encryption key, stored at `~/.fluxmail/encryption.key` by default.
 
 ## Useful commands
 
@@ -88,7 +88,7 @@ Code signing is optional. A persistent self-signed identity requires these three
 - `MACOS_CERTIFICATE_PASSWORD`
 - `APPLE_SIGNING_IDENTITY`
 
-The workflow uses the same certificate for every release, which gives the app a stable designated requirement for macOS Keychain access. Keep an encrypted backup of the P12 and its password outside GitHub. A self-signed certificate does not make the app trusted by Gatekeeper and cannot be notarized.
+The workflow uses the same certificate for every release. Keep an encrypted backup of the P12 and its password outside GitHub. A self-signed certificate does not make the app trusted by Gatekeeper and cannot be notarized.
 
 Developer ID signing and notarization also require these three secrets:
 
