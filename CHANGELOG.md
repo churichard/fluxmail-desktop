@@ -2,7 +2,15 @@
 
 Fluxmail Desktop records user-facing changes in this file. The format follows [Common Changelog](https://common-changelog.org/).
 
-## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.5.0...HEAD)
+## [Unreleased](https://github.com/churichard/fluxmail-desktop/compare/v0.5.1...HEAD)
+
+## [0.5.1](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.5.1) - 2026-09-27
+
+_These artifacts use Fluxmail's self-signed certificate and have not been notarized by Apple, so macOS will require approval before opening the app._
+
+### Fixed
+
+- Stop repeated background checks after a message loads to reduce CPU use while reading it ([#65](https://github.com/churichard/fluxmail-desktop/pull/65))
 
 ## [0.5.0](https://github.com/churichard/fluxmail-desktop/releases/tag/v0.5.0) - 2026-09-25
 
