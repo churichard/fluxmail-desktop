@@ -14,7 +14,6 @@ import {
   Notification,
   powerMonitor,
   protocol,
-  safeStorage,
   shell,
   type IpcMainInvokeEvent,
   type MenuItem,
@@ -22,6 +21,7 @@ import {
 } from "electron";
 import { z } from "zod";
 import { isEmailError, type AttachmentInput } from "@fluxmail/core";
+import * as fluxmail from "fluxmail";
 import {
   accountSchema,
   appearancePreferenceSchema,
@@ -71,7 +71,8 @@ import { parseExternalUrl } from "../shared/external-url";
 import { openLegalNotices } from "./legal-notices";
 import { DesktopAnalytics } from "./analytics";
 import { MailCache } from "./cache";
-import { FluxmailRuntime } from "./fluxmail-runtime";
+import { createCacheCipher } from "./cache-cipher";
+import { FluxmailRuntime, prepareFluxmailConfiguration } from "./fluxmail-runtime";
 import { FakeFluxmailRuntime } from "./fake-runtime";
 import { isAllowedFrameUrl } from "./ipc-security";
 import { HostedImageRelay, HostedImageRelayAccess } from "./image-relay";
@@ -200,24 +201,15 @@ app.on("before-quit", (event) => {
 async function createServices(): Promise<void> {
   const fluxmailDataDir = process.env.FLUXMAIL_DATA_DIR!;
   analytics = new DesktopAnalytics({ dataDir: fluxmailDataDir });
-  cache = new MailCache(app.getPath("userData"), {
-    encrypt(value) {
-      if (safeStorage.isEncryptionAvailable()) {
-        try {
-          return safeStorage.encryptString(value);
-        } catch {
-          return undefined;
-        }
-      }
-      if (!app.isPackaged) return Buffer.from(value, "utf8");
-      return undefined;
-    },
-    decrypt(value) {
-      if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(value);
-      if (!app.isPackaged) return value.toString("utf8");
-      throw new Error("macOS Keychain is unavailable.");
-    },
-  });
+  prepareFluxmailConfiguration(
+    fluxmail,
+    __FLUXMAIL_GOOGLE_CLIENT_ID__,
+    __FLUXMAIL_GOOGLE_CLIENT_SECRET__,
+  );
+  cache = new MailCache(
+    app.getPath("userData"),
+    createCacheCipher(fluxmail.loadConfig().encryptionKey),
+  );
   const onCacheChanged = () => {
     sendEvent({ type: "cache-changed" });
     updateDockBadge();

@@ -687,6 +687,34 @@ describe("MailCache", () => {
     upgraded.close();
   });
 
+  it("drops Keychain-encrypted bodies when upgrading without losing thread summaries", () => {
+    const { cache, directory } = createCacheWithDirectory();
+    cache.putThread(primary, {
+      id: "thread-a",
+      subject: "Project update",
+      messages: [message({ id: "message-a", threadId: "thread-a", body: { text: "Private" } })],
+    });
+    expect(cache.hasThreadBody(primary.id, "thread-a")).toBe(true);
+    cache.close();
+
+    const database = new Database(path.join(directory, "mail-cache.db"));
+    database.prepare("UPDATE cache_meta SET value = '5' WHERE key = 'schema_version'").run();
+    database.close();
+
+    const upgraded = new MailCache(directory, {
+      encrypt: (value) => Buffer.from(value),
+      decrypt: () => {
+        throw new Error("Legacy Keychain decryption should not be attempted");
+      },
+    });
+    expect(upgraded.hasThreadBody(primary.id, "thread-a")).toBe(false);
+    expect(upgraded.getThread(primary.id, "thread-a")).toBeUndefined();
+    expect(upgraded.listThreads({ view: "inbox", offset: 0, limit: 20 })).toMatchObject([
+      { id: "thread-a", subject: "Project update" },
+    ]);
+    upgraded.close();
+  });
+
   it("matches labels exactly", () => {
     const cache = createCache();
     cache.putMessages(primary, [
