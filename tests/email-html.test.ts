@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { createElement } from "react";
+import { act, createElement, useLayoutEffect, useRef } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -69,6 +69,43 @@ describe("email find", () => {
 
     expect(highlightEmailMatches(document, "Hidden")).toHaveLength(0);
     expect(highlightEmailMatches(document, "Visible")).toHaveLength(1);
+  });
+});
+
+describe("email frame sizing", () => {
+  it("stops polling when the frame load event attaches the current document first", async () => {
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    const message: MailMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      accountId: "account-1",
+      from: { email: "sender@example.com" },
+      to: [{ email: "me@example.com" }],
+      subject: "Quick load",
+      date: "2026-07-18T12:00:00Z",
+      body: { html: "<p>Hello</p>" },
+      flags: { read: true, starred: false, draft: false },
+    };
+
+    function LoadedFrame() {
+      const wrapper = useRef<HTMLDivElement>(null);
+      useLayoutEffect(() => {
+        const frame = wrapper.current!.querySelector("iframe")!;
+        const source = frame.getAttribute("srcdoc")!;
+        const sourceId = source.match(/data-fluxmail-source="([^"]+)"/)?.[1];
+        const document = frame.contentDocument!;
+        document.body.innerHTML = `<div id="email-root" data-fluxmail-source="${sourceId}"><p>Hello</p></div>`;
+        Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+        fireEvent.load(frame);
+      }, []);
+      return createElement("div", { ref: wrapper }, createElement(EmailHtml, { message }));
+    }
+
+    await act(async () => {
+      render(createElement(LoadedFrame));
+    });
+
+    expect(requestFrame).not.toHaveBeenCalled();
   });
 });
 

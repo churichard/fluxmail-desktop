@@ -261,13 +261,11 @@ export function EmailHtml({
   useEffect(() => {
     const frame = iframeRef.current;
     if (!frame) return;
-    const staleDocument = attachedDocumentRef.current;
     let pollFrame = 0;
     const poll = () => {
       const document = frame.contentDocument;
       if (
         document &&
-        document !== staleDocument &&
         document.readyState !== "loading" &&
         document.getElementById("email-root")?.getAttribute(EMAIL_SOURCE_ATTRIBUTE) ===
           rendered.sourceId
